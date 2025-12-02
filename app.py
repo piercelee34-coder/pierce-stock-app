@@ -224,7 +224,6 @@ try:
         st.metric("估值指標", p_val)
         st.markdown(f'<span class="{p_cls}">{p_st}</span>', unsafe_allow_html=True)
     
-    # [V8.2 修正版] 這裡已經正確縮排，不會報錯了
     try:
         cf = t_obj.cash_flow
         if not cf.empty:
@@ -338,13 +337,11 @@ try:
 
     with chip_col2:
         st.markdown("##### 👥 主力 vs 散戶 持股成本分布")
-        
         total_profile = calculate_volume_profile(plot_data, bins=40)
         inst_mask = mf > 0
         inst_profile = calculate_volume_profile(plot_data, bins=40, filter_mask=inst_mask)
 
         fig_vp = go.Figure()
-        
         fig_vp.add_trace(go.Scatter(x=total_profile['Price'], y=total_profile['Volume'], fill='tozeroy', mode='lines', line=dict(color='#ffaa00', width=0), fillcolor='rgba(255, 170, 0, 0.3)', name='整體持倉'))
         fig_vp.add_trace(go.Scatter(x=inst_profile['Price'], y=inst_profile['Volume'], fill='tozeroy', mode='lines', line=dict(color='#00d4ff', width=2), fillcolor='rgba(0, 212, 255, 0.5)', name='主力持倉'))
         fig_vp.add_vline(x=latest['Close'], line_dash="dash", line_color="white", annotation_text="目前股價")
