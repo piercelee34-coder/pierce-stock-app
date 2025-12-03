@@ -6,9 +6,10 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import json
 import os
+import time
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V8.6", layout="wide", page_icon="🚦")
+st.set_page_config(page_title="AI 實戰戰情室 V8.7", layout="wide", page_icon="🛡️")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -88,11 +89,14 @@ def run_backtest_analysis(df):
         except: pass
     return trades
 
-@st.cache_data(ttl=300)
+# [V8.7] 防當機版：獲取自選股顏色
+@st.cache_data(ttl=600) 
 def get_colored_labels(tickers):
     labels = []
     try:
         data = yf.download(tickers, period="2d", progress=False)['Close']
+        if data.empty: return tickers 
+
         for t in tickers:
             try:
                 closes = data if len(tickers) == 1 else data[t]
@@ -103,7 +107,8 @@ def get_colored_labels(tickers):
                 else:
                     labels.append(t)
             except: labels.append(t)
-    except: labels = tickers
+    except Exception:
+        return tickers
     return labels
 
 def calculate_volume_profile(df, bins=40, filter_mask=None):
@@ -132,10 +137,16 @@ with st.sidebar:
     st.markdown("---")
     
     st.header("📌 自選股清單")
+    
     display_labels = get_colored_labels(st.session_state.watchlist)
+    
+    if len(display_labels) != len(st.session_state.watchlist):
+        display_labels = st.session_state.watchlist
+    
     label_map = {label: ticker for label, ticker in zip(display_labels, st.session_state.watchlist)}
+    
     selection = st.radio("選擇股票 (即時漲跌)", display_labels)
-    current_ticker = label_map[selection]
+    current_ticker = label_map.get(selection, "NVDA")
 
     c_up, c_down = st.columns(2)
     if c_up.button("⬆️ 上移") and current_ticker in st.session_state.watchlist:
@@ -144,6 +155,7 @@ with st.sidebar:
             st.session_state.watchlist[idx], st.session_state.watchlist[idx-1] = st.session_state.watchlist[idx-1], st.session_state.watchlist[idx]
             save_watchlist(st.session_state.watchlist)
             st.rerun()
+            
     if c_down.button("⬇️ 下移") and current_ticker in st.session_state.watchlist:
         idx = st.session_state.watchlist.index(current_ticker)
         if idx < len(st.session_state.watchlist) - 1:
@@ -169,7 +181,7 @@ with st.sidebar:
     time_opt = st.radio("週期", ["當沖 (分時)", "日線 (Daily)", "3日 (短線)", "10日 (波段)", "月線 (長線)"], index=1)
 
 # --- 4. 主程式 ---
-st.title(f"📈 {current_ticker} 實戰戰情室 V8.6")
+st.title(f"📈 {current_ticker} 實戰戰情室 V8.7")
 
 api_period = "1y"; api_interval = "1d"; xaxis_format = "%Y-%m-%d"
 if "當沖" in time_opt: api_period = "5d"; api_interval = "15m"; xaxis_format = "%H:%M" 
@@ -184,7 +196,9 @@ try:
     info = t_obj.info
     
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-    if df.empty: st.error("⚠️ 無法獲取數據"); st.stop()
+    if df.empty: 
+        st.warning("⚠️ 數據暫時無法取得，可能是 Yahoo Rate Limit。請稍後再試。")
+        st.stop()
 
     df = calculate_indicators(df)
     latest = df.iloc[-1]
@@ -215,14 +229,27 @@ try:
     """, unsafe_allow_html=True)
     st.write("")
 
-    # [V8.6 修復: 正確縮排]
+    # [V8.7] 語法修復: 分行處理
     st.subheader("📊 基本面透視")
     f_col1, f_col2, f_col3, f_col4 = st.columns(4)
     peg = info.get('pegRatio'); fwd_pe = info.get('forwardPE')
-    if peg is not None: p_val = f"{peg}"; p_st = "✨ 被低估" if peg < 1.0 else "估值合理"; p_cls = "undervalued" if peg < 1.0 else ""
-    elif fwd_pe is not None: p_val = f"{fwd_pe:.2f} (Fwd P/E)"; p_st = "無 PEG"; p_cls = ""
-    else: p_val = "N/A"; p_st = "資料不足"; p_cls = ""
-    with f_col1: st.metric("估值指標", p_val); st.markdown(f'<span class="{p_cls}">{p_st}</span>', unsafe_allow_html=True)
+    
+    if peg is not None: 
+        p_val = f"{peg}"
+        p_st = "✨ 被低估" if peg < 1.0 else "估值合理"
+        p_cls = "undervalued" if peg < 1.0 else ""
+    elif fwd_pe is not None: 
+        p_val = f"{fwd_pe:.2f} (Fwd P/E)"
+        p_st = "無 PEG"
+        p_cls = ""
+    else: 
+        p_val = "N/A"
+        p_st = "資料不足"
+        p_cls = ""
+    
+    with f_col1: 
+        st.metric("估值指標", p_val)
+        st.markdown(f'<span class="{p_cls}">{p_st}</span>', unsafe_allow_html=True)
     
     try:
         cf = t_obj.cash_flow
@@ -233,14 +260,17 @@ try:
             with f_col2: 
                 st.metric("自由現金流", f"${fcf_cur/1e9:.2f}B", f"{fcf_chg:.1f}% vs 去年")
         else: 
-            with f_col2: st.metric("自由現金流", "N/A")
+            with f_col2: 
+                st.metric("自由現金流", "N/A")
     except: 
-        with f_col2: st.metric("自由現金流", "資料不足")
+        with f_col2: 
+            st.metric("自由現金流", "資料不足")
 
     s1, s2 = find_support_levels(df)
     with f_col3: st.metric("🛡️ 第一支撐位", f"${s1:.2f}")
     with f_col4: st.metric("🛡️ 第二支撐位", f"${s2:.2f}")
 
+    # Chart
     st.subheader(f"📈 走勢圖 - {time_opt}")
     plot_data = df
     if "當沖" in time_opt: plot_data = df.tail(26) 
@@ -269,6 +299,7 @@ try:
     fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
 
+    # Backtest
     st.subheader("🧠 智能策略回測系統")
     bt_col1, bt_col2, bt_col3, bt_col4 = st.columns(4)
     if trades:
@@ -280,13 +311,13 @@ try:
         with bt_col4: st.markdown(f'<div class="ai-box" style="border: 1px solid #FFD700;"><h5 style="color:white; margin:0;">目標價</h5><h2 style="color:#FFD700; margin:0;">${target_sell_price:.2f}</h2></div>', unsafe_allow_html=True)
     else: st.info("無足夠數據計算回測。")
 
+    # Trend Dashboard
     st.markdown('<div class="trend-box"><h3>🧭 整體趨勢 (Market Trend)</h3></div>', unsafe_allow_html=True)
     
     trend_bull = latest['Close'] > latest['SMA_20']
     trend_bear = latest['Close'] < latest['SMA_20']
     rsi_low = latest['RSI'] < 40; rsi_high = latest['RSI'] > 70
     macd_red = latest['MACD_Hist'] > 0; macd_green = latest['MACD_Hist'] < 0
-    
     vol_up = False; vol_down = False
     if 'Vol_SMA5' in latest and not pd.isna(latest['Vol_SMA5']):
         vol_up = (latest['Volume'] > latest['Vol_SMA5'] * 1.1) and (latest['Close'] > prev['Close'])
@@ -339,6 +370,7 @@ try:
 
     st.markdown("---")
 
+    # Chip
     st.subheader("🐳 籌碼與主力動向分析")
     chip_col1, chip_col2 = st.columns(2)
     mf = ((plot_data['Close'] - plot_data['Open']) / (plot_data['High'] - plot_data['Low'])) * plot_data['Volume']
@@ -367,4 +399,4 @@ try:
         st.markdown("""<div class="guide-box"><b>🧐 說明：</b><br>🟡 黃色山峰 = 散戶套牢區<br>🔵 青色山峰 = 主力成本區<br>若現價 > 青色山峰 👉 主力獲利 (強支撐)<br>若現價 < 青色山峰 👉 主力套牢 (強壓力)</div>""", unsafe_allow_html=True)
 
 except Exception as e:
-    st.error(f"系統錯誤: {e}")
+    st.error(f"系統暫時繁忙，請稍後再試: {e}")
