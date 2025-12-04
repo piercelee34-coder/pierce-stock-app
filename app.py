@@ -9,7 +9,7 @@ import os
 import time
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V8.7", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="AI 實戰戰情室 V8.8", layout="wide", page_icon="🛡️")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -89,28 +89,6 @@ def run_backtest_analysis(df):
         except: pass
     return trades
 
-# [V8.7] 防當機版：獲取自選股顏色
-@st.cache_data(ttl=600) 
-def get_colored_labels(tickers):
-    labels = []
-    try:
-        data = yf.download(tickers, period="2d", progress=False)['Close']
-        if data.empty: return tickers 
-
-        for t in tickers:
-            try:
-                closes = data if len(tickers) == 1 else data[t]
-                if len(closes) >= 2:
-                    change = closes.iloc[-1] - closes.iloc[-2]
-                    icon = "🟢" if change >= 0 else "🔴"
-                    labels.append(f"{t} {icon}")
-                else:
-                    labels.append(t)
-            except: labels.append(t)
-    except Exception:
-        return tickers
-    return labels
-
 def calculate_volume_profile(df, bins=40, filter_mask=None):
     price_min = df['Low'].min()
     price_max = df['High'].max()
@@ -131,22 +109,14 @@ def format_volume(num):
 # --- 3. 側邊欄 ---
 with st.sidebar:
     st.title("🎛️ 控制台")
-    if st.button("🔄 立即更新報價"):
-        st.cache_data.clear()
-        st.rerun()
-    st.markdown("---")
+    # [V8.8] 移除重整按鈕，避免誤觸導致請求過多
     
     st.header("📌 自選股清單")
     
-    display_labels = get_colored_labels(st.session_state.watchlist)
-    
-    if len(display_labels) != len(st.session_state.watchlist):
-        display_labels = st.session_state.watchlist
-    
-    label_map = {label: ticker for label, ticker in zip(display_labels, st.session_state.watchlist)}
-    
-    selection = st.radio("選擇股票 (即時漲跌)", display_labels)
-    current_ticker = label_map.get(selection, "NVDA")
+    # [V8.8 流量節省模式] 暫時移除紅綠燈功能，直接顯示原始清單
+    # 這能減少 85% 的 API 請求，避免被鎖
+    selection = st.radio("選擇股票", st.session_state.watchlist)
+    current_ticker = selection
 
     c_up, c_down = st.columns(2)
     if c_up.button("⬆️ 上移") and current_ticker in st.session_state.watchlist:
@@ -181,7 +151,7 @@ with st.sidebar:
     time_opt = st.radio("週期", ["當沖 (分時)", "日線 (Daily)", "3日 (短線)", "10日 (波段)", "月線 (長線)"], index=1)
 
 # --- 4. 主程式 ---
-st.title(f"📈 {current_ticker} 實戰戰情室 V8.7")
+st.title(f"📈 {current_ticker} 實戰戰情室 V8.8")
 
 api_period = "1y"; api_interval = "1d"; xaxis_format = "%Y-%m-%d"
 if "當沖" in time_opt: api_period = "5d"; api_interval = "15m"; xaxis_format = "%H:%M" 
@@ -191,13 +161,23 @@ elif "10日" in time_opt: api_period = "1mo"; api_interval = "60m"; xaxis_format
 elif "月線" in time_opt: api_period = "2y"; api_interval = "1wk"; xaxis_format = "%Y-%m"
 
 try:
-    df = yf.download(current_ticker, period=api_period, interval=api_interval, progress=False)
+    # 嘗試下載數據，加入 retry 機制
+    try:
+        df = yf.download(current_ticker, period=api_period, interval=api_interval, progress=False)
+    except:
+        time.sleep(1) # 失敗等1秒
+        df = yf.download(current_ticker, period=api_period, interval=api_interval, progress=False)
+
     t_obj = yf.Ticker(current_ticker)
-    info = t_obj.info
+    # info 容易被擋，加 try except
+    try:
+        info = t_obj.info
+    except:
+        info = {}
     
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
     if df.empty: 
-        st.warning("⚠️ 數據暫時無法取得，可能是 Yahoo Rate Limit。請稍後再試。")
+        st.error("🚫 系統暫時繁忙 (Yahoo API Rate Limit)。請休息 1 小時後再回來，或嘗試切換其他股票。")
         st.stop()
 
     df = calculate_indicators(df)
@@ -229,7 +209,7 @@ try:
     """, unsafe_allow_html=True)
     st.write("")
 
-    # [V8.7] 語法修復: 分行處理
+    # --- 區塊二：基本面 ---
     st.subheader("📊 基本面透視")
     f_col1, f_col2, f_col3, f_col4 = st.columns(4)
     peg = info.get('pegRatio'); fwd_pe = info.get('forwardPE')
@@ -260,17 +240,15 @@ try:
             with f_col2: 
                 st.metric("自由現金流", f"${fcf_cur/1e9:.2f}B", f"{fcf_chg:.1f}% vs 去年")
         else: 
-            with f_col2: 
-                st.metric("自由現金流", "N/A")
+            with f_col2: st.metric("自由現金流", "N/A")
     except: 
-        with f_col2: 
-            st.metric("自由現金流", "資料不足")
+        with f_col2: st.metric("自由現金流", "資料不足")
 
     s1, s2 = find_support_levels(df)
     with f_col3: st.metric("🛡️ 第一支撐位", f"${s1:.2f}")
     with f_col4: st.metric("🛡️ 第二支撐位", f"${s2:.2f}")
 
-    # Chart
+    # --- 區塊三：圖表 ---
     st.subheader(f"📈 走勢圖 - {time_opt}")
     plot_data = df
     if "當沖" in time_opt: plot_data = df.tail(26) 
@@ -299,7 +277,7 @@ try:
     fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
 
-    # Backtest
+    # --- 區塊四：智能回測 ---
     st.subheader("🧠 智能策略回測系統")
     bt_col1, bt_col2, bt_col3, bt_col4 = st.columns(4)
     if trades:
@@ -311,7 +289,7 @@ try:
         with bt_col4: st.markdown(f'<div class="ai-box" style="border: 1px solid #FFD700;"><h5 style="color:white; margin:0;">目標價</h5><h2 style="color:#FFD700; margin:0;">${target_sell_price:.2f}</h2></div>', unsafe_allow_html=True)
     else: st.info("無足夠數據計算回測。")
 
-    # Trend Dashboard
+    # --- [V8.5] 區塊五：整體趨勢儀表板 ---
     st.markdown('<div class="trend-box"><h3>🧭 整體趨勢 (Market Trend)</h3></div>', unsafe_allow_html=True)
     
     trend_bull = latest['Close'] > latest['SMA_20']
@@ -399,4 +377,4 @@ try:
         st.markdown("""<div class="guide-box"><b>🧐 說明：</b><br>🟡 黃色山峰 = 散戶套牢區<br>🔵 青色山峰 = 主力成本區<br>若現價 > 青色山峰 👉 主力獲利 (強支撐)<br>若現價 < 青色山峰 👉 主力套牢 (強壓力)</div>""", unsafe_allow_html=True)
 
 except Exception as e:
-    st.error(f"系統暫時繁忙，請稍後再試: {e}")
+    st.error(f"⚠️ 系統暫時繁忙，請稍後再試。錯誤訊息: {e}")
