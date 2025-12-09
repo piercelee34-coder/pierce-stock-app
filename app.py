@@ -9,7 +9,7 @@ import os
 import time
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V8.8", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="AI 實戰戰情室 V9.4 (量能支撐版)", layout="wide", page_icon="💎")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -21,7 +21,10 @@ st.markdown("""
     .signal-box-green {background-color: #1b3a1b; padding: 10px; border-radius: 8px; border: 1px solid #28a745; text-align: center; height: 100%;}
     .signal-box-red {background-color: #3a1b1b; padding: 10px; border-radius: 8px; border: 1px solid #dc3545; text-align: center; height: 100%;}
     .signal-box-neutral {background-color: #333; padding: 10px; border-radius: 8px; border: 1px solid #6c757d; text-align: center; height: 100%;}
-    .undervalued {background-color: #d4edda; color: #155724; padding: 5px; border-radius: 5px; font-weight: bold;}
+    /* 估值提示樣式 */
+    .val-good {color: #28a745; font-weight: bold; font-size: 14px;}
+    .val-fair {color: #ffc107; font-weight: bold; font-size: 14px;}
+    .val-bad {color: #dc3545; font-weight: bold; font-size: 14px;}
     .stButton>button {width: 100%; border-radius: 5px;}
     .guide-box {background-color: #262730; padding: 15px; border-radius: 5px; border-left: 4px solid #00d4ff; font-size: 14px; line-height: 1.6;}
 </style>
@@ -47,7 +50,7 @@ def save_watchlist(watchlist):
 if 'watchlist' not in st.session_state:
     st.session_state.watchlist = load_watchlist()
 
-# --- 2. 核心函數 ---
+# --- 2. 核心函數 (資料處理) ---
 def calculate_indicators(df):
     if len(df) < 20: return df
     df['SMA_20'] = df['Close'].rolling(window=20).mean()
@@ -67,12 +70,37 @@ def calculate_indicators(df):
     df['MACD_Hist'] = df['MACD'] - df['Signal_Line']
     return df
 
-def find_support_levels(df):
-    recent_lows = df['Low'].tail(60)
-    s1 = recent_lows.min()
-    s2 = recent_lows[recent_lows > s1 * 1.02].min()
-    if pd.isna(s2): s2 = s1 * 1.05
-    return s1, s2
+# [修改] 支撐位算法：S1 改為「30日最大量日」的低點
+def find_support_levels(df, current_price):
+    if df.empty or len(df) < 60:
+        return current_price * 0.95, current_price * 0.90, "資料不足"
+
+    # 1. 鎖定過去 30 天的資料
+    recent_30 = df.tail(30)
+    
+    # 2. 找到成交量最大(Volume Max)的那一天
+    max_vol_date = recent_30['Volume'].idxmax()
+    
+    # 3. 取得那一天(大量K棒)的最低價 (Low) 作為關鍵支撐
+    # 邏輯：大量代表主力進場或換手，該日低點不應輕易跌破
+    s1_price = df.loc[max_vol_date]['Low']
+    
+    # 格式化日期，用於顯示 (例如: 12-08)
+    s1_date_str = max_vol_date.strftime('%m-%d')
+    s1_note = f"最大量日 ({s1_date_str})"
+
+    # 4. 防呆/跌破處理
+    ma20 = df['Close'].rolling(window=20).mean().iloc[-1]
+
+    # 如果現價已經跌破了這個「爆量低點」，代表支撐失效，防守改看月線
+    if current_price < s1_price:
+        s1_price = ma20
+        s1_note = "破大量低,看MA20"
+
+    # S2 地板價: 過去 60 天的絕對最低點
+    s2 = df['Low'].tail(60).min()
+    
+    return s1_price, s2, s1_note
 
 def run_backtest_analysis(df):
     signals = df[df['RSI'] < 30].index
@@ -88,6 +116,30 @@ def run_backtest_analysis(df):
                 trades.append(profit_pct)
         except: pass
     return trades
+
+# 防凍結批次抓取
+@st.cache_data(ttl=600) 
+def fetch_batch_summary(tickers):
+    if not tickers: return {}
+    try:
+        data = yf.download(" ".join(tickers), period="5d", group_by='ticker', threads=True, progress=False)
+        summary = {}
+        for t in tickers:
+            try:
+                df_t = data if len(tickers) == 1 else data[t]
+                if df_t.empty or len(df_t['Close']) < 2:
+                    summary[t] = 0
+                else:
+                    latest = df_t['Close'].iloc[-1]
+                    prev = df_t['Close'].iloc[-2]
+                    change = latest - prev
+                    summary[t] = change
+            except:
+                summary[t] = 0
+        return summary
+    except Exception as e:
+        print(f"Batch fetch error: {e}")
+        return {}
 
 def calculate_volume_profile(df, bins=40, filter_mask=None):
     price_min = df['Low'].min()
@@ -109,29 +161,32 @@ def format_volume(num):
 # --- 3. 側邊欄 ---
 with st.sidebar:
     st.title("🎛️ 控制台")
-    # [V8.8] 移除重整按鈕，避免誤觸導致請求過多
+    st.markdown("---")
     
     st.header("📌 自選股清單")
     
-    # [V8.8 流量節省模式] 暫時移除紅綠燈功能，直接顯示原始清單
-    # 這能減少 85% 的 API 請求，避免被鎖
-    selection = st.radio("選擇股票", st.session_state.watchlist)
-    current_ticker = selection
+    changes_map = fetch_batch_summary(st.session_state.watchlist)
+    display_labels = []
+    for t in st.session_state.watchlist:
+        change = changes_map.get(t, 0)
+        icon = "🟢" if change >= 0 else "🔴"
+        display_labels.append(f"{t} {icon}")
+
+    label_map = {label: ticker for label, ticker in zip(display_labels, st.session_state.watchlist)}
+    selection = st.radio("選擇股票", display_labels)
+    current_ticker = label_map.get(selection, "NVDA")
 
     c_up, c_down = st.columns(2)
     if c_up.button("⬆️ 上移") and current_ticker in st.session_state.watchlist:
         idx = st.session_state.watchlist.index(current_ticker)
         if idx > 0:
             st.session_state.watchlist[idx], st.session_state.watchlist[idx-1] = st.session_state.watchlist[idx-1], st.session_state.watchlist[idx]
-            save_watchlist(st.session_state.watchlist)
-            st.rerun()
-            
+            save_watchlist(st.session_state.watchlist); st.rerun()
     if c_down.button("⬇️ 下移") and current_ticker in st.session_state.watchlist:
         idx = st.session_state.watchlist.index(current_ticker)
         if idx < len(st.session_state.watchlist) - 1:
             st.session_state.watchlist[idx], st.session_state.watchlist[idx+1] = st.session_state.watchlist[idx+1], st.session_state.watchlist[idx]
-            save_watchlist(st.session_state.watchlist)
-            st.rerun()
+            save_watchlist(st.session_state.watchlist); st.rerun()
 
     with st.expander("編輯清單"):
         new_t = st.text_input("輸入代號", placeholder="MSTR").upper()
@@ -139,19 +194,17 @@ with st.sidebar:
         if c1.button("➕ 新增"):
             if new_t and new_t not in st.session_state.watchlist:
                 st.session_state.watchlist.append(new_t)
-                save_watchlist(st.session_state.watchlist)
-                st.rerun()
+                save_watchlist(st.session_state.watchlist); st.rerun()
         if c2.button("❌ 刪除"):
             if current_ticker in st.session_state.watchlist:
                 st.session_state.watchlist.remove(current_ticker)
-                save_watchlist(st.session_state.watchlist)
-                st.rerun()
+                save_watchlist(st.session_state.watchlist); st.rerun()
 
     st.markdown("---")
     time_opt = st.radio("週期", ["當沖 (分時)", "日線 (Daily)", "3日 (短線)", "10日 (波段)", "月線 (長線)"], index=1)
 
 # --- 4. 主程式 ---
-st.title(f"📈 {current_ticker} 實戰戰情室 V8.8")
+st.title(f"📈 {current_ticker} 實戰戰情室 V9.4")
 
 api_period = "1y"; api_interval = "1d"; xaxis_format = "%Y-%m-%d"
 if "當沖" in time_opt: api_period = "5d"; api_interval = "15m"; xaxis_format = "%H:%M" 
@@ -160,32 +213,31 @@ elif "3日" in time_opt: api_period = "5d"; api_interval = "30m"; xaxis_format =
 elif "10日" in time_opt: api_period = "1mo"; api_interval = "60m"; xaxis_format = "%m-%d %H:%M"
 elif "月線" in time_opt: api_period = "2y"; api_interval = "1wk"; xaxis_format = "%Y-%m"
 
-try:
-    # 嘗試下載數據，加入 retry 機制
-    try:
-        df = yf.download(current_ticker, period=api_period, interval=api_interval, progress=False)
-    except:
-        time.sleep(1) # 失敗等1秒
-        df = yf.download(current_ticker, period=api_period, interval=api_interval, progress=False)
+@st.cache_data(ttl=300)
+def fetch_main_data(ticker, period, interval):
+    return yf.download(ticker, period=period, interval=interval, progress=False)
 
+try:
+    df = fetch_main_data(current_ticker, api_period, api_interval)
+    
     t_obj = yf.Ticker(current_ticker)
-    # info 容易被擋，加 try except
-    try:
-        info = t_obj.info
-    except:
-        info = {}
+    try: info = t_obj.info
+    except: info = {}
     
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-    if df.empty: 
-        st.error("🚫 系統暫時繁忙 (Yahoo API Rate Limit)。請休息 1 小時後再回來，或嘗試切換其他股票。")
-        st.stop()
+    if df.empty: st.error("⚠️ 系統暫時繁忙或無資料，請稍後再試。"); st.stop()
 
     df = calculate_indicators(df)
     latest = df.iloc[-1]
     prev = df.iloc[-2] if len(df) > 1 else latest
 
-    hist_data = yf.download(current_ticker, period="2y", progress=False)
-    if isinstance(hist_data.columns, pd.MultiIndex): hist_data.columns = hist_data.columns.get_level_values(0)
+    @st.cache_data(ttl=3600)
+    def fetch_hist_data(ticker):
+        d = yf.download(ticker, period="2y", progress=False)
+        if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.get_level_values(0)
+        return d
+    
+    hist_data = fetch_hist_data(current_ticker)
     hist_data = calculate_indicators(hist_data)
     trades = run_backtest_analysis(hist_data)
     
@@ -209,46 +261,68 @@ try:
     """, unsafe_allow_html=True)
     st.write("")
 
-    # --- 區塊二：基本面 ---
-    st.subheader("📊 基本面透視")
-    f_col1, f_col2, f_col3, f_col4 = st.columns(4)
-    peg = info.get('pegRatio'); fwd_pe = info.get('forwardPE')
+    # --- 估值與支撐位 (5欄版: 含營收成長 & 量能支撐S1) ---
+    st.subheader("📊 基本面與結構防守")
     
-    if peg is not None: 
+    f_col1, f_col2, f_col3, f_col4, f_col5 = st.columns(5)
+    
+    peg = info.get('pegRatio'); fwd_pe = info.get('forwardPE')
+    rev_growth = info.get('revenueGrowth')
+    
+    # Col 1: PEG/PE
+    if peg is not None:
         p_val = f"{peg}"
-        p_st = "✨ 被低估" if peg < 1.0 else "估值合理"
-        p_cls = "undervalued" if peg < 1.0 else ""
-    elif fwd_pe is not None: 
-        p_val = f"{fwd_pe:.2f} (Fwd P/E)"
-        p_st = "無 PEG"
-        p_cls = ""
-    else: 
+        if peg < 1.0: peg_html = f'<div class="val-good">✨ 低估 (PEG < 1.0)</div>'
+        elif peg < 1.5: peg_html = f'<div class="val-fair">⚖️ 合理 (PEG < 1.5)</div>'
+        else: peg_html = f'<div class="val-bad">⚠️ 偏高 (PEG > 1.5)</div>'
+    elif fwd_pe is not None:
+        p_val = f"{fwd_pe:.2f} (PE)"
+        peg_html = '<div class="val-fair">🔍 參考 Fwd PE</div>'
+    else:
         p_val = "N/A"
-        p_st = "資料不足"
-        p_cls = ""
+        peg_html = '<div class="val-fair">資料不足</div>'
     
     with f_col1: 
-        st.metric("估值指標", p_val)
-        st.markdown(f'<span class="{p_cls}">{p_st}</span>', unsafe_allow_html=True)
+        st.metric("估值 (PEG/PE)", p_val)
+        st.markdown(peg_html, unsafe_allow_html=True)
+
+    # Col 2: 營收成長率
+    with f_col2:
+        if rev_growth is not None:
+            st.metric("營收成長率", f"{rev_growth*100:.2f}%")
+            if rev_growth > 0.2: st.markdown('<div class="val-good">🔥 高成長</div>', unsafe_allow_html=True)
+            elif rev_growth > 0: st.markdown('<div class="val-fair">📈 正成長</div>', unsafe_allow_html=True)
+            else: st.markdown('<div class="val-bad">📉 衰退中</div>', unsafe_allow_html=True)
+        else:
+            st.metric("營收成長率", "N/A")
+            st.caption("無近期資料")
     
+    # Col 3: 自由現金流
     try:
         cf = t_obj.cash_flow
         if not cf.empty:
             fcf_cur = cf.iloc[0, 0] if 'Free' in str(cf.index) else (cf.loc['Operating Cash Flow'].iloc[0] + cf.loc['Capital Expenditure'].iloc[0])
             fcf_prev = cf.iloc[0, 1] if 'Free' in str(cf.index) else (cf.loc['Operating Cash Flow'].iloc[1] + cf.loc['Capital Expenditure'].iloc[1])
             fcf_chg = ((fcf_cur - fcf_prev)/abs(fcf_prev))*100
-            with f_col2: 
+            with f_col3: 
                 st.metric("自由現金流", f"${fcf_cur/1e9:.2f}B", f"{fcf_chg:.1f}% vs 去年")
-        else: 
-            with f_col2: st.metric("自由現金流", "N/A")
-    except: 
-        with f_col2: st.metric("自由現金流", "資料不足")
+        else:
+            with f_col3: st.metric("自由現金流", "N/A")
+    except:
+        with f_col3: st.metric("自由現金流", "資料不足")
 
-    s1, s2 = find_support_levels(df)
-    with f_col3: st.metric("🛡️ 第一支撐位", f"${s1:.2f}")
-    with f_col4: st.metric("🛡️ 第二支撐位", f"${s2:.2f}")
+    # Col 4 & 5: S1 (最大量低點) / S2
+    # 這裡會回傳 s1價格, s2價格, 以及說明文字
+    s1, s2, s1_note = find_support_levels(df, latest['Close'])
+    
+    with f_col4: 
+        st.metric("🛡️ S1 短線防守", f"${s1:.2f}")
+        st.caption(s1_note) # 顯示 "最大量日 (12-08)"
+        
+    with f_col5: 
+        st.metric("🛡️ S2 地板價 (60日)", f"${s2:.2f}")
 
-    # --- 區塊三：圖表 ---
+    # Chart
     st.subheader(f"📈 走勢圖 - {time_opt}")
     plot_data = df
     if "當沖" in time_opt: plot_data = df.tail(26) 
@@ -264,9 +338,12 @@ try:
             fig.add_annotation(x=plot_data.index[i], y=curr['Low']*0.99, text=f"BUY<br>${curr['Close']:.2f}", showarrow=True, arrowhead=1, row=1, col=1, bgcolor="#28a745", font=dict(color="white", size=10))
 
     if target_sell_price > 0: fig.add_hline(y=target_sell_price, line_dash="dashdot", line_color="#FFD700", annotation_text=f"🎯 Target: {target_sell_price:.2f}", row=1, col=1)
-    fig.add_hline(y=s1, line_dash="dash", line_color="green", annotation_text=f"Support 1: {s1:.2f}", row=1, col=1)
+    
+    # 畫支撐線
+    fig.add_hline(y=s1, line_dash="dash", line_color="orange", annotation_text=f"S1: {s1:.2f}", row=1, col=1)
+    fig.add_hline(y=s2, line_dash="dot", line_color="green", annotation_text=f"S2 (Floor): {s2:.2f}", row=1, col=1)
 
-    if len(plot_data) > 20: fig.add_trace(go.Scatter(x=plot_data.index, y=plot_data['SMA_20'], line=dict(color='orange', width=1), name='20 MA'), row=1, col=1)
+    if len(plot_data) > 20: fig.add_trace(go.Scatter(x=plot_data.index, y=plot_data['SMA_20'], line=dict(color='#00d4ff', width=1), name='20 MA'), row=1, col=1)
     if 'MACD_Hist' in plot_data.columns:
         colors = ['green' if v >= 0 else 'red' for v in plot_data['MACD_Hist']]
         fig.add_trace(go.Bar(x=plot_data.index, y=plot_data['MACD_Hist'], marker_color=colors, name='MACD'), row=2, col=1)
@@ -277,7 +354,7 @@ try:
     fig.update_layout(height=600, template="plotly_dark", xaxis_rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- 區塊四：智能回測 ---
+    # Backtest
     st.subheader("🧠 智能策略回測系統")
     bt_col1, bt_col2, bt_col3, bt_col4 = st.columns(4)
     if trades:
@@ -289,7 +366,7 @@ try:
         with bt_col4: st.markdown(f'<div class="ai-box" style="border: 1px solid #FFD700;"><h5 style="color:white; margin:0;">目標價</h5><h2 style="color:#FFD700; margin:0;">${target_sell_price:.2f}</h2></div>', unsafe_allow_html=True)
     else: st.info("無足夠數據計算回測。")
 
-    # --- [V8.5] 區塊五：整體趨勢儀表板 ---
+    # Trend Dashboard
     st.markdown('<div class="trend-box"><h3>🧭 整體趨勢 (Market Trend)</h3></div>', unsafe_allow_html=True)
     
     trend_bull = latest['Close'] > latest['SMA_20']
@@ -348,7 +425,7 @@ try:
 
     st.markdown("---")
 
-    # Chip
+    # 籌碼分析
     st.subheader("🐳 籌碼與主力動向分析")
     chip_col1, chip_col2 = st.columns(2)
     mf = ((plot_data['Close'] - plot_data['Open']) / (plot_data['High'] - plot_data['Low'])) * plot_data['Volume']
@@ -358,8 +435,13 @@ try:
         st.markdown("##### 🏦 主力資金流向")
         fig_mf = go.Figure()
         fig_mf.add_trace(go.Scatter(x=plot_data.index, y=mf_cum, fill='tozeroy', mode='lines', line=dict(color='#00d4ff', width=2), name='主力'))
-        if len(mf_cum) > 1 and mf_cum.iloc[-1] < mf_cum.iloc[-2]:
-            fig_mf.add_annotation(x=plot_data.index[-1], y=mf_cum.iloc[-1], text="⚠️ 主力出貨", showarrow=True, arrowhead=1, bgcolor="red", font=dict(color="white"))
+        
+        if len(mf_cum) > 1:
+            if mf_cum.iloc[-1] < mf_cum.iloc[-2]:
+                fig_mf.add_annotation(x=plot_data.index[-1], y=mf_cum.iloc[-1], text="⚠️ 主力出貨", showarrow=True, arrowhead=1, bgcolor="red", font=dict(color="white"))
+            elif mf_cum.iloc[-1] > mf_cum.iloc[-2]: 
+                fig_mf.add_annotation(x=plot_data.index[-1], y=mf_cum.iloc[-1], text="🚀 主力吸籌", showarrow=True, arrowhead=1, bgcolor="green", font=dict(color="white"))
+
         fig_mf.update_layout(height=350, template="plotly_dark", margin=dict(l=10, r=10, t=30, b=10), showlegend=False)
         st.plotly_chart(fig_mf, use_container_width=True)
 
@@ -377,4 +459,4 @@ try:
         st.markdown("""<div class="guide-box"><b>🧐 說明：</b><br>🟡 黃色山峰 = 散戶套牢區<br>🔵 青色山峰 = 主力成本區<br>若現價 > 青色山峰 👉 主力獲利 (強支撐)<br>若現價 < 青色山峰 👉 主力套牢 (強壓力)</div>""", unsafe_allow_html=True)
 
 except Exception as e:
-    st.error(f"⚠️ 系統暫時繁忙，請稍後再試。錯誤訊息: {e}")
+    st.error(f"系統錯誤 (請稍後再試或檢查網路): {e}")
