@@ -9,7 +9,7 @@ import os
 import time
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V9.6 (基本面修復版)", layout="wide", page_icon="💎")
+st.set_page_config(page_title="AI 實戰戰情室 V9.7 (手動控制優化版)", layout="wide", page_icon="💎")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -49,6 +49,10 @@ def save_watchlist(watchlist):
 if 'watchlist' not in st.session_state:
     st.session_state.watchlist = load_watchlist()
 
+# 初始化紅綠燈狀態 (預設為空，不自動抓取)
+if 'watchlist_changes' not in st.session_state:
+    st.session_state.watchlist_changes = {}
+
 # --- 2. 核心函數 (資料處理) ---
 def calculate_indicators(df):
     if len(df) < 20: return df
@@ -73,9 +77,11 @@ def find_support_levels(df, current_price):
     if df.empty or len(df) < 60:
         return current_price * 0.95, current_price * 0.90, "資料不足", "資料不足"
 
+    # S1: MA20
     s1 = df['Close'].rolling(window=20).mean().iloc[-1]
     s1_note = "月線 (MA20)"
 
+    # S2: Key Bar Low
     recent_60 = df.tail(60)
     max_vol_date = recent_60['Volume'].idxmax()
     key_bar_low = df.loc[max_vol_date]['Low']
@@ -106,10 +112,11 @@ def run_backtest_analysis(df):
         except: pass
     return trades
 
-@st.cache_data(ttl=600) 
+# [V9.7 修正] 批次抓取 (不自動快取，改由 Session State 控制)
 def fetch_batch_summary(tickers):
     if not tickers: return {}
     try:
+        # 強制單線程
         data = yf.download(" ".join(tickers), period="5d", group_by='ticker', threads=False, progress=False)
         summary = {}
         for t in tickers:
@@ -126,7 +133,6 @@ def fetch_batch_summary(tickers):
                 summary[t] = 0
         return summary
     except Exception as e:
-        print(f"Batch fetch error: {e}")
         return {}
 
 def calculate_volume_profile(df, bins=40, filter_mask=None):
@@ -146,18 +152,26 @@ def format_volume(num):
     elif num >= 1_000: return f"{num/1_000:.2f}K"
     else: return f"{num}"
 
-# --- 3. 側邊欄 ---
+# --- 3. 側邊欄 (紅綠燈改為手動更新) ---
 with st.sidebar:
     st.title("🎛️ 控制台")
     st.markdown("---")
     
     st.header("📌 自選股清單")
     
-    changes_map = fetch_batch_summary(st.session_state.watchlist)
+    # [V9.7] 手動更新按鈕
+    if st.button("🔄 更新紅綠燈狀態"):
+        with st.spinner("更新中..."):
+            st.session_state.watchlist_changes = fetch_batch_summary(st.session_state.watchlist)
+    
     display_labels = []
     for t in st.session_state.watchlist:
-        change = changes_map.get(t, 0)
-        icon = "🟢" if change >= 0 else "🔴"
+        # 如果尚未更新，顯示灰色；有更新則顯示紅綠
+        if t in st.session_state.watchlist_changes:
+            change = st.session_state.watchlist_changes[t]
+            icon = "🟢" if change >= 0 else "🔴"
+        else:
+            icon = "⚪" # 預設狀態 (未讀取)
         display_labels.append(f"{t} {icon}")
 
     label_map = {label: ticker for label, ticker in zip(display_labels, st.session_state.watchlist)}
@@ -192,7 +206,7 @@ with st.sidebar:
     time_opt = st.radio("週期", ["當沖 (分時)", "日線 (Daily)", "3日 (短線)", "10日 (波段)", "月線 (長線)"], index=1)
 
 # --- 4. 主程式 ---
-st.title(f"📈 {current_ticker} 實戰戰情室 V9.6 (基本面修復版)")
+st.title(f"📈 {current_ticker} 實戰戰情室 V9.7")
 
 api_period = "1y"; api_interval = "1d"; xaxis_format = "%Y-%m-%d"
 if "當沖" in time_opt: api_period = "5d"; api_interval = "15m"; xaxis_format = "%H:%M" 
@@ -208,24 +222,26 @@ def fetch_main_data(ticker, period, interval):
     except Exception:
         return pd.DataFrame()
 
-# [V9.6 新增] 獨立快取基本面資料，防止頻繁請求被 Yahoo 封鎖
-@st.cache_data(ttl=3600) # 快取 1 小時
+# [V9.7 修正] 基本面抓取：如果不成功回傳 None (不快取錯誤)，成功才快取
+@st.cache_data(ttl=3600)
 def fetch_fundamental_info(ticker):
     try:
         t = yf.Ticker(ticker)
-        return t.info
+        info = t.info
+        # 如果抓回來是空的或是沒有重要欄位，視為失敗，回傳 None (不快取)
+        if not info or len(info) < 5: 
+            return None
+        return info
     except Exception:
-        return {}
+        return None
 
 try:
     df = fetch_main_data(current_ticker, api_period, api_interval)
     
-    # [V9.6 修改] 使用快取函式抓取基本面
+    # [V9.7] 基本面邏輯：檢查快取或失敗狀態
     info = fetch_fundamental_info(current_ticker)
     
-    # [V9.6 新增] 如果 info 是 None (有時會發生)，轉為空字典
-    if info is None: info = {}
-    
+    # 顯示主圖表
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
     if df.empty: st.error("⚠️ 系統暫時繁忙或無資料，請稍後再試。"); st.stop()
 
@@ -233,6 +249,7 @@ try:
     latest = df.iloc[-1]
     prev = df.iloc[-2] if len(df) > 1 else latest
 
+    # 回測數據
     @st.cache_data(ttl=3600)
     def fetch_hist_data(ticker):
         d = yf.download(ticker, period="2y", progress=False, threads=False)
@@ -263,54 +280,61 @@ try:
     """, unsafe_allow_html=True)
     st.write("")
 
-    # --- V9.6: 基本面資料增強版 (加入 Fallback 機制) ---
-    st.subheader("📊 基本面與雙重防守 (V9.6)")
-    
+    # --- V9.7: 基本面與雙重防守 (含強制刷新按鈕) ---
+    col_header, col_btn = st.columns([0.85, 0.15])
+    with col_header: st.subheader("📊 基本面與雙重防守 (V9.7)")
+    with col_btn:
+        # [V9.7] 強制刷新按鈕：清除基本面快取
+        if st.button("🔄 重抓基本面"):
+            fetch_fundamental_info.clear()
+            st.rerun()
+
     f_col1, f_col2, f_col3, f_col4, f_col5 = st.columns(5)
     
-    # [V9.6 修改] 抓取順序: PEG -> Forward PE -> Trailing PE
+    # 處理 Info 為 None 的情況
+    if info is None:
+        info = {}
+        st.toast("⚠️ 基本面資料抓取失敗 (Yahoo 繁忙)，請稍後點擊右上角「重抓基本面」。")
+
+    # 抓取數值 (加入更多備用欄位)
     peg = info.get('pegRatio')
     fwd_pe = info.get('forwardPE')
     trail_pe = info.get('trailingPE')
     
-    # [V9.6 修改] 抓取順序: Revenue Growth -> Earnings Growth
     rev_growth = info.get('revenueGrowth') or info.get('quarterlyRevenueGrowth')
     if rev_growth is None: rev_growth = info.get('earningsGrowth')
     
-    # Col 1: 估值邏輯 (多重備援)
+    # Col 1: 估值
     if peg is not None:
         p_val = f"{peg}"
-        if peg < 1.0: peg_html = f'<div class="val-good">✨ 低估 (PEG < 1.0)</div>'
-        elif peg < 1.5: peg_html = f'<div class="val-fair">⚖️ 合理 (PEG < 1.5)</div>'
-        else: peg_html = f'<div class="val-bad">⚠️ 偏高 (PEG > 1.5)</div>'
+        peg_html = f'<div class="val-good">PEG: {peg}</div>' if peg < 1 else f'<div class="val-fair">PEG: {peg}</div>'
     elif fwd_pe is not None:
         p_val = f"{fwd_pe:.2f} (PE)"
-        peg_html = '<div class="val-fair">🔍 參考 Fwd PE</div>'
+        peg_html = '<div class="val-fair">參考 Fwd PE</div>'
     elif trail_pe is not None:
         p_val = f"{trail_pe:.2f} (PE)"
-        peg_html = '<div class="val-fair">🔍 參考 Trailing PE</div>'
+        peg_html = '<div class="val-fair">參考 Trailing PE</div>'
     else:
         p_val = "N/A"
-        peg_html = '<div class="val-fair">資料不足</div>'
+        peg_html = '<div class="val-bad">請點擊重抓</div>'
     
     with f_col1: 
         st.metric("估值 (PEG/PE)", p_val)
         st.markdown(peg_html, unsafe_allow_html=True)
 
-    # Col 2: 成長率 (多重備援)
+    # Col 2: 成長率
     with f_col2:
         if rev_growth is not None:
-            st.metric("成長率 (營收/獲利)", f"{rev_growth*100:.2f}%")
+            st.metric("成長率", f"{rev_growth*100:.2f}%")
             if rev_growth > 0.2: st.markdown('<div class="val-good">🔥 高成長</div>', unsafe_allow_html=True)
-            elif rev_growth > 0: st.markdown('<div class="val-fair">📈 正成長</div>', unsafe_allow_html=True)
-            else: st.markdown('<div class="val-bad">📉 衰退中</div>', unsafe_allow_html=True)
+            else: st.markdown('<div class="val-fair">📈 正成長</div>', unsafe_allow_html=True)
         else:
             st.metric("成長率", "N/A")
-            st.caption("無近期資料")
+            st.caption("無資料")
     
     # Col 3: 自由現金流
     try:
-        t_obj = yf.Ticker(current_ticker) # 這裡仍需 Ticker 物件來抓 cash_flow
+        t_obj = yf.Ticker(current_ticker)
         cf = t_obj.cash_flow
         if not cf.empty:
             fcf_cur = cf.iloc[0, 0] if 'Free' in str(cf.index) else (cf.loc['Operating Cash Flow'].iloc[0] + cf.loc['Capital Expenditure'].iloc[0])
