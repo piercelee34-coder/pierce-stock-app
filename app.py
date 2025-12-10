@@ -9,7 +9,7 @@ import os
 import time
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V9.5 (法人操盤版)", layout="wide", page_icon="💎")
+st.set_page_config(page_title="AI 實戰戰情室 V9.6 (基本面修復版)", layout="wide", page_icon="💎")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -69,22 +69,18 @@ def calculate_indicators(df):
     df['MACD_Hist'] = df['MACD'] - df['Signal_Line']
     return df
 
-# [V9.5 核心更新] 雙重防守邏輯 (MA20 + Key Bar Low)
 def find_support_levels(df, current_price):
     if df.empty or len(df) < 60:
         return current_price * 0.95, current_price * 0.90, "資料不足", "資料不足"
 
-    # --- S1: 趨勢防守 (MA20 月線) ---
     s1 = df['Close'].rolling(window=20).mean().iloc[-1]
     s1_note = "月線 (MA20)"
 
-    # --- S2: 籌碼防守 (近60日最大量日低點) ---
     recent_60 = df.tail(60)
     max_vol_date = recent_60['Volume'].idxmax()
     key_bar_low = df.loc[max_vol_date]['Low']
     floor_price = recent_60['Low'].min()
     
-    # 邏輯判斷：如果現價跌破大量低點，或是大量低點異常高(主力出貨)，則退守絕對地板
     if current_price < key_bar_low:
         s2 = floor_price
         s2_note = "絕對地板 (60日低)"
@@ -110,12 +106,10 @@ def run_backtest_analysis(df):
         except: pass
     return trades
 
-# [修正重點 1] 加入 threads=False 防止側邊欄卡住
 @st.cache_data(ttl=600) 
 def fetch_batch_summary(tickers):
     if not tickers: return {}
     try:
-        # 修正：將 threads=True 改為 False
         data = yf.download(" ".join(tickers), period="5d", group_by='ticker', threads=False, progress=False)
         summary = {}
         for t in tickers:
@@ -198,7 +192,7 @@ with st.sidebar:
     time_opt = st.radio("週期", ["當沖 (分時)", "日線 (Daily)", "3日 (短線)", "10日 (波段)", "月線 (長線)"], index=1)
 
 # --- 4. 主程式 ---
-st.title(f"📈 {current_ticker} 實戰戰情室 V9.5 (法人版)")
+st.title(f"📈 {current_ticker} 實戰戰情室 V9.6 (基本面修復版)")
 
 api_period = "1y"; api_interval = "1d"; xaxis_format = "%Y-%m-%d"
 if "當沖" in time_opt: api_period = "5d"; api_interval = "15m"; xaxis_format = "%H:%M" 
@@ -207,21 +201,30 @@ elif "3日" in time_opt: api_period = "5d"; api_interval = "30m"; xaxis_format =
 elif "10日" in time_opt: api_period = "1mo"; api_interval = "60m"; xaxis_format = "%m-%d %H:%M"
 elif "月線" in time_opt: api_period = "2y"; api_interval = "1wk"; xaxis_format = "%Y-%m"
 
-# [修正重點 2] 加入 threads=False 與 try-except 防止主程式卡死
 @st.cache_data(ttl=300)
 def fetch_main_data(ticker, period, interval):
     try:
-        # 強制單線程，避免 yfinance 與 Streamlit 衝突
         return yf.download(ticker, period=period, interval=interval, progress=False, threads=False)
     except Exception:
         return pd.DataFrame()
 
+# [V9.6 新增] 獨立快取基本面資料，防止頻繁請求被 Yahoo 封鎖
+@st.cache_data(ttl=3600) # 快取 1 小時
+def fetch_fundamental_info(ticker):
+    try:
+        t = yf.Ticker(ticker)
+        return t.info
+    except Exception:
+        return {}
+
 try:
     df = fetch_main_data(current_ticker, api_period, api_interval)
     
-    t_obj = yf.Ticker(current_ticker)
-    try: info = t_obj.info
-    except: info = {}
+    # [V9.6 修改] 使用快取函式抓取基本面
+    info = fetch_fundamental_info(current_ticker)
+    
+    # [V9.6 新增] 如果 info 是 None (有時會發生)，轉為空字典
+    if info is None: info = {}
     
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
     if df.empty: st.error("⚠️ 系統暫時繁忙或無資料，請稍後再試。"); st.stop()
@@ -230,7 +233,6 @@ try:
     latest = df.iloc[-1]
     prev = df.iloc[-2] if len(df) > 1 else latest
 
-    # [修正重點 3] 回測資料抓取也加入 threads=False
     @st.cache_data(ttl=3600)
     def fetch_hist_data(ticker):
         d = yf.download(ticker, period="2y", progress=False, threads=False)
@@ -261,15 +263,21 @@ try:
     """, unsafe_allow_html=True)
     st.write("")
 
-    # --- 5欄版: 估值 / 營收 / 現金流 / S1(MA20) / S2(量能) ---
-    st.subheader("📊 基本面與雙重防守 (V9.5)")
+    # --- V9.6: 基本面資料增強版 (加入 Fallback 機制) ---
+    st.subheader("📊 基本面與雙重防守 (V9.6)")
     
     f_col1, f_col2, f_col3, f_col4, f_col5 = st.columns(5)
     
-    peg = info.get('pegRatio'); fwd_pe = info.get('forwardPE')
-    rev_growth = info.get('revenueGrowth')
+    # [V9.6 修改] 抓取順序: PEG -> Forward PE -> Trailing PE
+    peg = info.get('pegRatio')
+    fwd_pe = info.get('forwardPE')
+    trail_pe = info.get('trailingPE')
     
-    # Col 1: PEG/PE
+    # [V9.6 修改] 抓取順序: Revenue Growth -> Earnings Growth
+    rev_growth = info.get('revenueGrowth') or info.get('quarterlyRevenueGrowth')
+    if rev_growth is None: rev_growth = info.get('earningsGrowth')
+    
+    # Col 1: 估值邏輯 (多重備援)
     if peg is not None:
         p_val = f"{peg}"
         if peg < 1.0: peg_html = f'<div class="val-good">✨ 低估 (PEG < 1.0)</div>'
@@ -278,6 +286,9 @@ try:
     elif fwd_pe is not None:
         p_val = f"{fwd_pe:.2f} (PE)"
         peg_html = '<div class="val-fair">🔍 參考 Fwd PE</div>'
+    elif trail_pe is not None:
+        p_val = f"{trail_pe:.2f} (PE)"
+        peg_html = '<div class="val-fair">🔍 參考 Trailing PE</div>'
     else:
         p_val = "N/A"
         peg_html = '<div class="val-fair">資料不足</div>'
@@ -286,19 +297,20 @@ try:
         st.metric("估值 (PEG/PE)", p_val)
         st.markdown(peg_html, unsafe_allow_html=True)
 
-    # Col 2: 營收成長率
+    # Col 2: 成長率 (多重備援)
     with f_col2:
         if rev_growth is not None:
-            st.metric("營收成長率", f"{rev_growth*100:.2f}%")
+            st.metric("成長率 (營收/獲利)", f"{rev_growth*100:.2f}%")
             if rev_growth > 0.2: st.markdown('<div class="val-good">🔥 高成長</div>', unsafe_allow_html=True)
             elif rev_growth > 0: st.markdown('<div class="val-fair">📈 正成長</div>', unsafe_allow_html=True)
             else: st.markdown('<div class="val-bad">📉 衰退中</div>', unsafe_allow_html=True)
         else:
-            st.metric("營收成長率", "N/A")
+            st.metric("成長率", "N/A")
             st.caption("無近期資料")
     
     # Col 3: 自由現金流
     try:
+        t_obj = yf.Ticker(current_ticker) # 這裡仍需 Ticker 物件來抓 cash_flow
         cf = t_obj.cash_flow
         if not cf.empty:
             fcf_cur = cf.iloc[0, 0] if 'Free' in str(cf.index) else (cf.loc['Operating Cash Flow'].iloc[0] + cf.loc['Capital Expenditure'].iloc[0])
@@ -314,9 +326,8 @@ try:
     # Col 4 & 5: S1 (MA20) / S2 (籌碼結構)
     s1, s2, s1_note, s2_note = find_support_levels(df, latest['Close'])
     
-    # 判斷 S1 (MA20) 狀態
     s1_delta_color = "normal"
-    if latest['Close'] < s1: s1_delta_color = "inverse" # 跌破月線顯示紅色反向
+    if latest['Close'] < s1: s1_delta_color = "inverse"
     
     with f_col4: 
         st.metric("🛡️ S1 趨勢 (MA20)", f"${s1:.2f}", delta_color=s1_delta_color)
