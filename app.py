@@ -9,7 +9,7 @@ import os
 import time
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V9.4 (量能支撐版)", layout="wide", page_icon="💎")
+st.set_page_config(page_title="AI 實戰戰情室 V9.5 (法人操盤版)", layout="wide", page_icon="💎")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -21,7 +21,6 @@ st.markdown("""
     .signal-box-green {background-color: #1b3a1b; padding: 10px; border-radius: 8px; border: 1px solid #28a745; text-align: center; height: 100%;}
     .signal-box-red {background-color: #3a1b1b; padding: 10px; border-radius: 8px; border: 1px solid #dc3545; text-align: center; height: 100%;}
     .signal-box-neutral {background-color: #333; padding: 10px; border-radius: 8px; border: 1px solid #6c757d; text-align: center; height: 100%;}
-    /* 估值提示樣式 */
     .val-good {color: #28a745; font-weight: bold; font-size: 14px;}
     .val-fair {color: #ffc107; font-weight: bold; font-size: 14px;}
     .val-bad {color: #dc3545; font-weight: bold; font-size: 14px;}
@@ -70,37 +69,31 @@ def calculate_indicators(df):
     df['MACD_Hist'] = df['MACD'] - df['Signal_Line']
     return df
 
-# [修改] 支撐位算法：S1 改為「30日最大量日」的低點
+# [V9.5 核心更新] 雙重防守邏輯 (MA20 + Key Bar Low)
 def find_support_levels(df, current_price):
     if df.empty or len(df) < 60:
-        return current_price * 0.95, current_price * 0.90, "資料不足"
+        return current_price * 0.95, current_price * 0.90, "資料不足", "資料不足"
 
-    # 1. 鎖定過去 30 天的資料
-    recent_30 = df.tail(30)
-    
-    # 2. 找到成交量最大(Volume Max)的那一天
-    max_vol_date = recent_30['Volume'].idxmax()
-    
-    # 3. 取得那一天(大量K棒)的最低價 (Low) 作為關鍵支撐
-    # 邏輯：大量代表主力進場或換手，該日低點不應輕易跌破
-    s1_price = df.loc[max_vol_date]['Low']
-    
-    # 格式化日期，用於顯示 (例如: 12-08)
-    s1_date_str = max_vol_date.strftime('%m-%d')
-    s1_note = f"最大量日 ({s1_date_str})"
+    # --- S1: 趨勢防守 (MA20 月線) ---
+    s1 = df['Close'].rolling(window=20).mean().iloc[-1]
+    s1_note = "月線 (MA20)"
 
-    # 4. 防呆/跌破處理
-    ma20 = df['Close'].rolling(window=20).mean().iloc[-1]
-
-    # 如果現價已經跌破了這個「爆量低點」，代表支撐失效，防守改看月線
-    if current_price < s1_price:
-        s1_price = ma20
-        s1_note = "破大量低,看MA20"
-
-    # S2 地板價: 過去 60 天的絕對最低點
-    s2 = df['Low'].tail(60).min()
+    # --- S2: 籌碼防守 (近60日最大量日低點) ---
+    recent_60 = df.tail(60)
+    max_vol_date = recent_60['Volume'].idxmax()
+    key_bar_low = df.loc[max_vol_date]['Low']
+    floor_price = recent_60['Low'].min()
     
-    return s1_price, s2, s1_note
+    # 邏輯判斷：如果現價跌破大量低點，或是大量低點異常高(主力出貨)，則退守絕對地板
+    if current_price < key_bar_low:
+        s2 = floor_price
+        s2_note = "絕對地板 (60日低)"
+    else:
+        s2 = key_bar_low
+        s2_date_str = max_vol_date.strftime('%m-%d')
+        s2_note = f"最大量日低 ({s2_date_str})"
+
+    return s1, s2, s1_note, s2_note
 
 def run_backtest_analysis(df):
     signals = df[df['RSI'] < 30].index
@@ -117,12 +110,13 @@ def run_backtest_analysis(df):
         except: pass
     return trades
 
-# 防凍結批次抓取
+# [修正重點 1] 加入 threads=False 防止側邊欄卡住
 @st.cache_data(ttl=600) 
 def fetch_batch_summary(tickers):
     if not tickers: return {}
     try:
-        data = yf.download(" ".join(tickers), period="5d", group_by='ticker', threads=True, progress=False)
+        # 修正：將 threads=True 改為 False
+        data = yf.download(" ".join(tickers), period="5d", group_by='ticker', threads=False, progress=False)
         summary = {}
         for t in tickers:
             try:
@@ -204,7 +198,7 @@ with st.sidebar:
     time_opt = st.radio("週期", ["當沖 (分時)", "日線 (Daily)", "3日 (短線)", "10日 (波段)", "月線 (長線)"], index=1)
 
 # --- 4. 主程式 ---
-st.title(f"📈 {current_ticker} 實戰戰情室 V9.4")
+st.title(f"📈 {current_ticker} 實戰戰情室 V9.5 (法人版)")
 
 api_period = "1y"; api_interval = "1d"; xaxis_format = "%Y-%m-%d"
 if "當沖" in time_opt: api_period = "5d"; api_interval = "15m"; xaxis_format = "%H:%M" 
@@ -213,9 +207,14 @@ elif "3日" in time_opt: api_period = "5d"; api_interval = "30m"; xaxis_format =
 elif "10日" in time_opt: api_period = "1mo"; api_interval = "60m"; xaxis_format = "%m-%d %H:%M"
 elif "月線" in time_opt: api_period = "2y"; api_interval = "1wk"; xaxis_format = "%Y-%m"
 
+# [修正重點 2] 加入 threads=False 與 try-except 防止主程式卡死
 @st.cache_data(ttl=300)
 def fetch_main_data(ticker, period, interval):
-    return yf.download(ticker, period=period, interval=interval, progress=False)
+    try:
+        # 強制單線程，避免 yfinance 與 Streamlit 衝突
+        return yf.download(ticker, period=period, interval=interval, progress=False, threads=False)
+    except Exception:
+        return pd.DataFrame()
 
 try:
     df = fetch_main_data(current_ticker, api_period, api_interval)
@@ -231,9 +230,10 @@ try:
     latest = df.iloc[-1]
     prev = df.iloc[-2] if len(df) > 1 else latest
 
+    # [修正重點 3] 回測資料抓取也加入 threads=False
     @st.cache_data(ttl=3600)
     def fetch_hist_data(ticker):
-        d = yf.download(ticker, period="2y", progress=False)
+        d = yf.download(ticker, period="2y", progress=False, threads=False)
         if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.get_level_values(0)
         return d
     
@@ -261,8 +261,8 @@ try:
     """, unsafe_allow_html=True)
     st.write("")
 
-    # --- 估值與支撐位 (5欄版: 含營收成長 & 量能支撐S1) ---
-    st.subheader("📊 基本面與結構防守")
+    # --- 5欄版: 估值 / 營收 / 現金流 / S1(MA20) / S2(量能) ---
+    st.subheader("📊 基本面與雙重防守 (V9.5)")
     
     f_col1, f_col2, f_col3, f_col4, f_col5 = st.columns(5)
     
@@ -311,16 +311,20 @@ try:
     except:
         with f_col3: st.metric("自由現金流", "資料不足")
 
-    # Col 4 & 5: S1 (最大量低點) / S2
-    # 這裡會回傳 s1價格, s2價格, 以及說明文字
-    s1, s2, s1_note = find_support_levels(df, latest['Close'])
+    # Col 4 & 5: S1 (MA20) / S2 (籌碼結構)
+    s1, s2, s1_note, s2_note = find_support_levels(df, latest['Close'])
+    
+    # 判斷 S1 (MA20) 狀態
+    s1_delta_color = "normal"
+    if latest['Close'] < s1: s1_delta_color = "inverse" # 跌破月線顯示紅色反向
     
     with f_col4: 
-        st.metric("🛡️ S1 短線防守", f"${s1:.2f}")
-        st.caption(s1_note) # 顯示 "最大量日 (12-08)"
+        st.metric("🛡️ S1 趨勢 (MA20)", f"${s1:.2f}", delta_color=s1_delta_color)
+        st.caption(s1_note)
         
     with f_col5: 
-        st.metric("🛡️ S2 地板價 (60日)", f"${s2:.2f}")
+        st.metric("🛡️ S2 籌碼 (大量低)", f"${s2:.2f}")
+        st.caption(s2_note)
 
     # Chart
     st.subheader(f"📈 走勢圖 - {time_opt}")
@@ -340,10 +344,10 @@ try:
     if target_sell_price > 0: fig.add_hline(y=target_sell_price, line_dash="dashdot", line_color="#FFD700", annotation_text=f"🎯 Target: {target_sell_price:.2f}", row=1, col=1)
     
     # 畫支撐線
-    fig.add_hline(y=s1, line_dash="dash", line_color="orange", annotation_text=f"S1: {s1:.2f}", row=1, col=1)
-    fig.add_hline(y=s2, line_dash="dot", line_color="green", annotation_text=f"S2 (Floor): {s2:.2f}", row=1, col=1)
+    fig.add_hline(y=s1, line_dash="dash", line_color="#00d4ff", annotation_text=f"S1 (MA20): {s1:.2f}", row=1, col=1)
+    fig.add_hline(y=s2, line_dash="dot", line_color="orange", annotation_text=f"S2 (Key Bar): {s2:.2f}", row=1, col=1)
 
-    if len(plot_data) > 20: fig.add_trace(go.Scatter(x=plot_data.index, y=plot_data['SMA_20'], line=dict(color='#00d4ff', width=1), name='20 MA'), row=1, col=1)
+    if len(plot_data) > 20: fig.add_trace(go.Scatter(x=plot_data.index, y=plot_data['SMA_20'], line=dict(color='#00d4ff', width=1, dash='solid'), name='20 MA'), row=1, col=1)
     if 'MACD_Hist' in plot_data.columns:
         colors = ['green' if v >= 0 else 'red' for v in plot_data['MACD_Hist']]
         fig.add_trace(go.Bar(x=plot_data.index, y=plot_data['MACD_Hist'], marker_color=colors, name='MACD'), row=2, col=1)
