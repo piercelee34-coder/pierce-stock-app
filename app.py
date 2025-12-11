@@ -9,7 +9,7 @@ import os
 import time
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V10.1 (戰略訊號圖解版)", layout="wide", page_icon="💎")
+st.set_page_config(page_title="AI 實戰戰情室 V10.2 (雙軌目標戰略版)", layout="wide", page_icon="💎")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -25,7 +25,7 @@ st.markdown("""
     .stButton>button {width: 100%; border-radius: 5px;}
     .guide-box {background-color: #262730; padding: 15px; border-radius: 5px; border-left: 4px solid #00d4ff; font-size: 14px; line-height: 1.6;}
     
-    /* V10.1 戰略雷達樣式優化 */
+    /* V10.2 戰略雷達樣式優化 */
     .radar-grid {display: grid; grid-template-columns: 1fr; gap: 8px; text-align: left; font-size: 14px; margin-top: 10px;}
     .radar-item {padding: 4px 0; border-bottom: 1px solid #444; display: flex; justify-content: space-between; align-items: center;}
     .signal-tag {font-weight: bold; padding: 2px 8px; border-radius: 4px; font-size: 13px; display: inline-block;}
@@ -65,7 +65,7 @@ def calculate_indicators(df):
     df['SMA_60'] = df['Close'].rolling(window=60).mean()
     df['Vol_SMA5'] = df['Volume'].rolling(window=5).mean()
     
-    # 布林通道 (用於目標價)
+    # 布林通道 (用於短線目標)
     df['Std_Dev'] = df['Close'].rolling(window=20).std()
     df['Bollinger_Upper'] = df['SMA_20'] + (df['Std_Dev'] * 2)
     
@@ -110,13 +110,13 @@ def find_support_levels(df, current_price):
 
     return s1, s2, s1_note, s2_note
 
-# [V10.1 核心更新] 戰略訊號圖解化 (加入詳細註解與顏色)
+# 戰略訊號圖解化 (加入詳細註解與顏色)
 def analyze_strategic_signals(df):
     if df.empty: return {}
     
     latest = df.iloc[-1]
     
-    # 1. MACD 狀態 (加入易懂註解)
+    # 1. MACD 狀態
     macd = latest['MACD']
     signal = latest['Signal_Line']
     
@@ -126,7 +126,7 @@ def analyze_strategic_signals(df):
             macd_color = "tag-green"
         else:
             macd_text = "零軸下金叉 (跌深反彈)"
-            macd_color = "tag-orange" # 反彈視為警戒或中性偏多
+            macd_color = "tag-orange"
     else: # 死叉
         if macd > 0:
             macd_text = "零軸上死叉 (由多轉空)"
@@ -135,12 +135,12 @@ def analyze_strategic_signals(df):
             macd_text = "零軸下死叉 (賣出訊號)"
             macd_color = "tag-red"
     
-    # 2. 成交量狀態 (加入顏色)
+    # 2. 成交量狀態
     vol = latest['Volume']
     vol_ma = latest['Vol_SMA5']
     if vol > vol_ma * 1.5:
         vol_text = "爆量 (>1.5倍)"
-        vol_color = "tag-green" # 動能強
+        vol_color = "tag-green"
     elif vol > vol_ma * 1.1:
         vol_text = "量增 (>1.1倍)"
         vol_color = "tag-green"
@@ -148,14 +148,14 @@ def analyze_strategic_signals(df):
         vol_text = "量縮/平量"
         vol_color = "tag-gray"
     
-    # 3. RSI 狀態 (加入顏色)
+    # 3. RSI 狀態
     rsi = latest['RSI']
     if rsi > 70:
         rsi_text = f"過熱 ({rsi:.0f})"
-        rsi_color = "tag-red" # 警戒
+        rsi_color = "tag-red"
     elif rsi < 30:
         rsi_text = f"超賣 ({rsi:.0f})"
-        rsi_color = "tag-green" # 買點
+        rsi_color = "tag-green"
     else:
         rsi_text = f"中性 ({rsi:.0f})"
         rsi_color = "tag-gray"
@@ -182,14 +182,14 @@ def analyze_strategic_signals(df):
     if is_consolidating:
         summary = "盤整陷阱"
         summary_color = "tag-orange"
-    elif macd > signal: # 金叉狀態
+    elif macd > signal:
         if "tag-green" in vol_color:
             summary = "🚀 放量攻擊"
             summary_color = "tag-green"
         else:
             summary = "📈 偏多震盪"
             summary_color = "tag-green"
-    else: # 死叉狀態
+    else:
         if rsi > 60:
             summary = "🌧️ 拉回修正"
             summary_color = "tag-orange"
@@ -217,6 +217,7 @@ def analyze_market_trend(df):
     else:
         return "⚖️ 震盪 (Range)", "區間整理，高出低進"
 
+# [V10.2 新增] 預測目標價 (雙軌制：短線 + 中長線)
 def predict_target_and_rating(df):
     price = df['Close'].iloc[-1]
     ma20 = df['SMA_20'].iloc[-1]
@@ -225,6 +226,7 @@ def predict_target_and_rating(df):
     rsi = df['RSI'].iloc[-1]
     upper_band = df['Bollinger_Upper'].iloc[-1]
     
+    # 計算評級
     score = 0
     if price > ma20: score += 1
     if macd > signal: score += 1
@@ -235,12 +237,19 @@ def predict_target_and_rating(df):
     elif score == 2: rating = "✊ 持有/續抱"
     else: rating = "✋ 觀望/賣出"
     
+    # 1. 短線目標 (布林通道上緣)
     if price > upper_band:
-        target = price * 1.05
+        target_short = price * 1.05
     else:
-        target = upper_band
+        target_short = upper_band
+    
+    # 2. 中長線目標 (波段高點預測)
+    # 取過去 60 天最高價，假設突破後有 15% 慣性漲幅空間 (模擬主升段)
+    recent_60_high = df['High'].tail(60).max()
+    target_long = max(recent_60_high * 1.15, target_short * 1.1) 
+    # 確保長線目標至少比短線高 10%
         
-    return target, rating
+    return target_short, target_long, rating
 
 def generate_buy_hint(df, current_price, s1, s2):
     if df.empty: return "無資料"
@@ -320,7 +329,7 @@ with st.sidebar:
     time_opt = st.radio("週期", ["當沖 (分時)", "日線 (Daily)", "3日 (短線)", "10日 (波段)", "月線 (長線)"], index=1)
 
 # --- 4. 主程式 ---
-st.title(f"📈 {current_ticker} 實戰戰情室 V10.1")
+st.title(f"📈 {current_ticker} 實戰戰情室 V10.2")
 
 api_period = "1y"; api_interval = "1d"; xaxis_format = "%Y-%m-%d"
 if "當沖" in time_opt: api_period = "5d"; api_interval = "15m"; xaxis_format = "%H:%M" 
@@ -355,12 +364,13 @@ try:
     latest = df.iloc[-1]
     prev = df.iloc[-2] if len(df) > 1 else latest
 
-    # 計算 V10.1 指標
+    # 計算 V10.2 指標
     s1, s2, s1_note, s2_note = find_support_levels(df, latest['Close'])
     buy_hint_text = generate_buy_hint(df, latest['Close'], s1, s2)
-    strat_signals = analyze_strategic_signals(df) # 包含顏色與註解的戰略數據
+    strat_signals = analyze_strategic_signals(df)
     trend_icon, trend_desc = analyze_market_trend(df)
-    target_price, ai_rating = predict_target_and_rating(df)
+    # 取得雙軌目標價
+    target_short, target_long, ai_rating = predict_target_and_rating(df)
     
     pct_change = ((latest['Close'] - prev['Close']) / prev['Close']) * 100
     color_price = "green" if pct_change >= 0 else "red"
@@ -376,11 +386,11 @@ try:
     """, unsafe_allow_html=True)
     st.write("")
 
-    # --- Row 2: V10.1 戰略雷達 (四合一圖解版) ---
+    # --- Row 2: V10.2 戰略雷達 (含雙軌目標) ---
     st.subheader("🚀 戰略雷達與 AI 預測")
     m_col1, m_col2, m_col3 = st.columns(3)
 
-    # 1. 綜合戰略雷達 (更新版)
+    # 1. 綜合戰略雷達
     with m_col1:
         st.markdown(f"""
         <div class="ai-box">
@@ -417,15 +427,21 @@ try:
         </div>
         """, unsafe_allow_html=True)
 
-    # 3. 目標價
+    # 3. 雙軌目標價 (新功能)
     with m_col3:
-        target_upside = (target_price - latest['Close']) / latest['Close'] * 100
-        target_color = "#28a745" if target_upside > 0 else "#dc3545"
         st.markdown(f"""
-        <div class="ai-box" style="border: 1px solid {target_color};">
-            <h5 style="color:white; margin:0;">🎯 短線 AI 目標價</h5>
-            <h2 style="color:{target_color}; margin:0;">${target_price:.2f}</h2>
-            <p style="font-size:12px; color:#ccc;">潛在空間: {target_upside:+.2f}% (布林通道測幅)</p>
+        <div class="ai-box" style="border: 1px solid #00d4ff;">
+            <h5 style="color:white; margin:0;">🎯 AI 雙軌目標價</h5>
+            <div style="margin-top:10px; text-align:left;">
+                <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                    <span style="color:#4ade80;">🚀 短線 (布林)</span>
+                    <span style="font-weight:bold; font-size:18px;">${target_short:.2f}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; border-top:1px solid #555; padding-top:5px;">
+                    <span style="color:#FFD700;">🌊 中長 (波段)</span>
+                    <span style="font-weight:bold; font-size:18px;">${target_long:.2f}</span>
+                </div>
+            </div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -496,7 +512,9 @@ try:
 
     fig.add_hline(y=s1, line_dash="dash", line_color="#00d4ff", annotation_text=f"S1 (MA20)", row=1, col=1)
     fig.add_hline(y=s2, line_dash="dot", line_color="orange", annotation_text=f"S2 (Key Bar)", row=1, col=1)
-    fig.add_hline(y=target_price, line_dash="dashdot", line_color="#FFD700", annotation_text=f"🎯 Target: {target_price:.2f}", row=1, col=1)
+    # 畫出雙軌目標價
+    fig.add_hline(y=target_short, line_dash="dashdot", line_color="#4ade80", annotation_text=f"短線目標: {target_short:.2f}", row=1, col=1)
+    fig.add_hline(y=target_long, line_dash="dashdot", line_color="#FFD700", annotation_text=f"中長線目標: {target_long:.2f}", row=1, col=1)
 
     if len(plot_data) > 20: fig.add_trace(go.Scatter(x=plot_data.index, y=plot_data['SMA_20'], line=dict(color='#00d4ff', width=1), name='20 MA'), row=1, col=1)
     if 'MACD_Hist' in plot_data.columns:
@@ -518,8 +536,6 @@ try:
     with chip_col1:
         st.markdown("##### 🏦 主力資金流向 (吸籌/出貨)")
         fig_mf = go.Figure()
-        
-        # Area chart color logic
         fig_mf.add_trace(go.Scatter(x=plot_data.index, y=mf_cum, fill='tozeroy', mode='lines', line=dict(color='#00d4ff', width=2), name='主力資金'))
         
         if len(mf_cum) > 5:
