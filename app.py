@@ -8,7 +8,7 @@ import json
 import os
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V12.8 (行動操作友善版)", layout="wide", page_icon="💎")
+st.set_page_config(page_title="AI 實戰戰情室 V12.9 (行動觸控切換版)", layout="wide", page_icon="💎")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -295,7 +295,7 @@ with st.sidebar:
                 save_watchlist(st.session_state.watchlist); st.rerun()
 
 # --- 4. 主程式 ---
-st.title(f"📈 {current_ticker} 實戰戰情室 V12.7")
+st.title(f"📈 {current_ticker} 實戰戰情室 V12.9")
 
 @st.cache_data(ttl=300)
 def fetch_main_data(ticker, period, interval):
@@ -316,31 +316,28 @@ metrics_placeholder = st.container()
 
 st.write("") 
 
-# [Section 2] 控制選單
+# [Section 2] 控制選單 & 標題
 t_col1, t_col2 = st.columns([0.65, 0.35])
 with t_col1:
     st.subheader(f"📈 走勢圖 (含九轉/DMA)")
 with t_col2:
-    # [V12.7] 自定義圖例 + 說明 (整合在標題右側)
+    # 標題右側說明
     st.markdown("""
-        <div class="custom-legend">
-            <span style="color:#ff6b6b">▼紅9買</span> <span style="color:#4a9eff; margin-right:5px;">▲藍9賣</span>
-            <span class="legend-item" style="color:#00d4ff">━ MA20</span>
-            <br>
-            <span class="legend-item" style="color:#facc15">━ AMA</span>
-            <span class="legend-item" style="color:#ffffff">━ DIF</span>
-            <span class="legend-item" style="color:#ffff00">━ DEM</span>
+        <div class="header-legend">
+            <span style="color:#ff6b6b; font-weight:bold; margin-right:10px;">▼ 紅9: 潛在買點</span>
+            <span style="color:#4a9eff; font-weight:bold;">▲ 藍9: 潛在賣點</span>
         </div>
     """, unsafe_allow_html=True)
 
-# [V12.8] 新增：鎖定圖表 (重置) 按鈕 - 放在選單旁邊或上方
-if st.button("🔒 鎖定圖表 (恢復滑動 / 重置縮放)"):
-    st.rerun()
+# [V12.9] 新增：圖表操作切換開關 (解決手機誤觸)
+# 放在選單上方或旁邊，這裡放在選單上方
+enable_touch = st.toggle("🖐️ 啟用圖表操作 (開啟後可縮放/平移，關閉後可滑動網頁)", value=False)
 
+# 週期選單
 time_opt = st.radio("選擇週期", ["當沖 (分時)", "日線 (Daily)", "週線 (Weekly)", "月線 (長線)"], 
                     index=1, horizontal=True, label_visibility="collapsed")
 
-# [Section 3] 邏輯計算
+# [Section 3] 資料邏輯
 api_period = "1y"; api_interval = "1d"; xaxis_format = "%Y-%m-%d"
 if "當沖" in time_opt: api_period = "5d"; api_interval = "15m"; xaxis_format = "%H:%M" 
 elif "日線" in time_opt: api_period = "6mo"; api_interval = "1d"; xaxis_format = "%m-%d" 
@@ -370,6 +367,7 @@ try:
 
     # [Section 4] 回填頂部容器
     with metrics_placeholder:
+        # 1. 現價卡片
         st.markdown(f"""
         <div class="price-card">
             <h1 style="margin:0; font-size: 50px;">${latest['Close']:.2f}</h1>
@@ -379,6 +377,7 @@ try:
         </div>
         """, unsafe_allow_html=True)
         
+        # 2. 戰略雷達
         r_col1, r_col2, r_col3 = st.columns(3)
         with r_col1:
             st.markdown(f"""
@@ -399,6 +398,7 @@ try:
         
         st.write("")
         
+        # 3. 基本面與防守 (含重抓按鈕)
         f_header, f_btn = st.columns([0.8, 0.2])
         with f_header: st.caption("📊 基本面與結構防守")
         with f_btn: 
@@ -433,6 +433,7 @@ try:
                 st.metric("成長率", "N/A")
                 st.caption("無資料")
         
+        # FCF
         try:
             t_obj = yf.Ticker(current_ticker)
             cf = t_obj.cash_flow
@@ -461,6 +462,7 @@ try:
         
         st.markdown("---")
         
+        # S1/S2
         s_col1, s_col2 = st.columns(2)
         s1_delta = "normal" if latest['Close'] >= s1 else "inverse"
         with s_col1: 
@@ -470,7 +472,7 @@ try:
             st.metric("🛡️ S2 籌碼 (大量低)", f"${s2:.2f}")
             st.caption(s2_note)
 
-    # [Section 5] 繪圖 (V12.7 修改：dragmode=False, 增加指標訊號)
+    # [Section 5] 繪圖 (V12.9 修改: 根據 enable_touch 設定 dragmode)
     plot_data = df
     if "當沖" in time_opt: plot_data = df.tail(50) 
     elif "日線" in time_opt: plot_data = df.tail(120) 
@@ -482,6 +484,7 @@ try:
     for i in range(1, len(plot_data)):
         curr = plot_data.iloc[i]; prior = plot_data.iloc[i-1]
         date_str = plot_data.index[i].strftime('%m/%d')
+        
         is_macd_buy = (curr['MACD'] > curr['Signal_Line']) and (prior['MACD'] <= prior['Signal_Line'])
         is_rsi_buy = (curr['RSI'] < 30) and (prior['RSI'] >= 30)
         is_td_buy_9 = not np.isnan(curr.get('TD_Buy_9', np.nan))
@@ -508,7 +511,6 @@ try:
         date_str = idx.strftime('%m/%d')
         fig.add_annotation(x=idx, y=row['High'], text=f"<b>藍9</b><br>{date_str}<br>${row['Close']:.2f}", showarrow=True, arrowhead=1, ay=-70, arrowcolor='#4a9eff', bgcolor="#1b3a4a", bordercolor="#4a9eff", font=dict(color='#4a9eff', size=11), row=1, col=1)
 
-    # [V12.7 新增] 繪製 MACD/DMA 交叉訊號
     if 'MACD_Hist' in plot_data.columns:
         colors = ['green' if v >= 0 else 'red' for v in plot_data['MACD_Hist']]
         fig.add_trace(go.Bar(x=plot_data.index, y=plot_data['MACD_Hist'], marker_color=colors, name='MACD Hist'), row=2, col=1)
@@ -533,9 +535,13 @@ try:
         fig.add_trace(go.Scatter(x=plot_data[dma_dead].index, y=plot_data[dma_dead]['DMA_DDD'], mode='markers', marker=dict(symbol='triangle-down', size=8, color='#facc15'), name='DMA死叉', showlegend=False), row=3, col=1)
 
     fig.update_xaxes(tickformat=xaxis_format)
-    # [V12.7] 設定 dragmode=False 防止手機誤觸
-    fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=30, b=10, l=10, r=10), dragmode=False, showlegend=False)
-    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True})
+    # [V12.9 修改] dragmode 設定：如果開啟觸控操作則 'pan'，否則 False (鎖定，允許網頁捲動)
+    chart_dragmode = 'pan' if enable_touch else False
+    
+    fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=30, b=10, l=10, r=10), 
+                      dragmode=chart_dragmode, showlegend=False)
+                      
+    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': enable_touch, 'displayModeBar': enable_touch})
 
     st.subheader("🐳 籌碼與主力動向分析")
     chip_col1, chip_col2 = st.columns(2)
