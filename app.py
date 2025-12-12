@@ -8,7 +8,7 @@ import json
 import os
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V11.9 (操控與視覺整合版)", layout="wide", page_icon="💎")
+st.set_page_config(page_title="AI 實戰戰情室 V11.9a (手機版面修正版)", layout="wide", page_icon="💎")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -255,8 +255,6 @@ with st.sidebar:
     selection = st.radio("選擇股票", st.session_state.watchlist)
     current_ticker = selection
     st.markdown("---")
-    
-    # 上移/下移
     c_up, c_down = st.columns(2)
     if c_up.button("⬆️ 上移") and current_ticker in st.session_state.watchlist:
         idx = st.session_state.watchlist.index(current_ticker)
@@ -268,8 +266,8 @@ with st.sidebar:
         if idx < len(st.session_state.watchlist) - 1:
             st.session_state.watchlist[idx], st.session_state.watchlist[idx+1] = st.session_state.watchlist[idx+1], st.session_state.watchlist[idx]
             save_watchlist(st.session_state.watchlist); st.rerun()
-            
-    # [V11.9 新增] 置頂/置底
+    
+    # 新增置頂/置底
     c_top, c_bottom = st.columns(2)
     if c_top.button("⏫ 置頂") and current_ticker in st.session_state.watchlist:
         st.session_state.watchlist.remove(current_ticker)
@@ -291,13 +289,15 @@ with st.sidebar:
             if current_ticker in st.session_state.watchlist:
                 st.session_state.watchlist.remove(current_ticker)
                 save_watchlist(st.session_state.watchlist); st.rerun()
+    st.markdown("---")
+    time_opt = st.radio("週期", ["當沖 (分時)", "日線 (Daily)", "週線 (Weekly)", "月線 (長線)"], index=1)
 
 # --- 4. 主程式 ---
 # [V11.9 修改] 週期選單移至主標題右側
 top_col1, top_col2 = st.columns([0.65, 0.35])
 
 with top_col1:
-    st.title(f"📈 {current_ticker} 實戰戰情室 V11.9")
+    st.title(f"📈 {current_ticker} 實戰戰情室 V11.9a")
     
 with top_col2:
     st.write("") # Spacer
@@ -481,7 +481,7 @@ try:
     with f_col4: st.metric("🛡️ S1 趨勢 (MA20)", f"${s1:.2f}", delta_color=s1_delta); st.caption(s1_note)
     with f_col5: st.metric("🛡️ S2 籌碼 (大量低)", f"${s2:.2f}"); st.caption(s2_note)
 
-    # [V11.9 修改] 走勢圖標題與右側說明 (因為週期選單移至頂部，這裡只留標題)
+    # [V12.0 修改] 走勢圖標題與右側說明 (因為週期選單移至頂部，這裡只留標題)
     t_col1, t_col2 = st.columns([0.65, 0.35])
     with t_col1:
         st.subheader(f"📈 走勢圖 - {time_opt} (含九轉/DMA)")
@@ -542,7 +542,8 @@ try:
         fig.add_trace(go.Scatter(x=plot_data.index, y=plot_data['DMA_DDD'], fill='tonexty', fillcolor='rgba(216, 180, 254, 0.1)', mode='none', showlegend=False), row=3, col=1)
 
     fig.update_xaxes(tickformat=xaxis_format)
-    fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=30, b=10, r=220), dragmode='zoom')
+    # [V12.0 修改] 高度改為 950，適應手機版
+    fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=30, b=10, r=220), dragmode='zoom')
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
     st.subheader("🐳 籌碼與主力動向分析")
