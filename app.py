@@ -8,7 +8,7 @@ import json
 import os
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V12.7 (行動防誤觸 & 指標訊號版)", layout="wide", page_icon="💎")
+st.set_page_config(page_title="AI 實戰戰情室 V12.8 (行動操作友善版)", layout="wide", page_icon="💎")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -34,15 +34,13 @@ st.markdown("""
     .stButton>button {width: 100%; border-radius: 5px;}
     .guide-box {background-color: #262730; padding: 15px; border-radius: 5px; border-left: 4px solid #00d4ff; font-size: 14px; line-height: 1.6;}
     
-    /* 標題右側說明樣式 (精簡圖例) */
-    .custom-legend {
+    /* 標題右側說明樣式 */
+    .header-legend {
         text-align: right; 
-        font-size: 12px; 
-        color: #ccc; 
-        line-height: 1.5;
-        padding-top: 10px;
+        font-size: 13px; 
+        padding-top: 25px;
+        color: #ccc;
     }
-    .legend-item { margin-left: 8px; white-space: nowrap; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -70,15 +68,19 @@ if 'watchlist' not in st.session_state:
 
 def calculate_volume_profile(df, bins=40, filter_mask=None):
     if df.empty: return pd.DataFrame({'Price': [], 'Volume': []})
+    
     price_min = df['Low'].min()
     price_max = df['High'].max()
+    
     if price_min == price_max: return pd.DataFrame({'Price': [], 'Volume': []})
     
     bin_edges = np.linspace(price_min, price_max, bins + 1)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
     
     target_df = df if filter_mask is None else df[filter_mask]
-    if target_df.empty: return pd.DataFrame({'Price': bin_centers, 'Volume': np.zeros(bins)})
+    
+    if target_df.empty: 
+        return pd.DataFrame({'Price': bin_centers, 'Volume': np.zeros(bins)})
     
     bin_indices = pd.cut(target_df['Close'], bins=bin_edges, labels=False, include_lowest=True)
     profile_series = target_df.groupby(bin_indices)['Volume'].sum()
@@ -309,7 +311,7 @@ def fetch_fundamental_info(ticker):
         return info
     except Exception: return None
 
-# [Section 1] 預留頂部容器
+# [Section 1] 預留頂部容器 (Layout Shift)
 metrics_placeholder = st.container()
 
 st.write("") 
@@ -319,17 +321,21 @@ t_col1, t_col2 = st.columns([0.65, 0.35])
 with t_col1:
     st.subheader(f"📈 走勢圖 (含九轉/DMA)")
 with t_col2:
+    # [V12.7] 自定義圖例 + 說明 (整合在標題右側)
     st.markdown("""
         <div class="custom-legend">
-            <span style="color:#ff6b6b">▼紅9買</span> <span style="color:#4a9eff; margin-right:10px;">▲藍9賣</span>
+            <span style="color:#ff6b6b">▼紅9買</span> <span style="color:#4a9eff; margin-right:5px;">▲藍9賣</span>
             <span class="legend-item" style="color:#00d4ff">━ MA20</span>
-            <span class="legend-item" style="color:#d8b4fe">━ DMA</span>
             <br>
             <span class="legend-item" style="color:#facc15">━ AMA</span>
             <span class="legend-item" style="color:#ffffff">━ DIF</span>
             <span class="legend-item" style="color:#ffff00">━ DEM</span>
         </div>
     """, unsafe_allow_html=True)
+
+# [V12.8] 新增：鎖定圖表 (重置) 按鈕 - 放在選單旁邊或上方
+if st.button("🔒 鎖定圖表 (恢復滑動 / 重置縮放)"):
+    st.rerun()
 
 time_opt = st.radio("選擇週期", ["當沖 (分時)", "日線 (Daily)", "週線 (Weekly)", "月線 (長線)"], 
                     index=1, horizontal=True, label_visibility="collapsed")
