@@ -8,7 +8,7 @@ import json
 import os
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V12.5 (介面完美定位版)", layout="wide", page_icon="💎")
+st.set_page_config(page_title="AI 實戰戰情室 V12.6 (極致全螢幕圖表版)", layout="wide", page_icon="💎")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -34,14 +34,15 @@ st.markdown("""
     .stButton>button {width: 100%; border-radius: 5px;}
     .guide-box {background-color: #262730; padding: 15px; border-radius: 5px; border-left: 4px solid #00d4ff; font-size: 14px; line-height: 1.6;}
     
-    /* [V12.5] 標題右側說明樣式 (置右對齊，字體適中) */
-    .header-legend {
+    /* [V12.6] 全新圖例樣式 (緊湊排列) */
+    .custom-legend {
         text-align: right; 
-        font-size: 13px; 
+        font-size: 12px; 
+        color: #ccc; 
+        line-height: 1.5;
         padding-top: 10px;
-        color: #ccc;
-        line-height: 1.8;
     }
+    .legend-item { margin-left: 8px; white-space: nowrap; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -296,7 +297,7 @@ with st.sidebar:
                 save_watchlist(st.session_state.watchlist); st.rerun()
 
 # --- 4. 主程式 ---
-st.title(f"📈 {current_ticker} 實戰戰情室 V12.5")
+st.title(f"📈 {current_ticker} 實戰戰情室 V12.6")
 
 @st.cache_data(ttl=300)
 def fetch_main_data(ticker, period, interval):
@@ -322,15 +323,20 @@ t_col1, t_col2 = st.columns([0.65, 0.35])
 with t_col1:
     st.subheader(f"📈 走勢圖 (含九轉/DMA)")
 with t_col2:
-    # [V12.5] 說明放在標題右側
+    # [V12.6] 使用自定義 HTML 圖例 (包含紅9藍9與所有線型)
     st.markdown("""
-        <div class="header-legend">
-            <span style="color:#ff6b6b; font-weight:bold; margin-right:10px;">▼ 紅9: 潛在買點</span>
-            <span style="color:#4a9eff; font-weight:bold;">▲ 藍9: 潛在賣點</span>
+        <div class="custom-legend">
+            <span style="color:#ff6b6b">▼紅9買</span> <span style="color:#4a9eff; margin-right:10px;">▲藍9賣</span>
+            <span class="legend-item" style="color:#00d4ff">━ MA20</span>
+            <span class="legend-item" style="color:#d8b4fe">━ DMA</span>
+            <br>
+            <span class="legend-item" style="color:#facc15">━ AMA</span>
+            <span class="legend-item" style="color:#ffffff">━ DIF</span>
+            <span class="legend-item" style="color:#ffff00">━ DEM</span>
         </div>
     """, unsafe_allow_html=True)
 
-# [V12.5] 週期選單放在標題下方
+# 週期選單
 time_opt = st.radio("選擇週期", ["當沖 (分時)", "日線 (Daily)", "週線 (Weekly)", "月線 (長線)"], 
                     index=1, horizontal=True, label_visibility="collapsed")
 
@@ -469,7 +475,7 @@ try:
             st.metric("🛡️ S2 籌碼 (大量低)", f"${s2:.2f}")
             st.caption(s2_note)
 
-    # [Section 5] 繪圖
+    # [Section 5] 繪圖 (V12.6: showlegend=False, custom legend)
     plot_data = df
     if "當沖" in time_opt: plot_data = df.tail(50) 
     elif "日線" in time_opt: plot_data = df.tail(120) 
@@ -496,8 +502,8 @@ try:
         if is_macd_sell or is_rsi_sell or is_td_sell_9:
             fig.add_annotation(x=plot_data.index[i], y=curr['High']*1.02, text=f"SELL<br>{date_str}<br>${curr['Close']:.2f}", showarrow=True, arrowhead=1, ay=-50, row=1, col=1, bgcolor="#dc3545", font=dict(color="white", size=10))
 
-    fig.add_hline(y=s1, line_dash="dash", line_color="#00d4ff", annotation_text=f"S1 (MA20)", row=1, col=1)
-    fig.add_hline(y=s2, line_dash="dot", line_color="orange", annotation_text=f"S2 (Key Bar)", row=1, col=1)
+    fig.add_hline(y=s1, line_dash="dash", line_color="#00d4ff", annotation_text=f"S1", row=1, col=1)
+    fig.add_hline(y=s2, line_dash="dot", line_color="orange", annotation_text=f"S2", row=1, col=1)
     fig.add_hline(y=target_short, line_dash="dashdot", line_color="#4ade80", annotation_text=f"Target 1", row=1, col=1)
     
     for idx, row in plot_data[~np.isnan(plot_data['TD_Buy_9'])].iterrows():
@@ -520,8 +526,8 @@ try:
         fig.add_trace(go.Scatter(x=plot_data.index, y=plot_data['DMA_DDD'], fill='tonexty', fillcolor='rgba(216, 180, 254, 0.1)', mode='none', showlegend=False), row=3, col=1)
 
     fig.update_xaxes(tickformat=xaxis_format)
-    # [V12.5 修改] 手機全開版面：左右邊距 10px + 高度 950px
-    fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=30, b=10, l=10, r=10), dragmode='zoom')
+    # [V12.6] 隱藏原生圖例 (showlegend=False)，並將邊距縮到最小
+    fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=30, b=10, l=10, r=10), dragmode='zoom', showlegend=False)
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
     st.subheader("🐳 籌碼與主力動向分析")
