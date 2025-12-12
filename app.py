@@ -8,7 +8,7 @@ import json
 import os
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V12.4 (行動版面終極配置版)", layout="wide", page_icon="💎")
+st.set_page_config(page_title="AI 實戰戰情室 V12.5 (介面完美定位版)", layout="wide", page_icon="💎")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -34,12 +34,13 @@ st.markdown("""
     .stButton>button {width: 100%; border-radius: 5px;}
     .guide-box {background-color: #262730; padding: 15px; border-radius: 5px; border-left: 4px solid #00d4ff; font-size: 14px; line-height: 1.6;}
     
-    /* [V12.4] 標題右側說明樣式 (緊湊版) */
+    /* [V12.5] 標題右側說明樣式 (置右對齊，字體適中) */
     .header-legend {
         text-align: right; 
-        font-size: 12px; 
-        padding-top: 8px;
+        font-size: 13px; 
+        padding-top: 10px;
         color: #ccc;
+        line-height: 1.8;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -295,7 +296,7 @@ with st.sidebar:
                 save_watchlist(st.session_state.watchlist); st.rerun()
 
 # --- 4. 主程式 ---
-st.title(f"📈 {current_ticker} 實戰戰情室 V12.4")
+st.title(f"📈 {current_ticker} 實戰戰情室 V12.5")
 
 @st.cache_data(ttl=300)
 def fetch_main_data(ticker, period, interval):
@@ -316,20 +317,22 @@ metrics_placeholder = st.container()
 
 st.write("") 
 
-# [Section 2] 控制選單 & 標題
+# [Section 2] 控制選單 & 標題 (配置於中間)
 t_col1, t_col2 = st.columns([0.65, 0.35])
 with t_col1:
-    st.subheader(f"📈 走勢圖")
+    st.subheader(f"📈 走勢圖 (含九轉/DMA)")
 with t_col2:
-    time_opt = st.radio("選擇週期", ["當沖 (分時)", "日線 (Daily)", "週線 (Weekly)", "月線 (長線)"], 
-                        index=1, horizontal=True, label_visibility="collapsed")
-    # [V12.4 修改] 說明文字移至標題右側
+    # [V12.5] 說明放在標題右側
     st.markdown("""
         <div class="header-legend">
             <span style="color:#ff6b6b; font-weight:bold; margin-right:10px;">▼ 紅9: 潛在買點</span>
             <span style="color:#4a9eff; font-weight:bold;">▲ 藍9: 潛在賣點</span>
         </div>
     """, unsafe_allow_html=True)
+
+# [V12.5] 週期選單放在標題下方
+time_opt = st.radio("選擇週期", ["當沖 (分時)", "日線 (Daily)", "週線 (Weekly)", "月線 (長線)"], 
+                    index=1, horizontal=True, label_visibility="collapsed")
 
 # [Section 3] 資料邏輯
 api_period = "1y"; api_interval = "1d"; xaxis_format = "%Y-%m-%d"
@@ -361,7 +364,7 @@ try:
 
     # [Section 4] 回填頂部容器 (Layout Shift)
     with metrics_placeholder:
-        # 1. 現價卡片 (V12.4 要求置頂)
+        # 1. 現價卡片
         st.markdown(f"""
         <div class="price-card">
             <h1 style="margin:0; font-size: 50px;">${latest['Close']:.2f}</h1>
@@ -371,7 +374,7 @@ try:
         </div>
         """, unsafe_allow_html=True)
         
-        # 2. 戰略雷達 (V12.4 要求在走勢圖上方)
+        # 2. 戰略雷達
         r_col1, r_col2, r_col3 = st.columns(3)
         with r_col1:
             st.markdown(f"""
@@ -454,6 +457,8 @@ try:
             with f_col3:
                 st.metric("自由現金流", "資料不足")
         
+        st.markdown("---")
+        
         # S1/S2
         s_col1, s_col2 = st.columns(2)
         s1_delta = "normal" if latest['Close'] >= s1 else "inverse"
@@ -464,7 +469,7 @@ try:
             st.metric("🛡️ S2 籌碼 (大量低)", f"${s2:.2f}")
             st.caption(s2_note)
 
-    # [Section 5] 繪圖 (V12.4 手機滿版優化)
+    # [Section 5] 繪圖
     plot_data = df
     if "當沖" in time_opt: plot_data = df.tail(50) 
     elif "日線" in time_opt: plot_data = df.tail(120) 
@@ -476,6 +481,7 @@ try:
     for i in range(1, len(plot_data)):
         curr = plot_data.iloc[i]; prior = plot_data.iloc[i-1]
         date_str = plot_data.index[i].strftime('%m/%d')
+        
         is_macd_buy = (curr['MACD'] > curr['Signal_Line']) and (prior['MACD'] <= prior['Signal_Line'])
         is_rsi_buy = (curr['RSI'] < 30) and (prior['RSI'] >= 30)
         is_td_buy_9 = not np.isnan(curr.get('TD_Buy_9', np.nan))
@@ -514,7 +520,7 @@ try:
         fig.add_trace(go.Scatter(x=plot_data.index, y=plot_data['DMA_DDD'], fill='tonexty', fillcolor='rgba(216, 180, 254, 0.1)', mode='none', showlegend=False), row=3, col=1)
 
     fig.update_xaxes(tickformat=xaxis_format)
-    # [V12.4] 手機優化關鍵：左右邊距 10px (滿版) + 高度 950px
+    # [V12.5 修改] 手機全開版面：左右邊距 10px + 高度 950px
     fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=30, b=10, l=10, r=10), dragmode='zoom')
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
