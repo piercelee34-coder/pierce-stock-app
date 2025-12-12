@@ -8,7 +8,7 @@ import json
 import os
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V11.9a (手機版面修正版)", layout="wide", page_icon="💎")
+st.set_page_config(page_title="AI 實戰戰情室 V12.3 (語法修正&手機全開版)", layout="wide", page_icon="💎")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -37,8 +37,9 @@ st.markdown("""
     /* 標題右側說明樣式 */
     .header-legend {
         text-align: right; 
-        font-size: 14px; 
-        padding-top: 20px;
+        font-size: 13px; 
+        padding-top: 25px;
+        color: #ccc;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -289,28 +290,9 @@ with st.sidebar:
             if current_ticker in st.session_state.watchlist:
                 st.session_state.watchlist.remove(current_ticker)
                 save_watchlist(st.session_state.watchlist); st.rerun()
-    st.markdown("---")
-    time_opt = st.radio("週期", ["當沖 (分時)", "日線 (Daily)", "週線 (Weekly)", "月線 (長線)"], index=1)
 
 # --- 4. 主程式 ---
-# [V11.9 修改] 週期選單移至主標題右側
-top_col1, top_col2 = st.columns([0.65, 0.35])
-
-with top_col1:
-    st.title(f"📈 {current_ticker} 實戰戰情室 V11.9a")
-    
-with top_col2:
-    st.write("") # Spacer
-    st.write("") 
-    # [V11.9] 週期選單
-    time_opt = st.radio("週期", ["當沖 (分時)", "日線 (Daily)", "週線 (Weekly)", "月線 (長線)"], 
-                        index=1, horizontal=True, label_visibility="collapsed")
-
-api_period = "1y"; api_interval = "1d"; xaxis_format = "%Y-%m-%d"
-if "當沖" in time_opt: api_period = "5d"; api_interval = "15m"; xaxis_format = "%H:%M" 
-elif "日線" in time_opt: api_period = "6mo"; api_interval = "1d"; xaxis_format = "%m-%d" 
-elif "週線" in time_opt: api_period = "2y"; api_interval = "1wk"; xaxis_format = "%Y-%m-%d"
-elif "月線" in time_opt: api_period = "2y"; api_interval = "1wk"; xaxis_format = "%Y-%m"
+st.title(f"📈 {current_ticker} 實戰戰情室 V12.3")
 
 @st.cache_data(ttl=300)
 def fetch_main_data(ticker, period, interval):
@@ -326,6 +308,34 @@ def fetch_fundamental_info(ticker):
         return info
     except Exception: return None
 
+# [Section 1] 預留頂部容器 (Layout Shift)
+metrics_placeholder = st.container()
+
+st.write("") # Spacer
+
+# [Section 2] 控制選單 (放在指標下方)
+t_col1, t_col2 = st.columns([0.65, 0.35])
+with t_col1:
+    st.subheader(f"📈 走勢圖")
+with t_col2:
+    # 週期選單
+    time_opt = st.radio("選擇週期", ["當沖 (分時)", "日線 (Daily)", "週線 (Weekly)", "月線 (長線)"], 
+                        index=1, horizontal=True, label_visibility="collapsed")
+    # 標題右側說明
+    st.markdown("""
+        <div class="header-legend">
+            <span style="color:#ff6b6b; font-weight:bold; margin-right:10px;">▼ 紅9: 潛在買點</span>
+            <span style="color:#4a9eff; font-weight:bold;">▲ 藍9: 潛在賣點</span>
+        </div>
+    """, unsafe_allow_html=True)
+
+# [Section 3] 邏輯計算
+api_period = "1y"; api_interval = "1d"; xaxis_format = "%Y-%m-%d"
+if "當沖" in time_opt: api_period = "5d"; api_interval = "15m"; xaxis_format = "%H:%M" 
+elif "日線" in time_opt: api_period = "6mo"; api_interval = "1d"; xaxis_format = "%m-%d" 
+elif "週線" in time_opt: api_period = "2y"; api_interval = "1wk"; xaxis_format = "%Y-%m-%d"
+elif "月線" in time_opt: api_period = "2y"; api_interval = "1wk"; xaxis_format = "%Y-%m"
+
 try:
     df = fetch_main_data(current_ticker, api_period, api_interval)
     info = fetch_fundamental_info(current_ticker)
@@ -339,160 +349,96 @@ try:
 
     latest = df.iloc[-1]
     prev = df.iloc[-2] if len(df) > 1 else latest
-
     s1, s2, s1_note, s2_note = find_support_levels(df, latest['Close'])
     buy_hint_text = generate_buy_hint(df, latest['Close'], s1, s2)
     strat_signals = analyze_strategic_signals(df)
     trend_icon, trend_desc = analyze_market_trend(df)
     target_short, target_long, ai_rating = predict_target_and_rating(df)
-    
     pct_change = ((latest['Close'] - prev['Close']) / prev['Close']) * 100
     color_price = "green" if pct_change >= 0 else "red"
-    
-    st.markdown(f"""
-    <div class="price-card">
-        <h1 style="margin:0; font-size: 50px;">${latest['Close']:.2f}</h1>
-        <h3 style="margin:0; color: {color_price};">{pct_change:+.2f}%</h3>
-        <p style="color: gray; margin-bottom: 5px;">最新成交量: {format_volume(latest['Volume'])}</p>
-        <div class="buy-hint">💡 操作提示: {buy_hint_text}</div>
-    </div>
-    """, unsafe_allow_html=True)
-    st.write("")
 
-    st.subheader("🚀 戰略雷達與 AI 預測")
-    m_col1, m_col2, m_col3 = st.columns(3)
-
-    with m_col1:
-        st.markdown(f"""
-        <div class="ai-box">
-            <h5 style="color:white; margin:0; margin-bottom:5px;">📡 綜合戰略雷達</h5>
-            <div class="signal-tag {strat_signals['Summary_Color']}" style="font-size:16px;">{strat_signals['Summary']}</div>
-            <div class="radar-grid">
-                <div class="radar-item">
-                    <span>1. MACD</span><span class="signal-tag {strat_signals['MACD_Color']}">{strat_signals['MACD_Text']}</span>
-                </div>
-                <div class="radar-item">
-                    <span>2. 成交量</span><span class="signal-tag {strat_signals['Vol_Color']}">{strat_signals['Vol_Text']}</span>
-                </div>
-                <div class="radar-item">
-                    <span>3. RSI</span><span class="signal-tag {strat_signals['RSI_Color']}">{strat_signals['RSI_Text']}</span>
-                </div>
-                <div class="radar-item">
-                    <span>4. 盤整</span><span class="signal-tag {strat_signals['Trend_Color']}">{strat_signals['Trend_Text']}</span>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with m_col2:
-        st.markdown(f"""
-        <div class="ai-box">
-            <h5 style="color:white; margin:0;">⚖️ 市場格局 & 評級</h5>
-            <div style="font-size: 30px; margin-top:5px;">{trend_icon.split(' ')[0]} <span style="font-size:20px; color:#FFD700;">{ai_rating}</span></div>
-            <p style="font-size:12px; color:#ccc;">{trend_icon.split(' ')[1]} | {trend_desc}</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with m_col3:
-        st.markdown(f"""
-        <div class="ai-box" style="border: 1px solid #00d4ff;">
-            <h5 style="color:white; margin:0;">🎯 AI 雙軌目標價</h5>
-            <div style="margin-top:10px; text-align:left;">
-                <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
-                    <span style="color:#4ade80;">🚀 短線 (布林)</span><span style="font-weight:bold; font-size:18px;">${target_short:.2f}</span>
-                </div>
-                <div style="display:flex; justify-content:space-between; border-top:1px solid #555; padding-top:5px;">
-                    <span style="color:#FFD700;">🌊 中長 (波段)</span><span style="font-weight:bold; font-size:18px;">${target_long:.2f}</span>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    st.write("")
-
-    col_header, col_btn = st.columns([0.85, 0.15])
-    with col_header: st.subheader("📊 基本面與結構防守")
-    with col_btn:
-        if st.button("🔄 重抓基本面"):
-            fetch_fundamental_info.clear()
-            st.rerun()
-
-    f_col1, f_col2, f_col3, f_col4, f_col5 = st.columns(5)
-    
-    if info is None: info = {}
-    peg = info.get('pegRatio')
-    fwd_pe = info.get('forwardPE')
-    rev_growth = info.get('revenueGrowth') or info.get('quarterlyRevenueGrowth') or info.get('earningsGrowth')
-    
-    if fwd_pe is not None:
-        p_val = f"{fwd_pe:.2f} (Fwd PE)"
-        if peg is not None:
-            if peg < 1.0: peg_html = f'<div class="val-good">✨ 成長動能強 (PEG < 1)</div>'
-            elif peg > 1.5: peg_html = f'<div class="val-bad">⚠️ 溢價偏高 (PEG > 1.5)</div>'
-            else: peg_html = f'<div class="val-fair">⚖️ 估值合理 (PEG 1~1.5)</div>'
-        else:
-            if fwd_pe < 15: peg_html = '<div class="val-good">💰 價格相對便宜</div>'
-            elif fwd_pe > 30: peg_html = '<div class="val-bad">🔥 市場預期極高</div>'
-            else: peg_html = '<div class="val-fair">⚖️ 估值合理區間</div>'
-    elif peg is not None:
-        p_val = f"{peg} (PEG)"
-        peg_html = '<div class="val-fair">暫無 PE，僅參考 PEG</div>'
-    else:
-        p_val = "N/A"
-        peg_html = '<div class="val-bad">資料不足</div>'
-    
-    with f_col1: st.metric("預估本益比 (Fwd PE)", p_val); st.markdown(peg_html, unsafe_allow_html=True)
-
-    with f_col2:
-        if rev_growth is not None:
-            st.metric("成長率", f"{rev_growth*100:.2f}%")
-            if rev_growth > 0.2: st.markdown('<div class="val-good">🔥 高成長</div>', unsafe_allow_html=True)
-            else: st.markdown('<div class="val-fair">📈 正成長</div>', unsafe_allow_html=True)
-        else: st.metric("成長率", "N/A"); st.caption("無資料")
-    
-    try:
-        t_obj = yf.Ticker(current_ticker)
-        cf = t_obj.cash_flow
-        if not cf.empty and cf.shape[1] > 1:
-            fcf_cur = cf.iloc[0, 0] if 'Free' in str(cf.index) else (cf.loc['Operating Cash Flow'].iloc[0] + cf.loc['Capital Expenditure'].iloc[0])
-            fcf_prev = cf.iloc[0, 1] if 'Free' in str(cf.index) else (cf.loc['Operating Cash Flow'].iloc[1] + cf.loc['Capital Expenditure'].iloc[1])
-            
-            if fcf_prev != 0:
-                fcf_change = ((fcf_cur - fcf_prev) / abs(fcf_prev)) * 100
-                fcf_delta = f"{fcf_change:+.1f}% vs 去年"
+    # [Section 4] 回填頂部容器數據 (修復 SyntaxError: 展開 with)
+    with metrics_placeholder:
+        # 第一排：基本面
+        f_col1, f_col2, f_col3 = st.columns(3)
+        if info is None: info = {}
+        peg = info.get('pegRatio'); fwd_pe = info.get('forwardPE'); rev_growth = info.get('revenueGrowth')
+        
+        if fwd_pe is not None:
+            p_val = f"{fwd_pe:.2f} (Fwd PE)"
+            if peg is not None:
+                peg_html = f'<div class="val-good">✨ 成長動能強</div>' if peg < 1.0 else '<div class="val-fair">⚖️ 估值合理</div>'
             else:
-                fcf_delta = "N/A"
-            
-            with f_col3:
-                st.metric("自由現金流", f"${fcf_cur/1e9:.2f}B", fcf_delta)
-        elif not cf.empty:
-             fcf_cur = cf.iloc[0, 0]
-             with f_col3:
-                 st.metric("自由現金流", f"${fcf_cur/1e9:.2f}B", "無前期數據")
+                peg_html = '<div class="val-good">💰 價格相對便宜</div>' if fwd_pe < 15 else '<div class="val-fair">⚖️ 估值合理區間</div>'
         else:
+            p_val = "N/A"
+            peg_html = '<div class="val-bad">資料不足</div>'
+        
+        with f_col1: 
+            st.metric("預估本益比 (Fwd PE)", p_val)
+            st.markdown(peg_html, unsafe_allow_html=True)
+            
+        with f_col2:
+            if rev_growth is not None: 
+                st.metric("成長率", f"{rev_growth*100:.2f}%")
+                if rev_growth > 0.2:
+                    st.caption("高成長")
+                else:
+                    st.caption("正成長")
+            else: 
+                st.metric("成長率", "N/A")
+                st.caption("無資料")
+        
+        # FCF (修復語法錯誤)
+        try:
+            t_obj = yf.Ticker(current_ticker)
+            cf = t_obj.cash_flow
+            if not cf.empty and cf.shape[1] > 1:
+                fcf_cur = cf.iloc[0, 0] if 'Free' in str(cf.index) else (cf.loc['Operating Cash Flow'].iloc[0] + cf.loc['Capital Expenditure'].iloc[0])
+                fcf_prev = cf.iloc[0, 1] if 'Free' in str(cf.index) else (cf.loc['Operating Cash Flow'].iloc[1] + cf.loc['Capital Expenditure'].iloc[1])
+                
+                if fcf_prev != 0:
+                    fcf_change = ((fcf_cur - fcf_prev) / abs(fcf_prev)) * 100
+                    fcf_delta = f"{fcf_change:+.1f}% vs 去年"
+                else:
+                    fcf_delta = "N/A"
+                
+                with f_col3:
+                    st.metric("自由現金流", f"${fcf_cur/1e9:.2f}B", fcf_delta)
+            elif not cf.empty:
+                 fcf_cur = cf.iloc[0, 0]
+                 with f_col3:
+                     st.metric("自由現金流", f"${fcf_cur/1e9:.2f}B", "無前期數據")
+            else:
+                with f_col3:
+                    st.metric("自由現金流", "N/A")
+        except:
             with f_col3:
-                st.metric("自由現金流", "N/A")
-    except:
-        with f_col3:
-            st.metric("自由現金流", "資料不足")
-
-    s1_delta = "normal"
-    if latest['Close'] < s1: s1_delta = "inverse"
-    with f_col4: st.metric("🛡️ S1 趨勢 (MA20)", f"${s1:.2f}", delta_color=s1_delta); st.caption(s1_note)
-    with f_col5: st.metric("🛡️ S2 籌碼 (大量低)", f"${s2:.2f}"); st.caption(s2_note)
-
-    # [V12.0 修改] 走勢圖標題與右側說明 (因為週期選單移至頂部，這裡只留標題)
-    t_col1, t_col2 = st.columns([0.65, 0.35])
-    with t_col1:
-        st.subheader(f"📈 走勢圖 - {time_opt} (含九轉/DMA)")
-    with t_col2:
-        st.markdown("""
-            <div class="header-legend">
-                <span style="color:#ff6b6b; font-weight:bold; margin-right:15px;">▼ 紅9: 下跌力竭 (潛在買點)</span>
-                <span style="color:#4a9eff; font-weight:bold;">▲ 藍9: 上漲力竭 (潛在賣點)</span>
-            </div>
+                st.metric("自由現金流", "資料不足")
+        
+        st.markdown("---")
+        
+        # 第二排：S1/S2 與 價格卡片
+        s_col1, s_col2 = st.columns(2)
+        s1_delta = "normal" if latest['Close'] >= s1 else "inverse"
+        with s_col1: 
+            st.metric("🛡️ S1 趨勢 (MA20)", f"${s1:.2f}", delta_color=s1_delta)
+            st.caption(s1_note)
+        with s_col2: 
+            st.metric("🛡️ S2 籌碼 (大量低)", f"${s2:.2f}")
+            st.caption(s2_note)
+        
+        st.markdown(f"""
+        <div class="price-card">
+            <h1 style="margin:0; font-size: 50px;">${latest['Close']:.2f}</h1>
+            <h3 style="margin:0; color: {color_price};">{pct_change:+.2f}%</h3>
+            <p style="color: gray; margin-bottom: 5px;">最新成交量: {format_volume(latest['Volume'])}</p>
+            <div class="buy-hint">💡 操作提示: {buy_hint_text}</div>
+        </div>
         """, unsafe_allow_html=True)
+        st.write("")
 
+    # [Section 5] 繪圖 (手機版優化: Height=950, Margin左右縮小)
     plot_data = df
     if "當沖" in time_opt: plot_data = df.tail(50) 
     elif "日線" in time_opt: plot_data = df.tail(120) 
@@ -542,8 +488,8 @@ try:
         fig.add_trace(go.Scatter(x=plot_data.index, y=plot_data['DMA_DDD'], fill='tonexty', fillcolor='rgba(216, 180, 254, 0.1)', mode='none', showlegend=False), row=3, col=1)
 
     fig.update_xaxes(tickformat=xaxis_format)
-    # [V12.0 修改] 高度改為 950，適應手機版
-    fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=30, b=10, r=220), dragmode='zoom')
+    # [V12.3 修改] 手機全開版面：左右邊距 (margin l, r) 縮小到 10px
+    fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=30, b=10, l=10, r=10), dragmode='zoom')
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
     st.subheader("🐳 籌碼與主力動向分析")
@@ -582,6 +528,58 @@ try:
         fig_vp.update_layout(height=350, template="plotly_dark", margin=dict(l=10, r=10, t=30, b=10), showlegend=True, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig_vp, use_container_width=True)
         st.markdown("""<div class="guide-box"><b>🧐 說明：</b><br>🟡 黃色山峰 = 散戶套牢區<br>🔵 青色山峰 = 主力成本區<br>若現價 > 青色山峰 👉 主力獲利 (強支撐)<br>若現價 < 青色山峰 👉 主力套牢 (強壓力)</div>""", unsafe_allow_html=True)
+    
+    st.write("")
+    
+    # 底部戰略雷達與目標價
+    st.subheader("🚀 戰略雷達與 AI 預測")
+    m_col1, m_col2, m_col3 = st.columns(3)
+
+    with m_col1:
+        st.markdown(f"""
+        <div class="ai-box">
+            <h5 style="color:white; margin:0; margin-bottom:5px;">📡 綜合戰略雷達</h5>
+            <div class="signal-tag {strat_signals['Summary_Color']}" style="font-size:16px;">{strat_signals['Summary']}</div>
+            <div class="radar-grid">
+                <div class="radar-item">
+                    <span>1. MACD</span><span class="signal-tag {strat_signals['MACD_Color']}">{strat_signals['MACD_Text']}</span>
+                </div>
+                <div class="radar-item">
+                    <span>2. 成交量</span><span class="signal-tag {strat_signals['Vol_Color']}">{strat_signals['Vol_Text']}</span>
+                </div>
+                <div class="radar-item">
+                    <span>3. RSI</span><span class="signal-tag {strat_signals['RSI_Color']}">{strat_signals['RSI_Text']}</span>
+                </div>
+                <div class="radar-item">
+                    <span>4. 盤整</span><span class="signal-tag {strat_signals['Trend_Color']}">{strat_signals['Trend_Text']}</span>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with m_col2:
+        st.markdown(f"""
+        <div class="ai-box">
+            <h5 style="color:white; margin:0;">⚖️ 市場格局 & 評級</h5>
+            <div style="font-size: 30px; margin-top:5px;">{trend_icon.split(' ')[0]} <span style="font-size:20px; color:#FFD700;">{ai_rating}</span></div>
+            <p style="font-size:12px; color:#ccc;">{trend_icon.split(' ')[1]} | {trend_desc}</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with m_col3:
+        st.markdown(f"""
+        <div class="ai-box" style="border: 1px solid #00d4ff;">
+            <h5 style="color:white; margin:0;">🎯 AI 雙軌目標價</h5>
+            <div style="margin-top:10px; text-align:left;">
+                <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                    <span style="color:#4ade80;">🚀 短線 (布林)</span><span style="font-weight:bold; font-size:18px;">${target_short:.2f}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; border-top:1px solid #555; padding-top:5px;">
+                    <span style="color:#FFD700;">🌊 中長 (波段)</span><span style="font-weight:bold; font-size:18px;">${target_long:.2f}</span>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
 except Exception as e:
     st.error(f"系統錯誤 (請稍後再試或檢查網路): {e}")
