@@ -8,7 +8,7 @@ import json
 import os
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V11.8 (操控體驗升級版)", layout="wide", page_icon="💎")
+st.set_page_config(page_title="AI 實戰戰情室 V11.9 (操控與視覺整合版)", layout="wide", page_icon="💎")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -269,7 +269,7 @@ with st.sidebar:
             st.session_state.watchlist[idx], st.session_state.watchlist[idx+1] = st.session_state.watchlist[idx+1], st.session_state.watchlist[idx]
             save_watchlist(st.session_state.watchlist); st.rerun()
             
-    # [V11.8 新增] 置頂/置底
+    # [V11.9 新增] 置頂/置底
     c_top, c_bottom = st.columns(2)
     if c_top.button("⏫ 置頂") and current_ticker in st.session_state.watchlist:
         st.session_state.watchlist.remove(current_ticker)
@@ -291,11 +291,20 @@ with st.sidebar:
             if current_ticker in st.session_state.watchlist:
                 st.session_state.watchlist.remove(current_ticker)
                 save_watchlist(st.session_state.watchlist); st.rerun()
-    st.markdown("---")
-    time_opt = st.radio("週期", ["當沖 (分時)", "日線 (Daily)", "週線 (Weekly)", "月線 (長線)"], index=1)
 
 # --- 4. 主程式 ---
-st.title(f"📈 {current_ticker} 實戰戰情室 V11.8")
+# [V11.9 修改] 週期選單移至主標題右側
+top_col1, top_col2 = st.columns([0.65, 0.35])
+
+with top_col1:
+    st.title(f"📈 {current_ticker} 實戰戰情室 V11.9")
+    
+with top_col2:
+    st.write("") # Spacer
+    st.write("") 
+    # [V11.9] 週期選單
+    time_opt = st.radio("週期", ["當沖 (分時)", "日線 (Daily)", "週線 (Weekly)", "月線 (長線)"], 
+                        index=1, horizontal=True, label_visibility="collapsed")
 
 api_period = "1y"; api_interval = "1d"; xaxis_format = "%Y-%m-%d"
 if "當沖" in time_opt: api_period = "5d"; api_interval = "15m"; xaxis_format = "%H:%M" 
@@ -472,6 +481,7 @@ try:
     with f_col4: st.metric("🛡️ S1 趨勢 (MA20)", f"${s1:.2f}", delta_color=s1_delta); st.caption(s1_note)
     with f_col5: st.metric("🛡️ S2 籌碼 (大量低)", f"${s2:.2f}"); st.caption(s2_note)
 
+    # [V11.9 修改] 走勢圖標題與右側說明 (因為週期選單移至頂部，這裡只留標題)
     t_col1, t_col2 = st.columns([0.65, 0.35])
     with t_col1:
         st.subheader(f"📈 走勢圖 - {time_opt} (含九轉/DMA)")
@@ -532,9 +542,7 @@ try:
         fig.add_trace(go.Scatter(x=plot_data.index, y=plot_data['DMA_DDD'], fill='tonexty', fillcolor='rgba(216, 180, 254, 0.1)', mode='none', showlegend=False), row=3, col=1)
 
     fig.update_xaxes(tickformat=xaxis_format)
-    
-    # [V11.8] 啟用滾輪縮放 (scrollZoom: True)
-    fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=30, b=10, r=50))
+    fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=30, b=10, r=220), dragmode='zoom')
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
     st.subheader("🐳 籌碼與主力動向分析")
