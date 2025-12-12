@@ -8,7 +8,7 @@ import json
 import os
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V11.0 (多空全攻略版)", layout="wide", page_icon="💎")
+st.set_page_config(page_title="AI 實戰戰情室 V11.8 (操控體驗升級版)", layout="wide", page_icon="💎")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -33,6 +33,13 @@ st.markdown("""
 
     .stButton>button {width: 100%; border-radius: 5px;}
     .guide-box {background-color: #262730; padding: 15px; border-radius: 5px; border-left: 4px solid #00d4ff; font-size: 14px; line-height: 1.6;}
+    
+    /* 標題右側說明樣式 */
+    .header-legend {
+        text-align: right; 
+        font-size: 14px; 
+        padding-top: 20px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -248,6 +255,8 @@ with st.sidebar:
     selection = st.radio("選擇股票", st.session_state.watchlist)
     current_ticker = selection
     st.markdown("---")
+    
+    # 上移/下移
     c_up, c_down = st.columns(2)
     if c_up.button("⬆️ 上移") and current_ticker in st.session_state.watchlist:
         idx = st.session_state.watchlist.index(current_ticker)
@@ -259,6 +268,18 @@ with st.sidebar:
         if idx < len(st.session_state.watchlist) - 1:
             st.session_state.watchlist[idx], st.session_state.watchlist[idx+1] = st.session_state.watchlist[idx+1], st.session_state.watchlist[idx]
             save_watchlist(st.session_state.watchlist); st.rerun()
+            
+    # [V11.8 新增] 置頂/置底
+    c_top, c_bottom = st.columns(2)
+    if c_top.button("⏫ 置頂") and current_ticker in st.session_state.watchlist:
+        st.session_state.watchlist.remove(current_ticker)
+        st.session_state.watchlist.insert(0, current_ticker)
+        save_watchlist(st.session_state.watchlist); st.rerun()
+    if c_bottom.button("⏬ 置底") and current_ticker in st.session_state.watchlist:
+        st.session_state.watchlist.remove(current_ticker)
+        st.session_state.watchlist.append(current_ticker)
+        save_watchlist(st.session_state.watchlist); st.rerun()
+
     with st.expander("編輯清單"):
         new_t = st.text_input("輸入代號", placeholder="MSTR").upper()
         c1, c2 = st.columns(2)
@@ -271,16 +292,15 @@ with st.sidebar:
                 st.session_state.watchlist.remove(current_ticker)
                 save_watchlist(st.session_state.watchlist); st.rerun()
     st.markdown("---")
-    time_opt = st.radio("週期", ["當沖 (分時)", "日線 (Daily)", "3日 (短線)", "10日 (波段)", "月線 (長線)"], index=1)
+    time_opt = st.radio("週期", ["當沖 (分時)", "日線 (Daily)", "週線 (Weekly)", "月線 (長線)"], index=1)
 
 # --- 4. 主程式 ---
-st.title(f"📈 {current_ticker} 實戰戰情室 V11.0")
+st.title(f"📈 {current_ticker} 實戰戰情室 V11.8")
 
 api_period = "1y"; api_interval = "1d"; xaxis_format = "%Y-%m-%d"
 if "當沖" in time_opt: api_period = "5d"; api_interval = "15m"; xaxis_format = "%H:%M" 
 elif "日線" in time_opt: api_period = "6mo"; api_interval = "1d"; xaxis_format = "%m-%d" 
-elif "3日" in time_opt: api_period = "5d"; api_interval = "30m"; xaxis_format = "%m-%d %H:%M" 
-elif "10日" in time_opt: api_period = "1mo"; api_interval = "60m"; xaxis_format = "%m-%d %H:%M"
+elif "週線" in time_opt: api_period = "2y"; api_interval = "1wk"; xaxis_format = "%Y-%m-%d"
 elif "月線" in time_opt: api_period = "2y"; api_interval = "1wk"; xaxis_format = "%Y-%m"
 
 @st.cache_data(ttl=300)
@@ -452,54 +472,53 @@ try:
     with f_col4: st.metric("🛡️ S1 趨勢 (MA20)", f"${s1:.2f}", delta_color=s1_delta); st.caption(s1_note)
     with f_col5: st.metric("🛡️ S2 籌碼 (大量低)", f"${s2:.2f}"); st.caption(s2_note)
 
-    st.subheader(f"📈 走勢圖 - {time_opt} (含九轉/DMA)")
+    t_col1, t_col2 = st.columns([0.65, 0.35])
+    with t_col1:
+        st.subheader(f"📈 走勢圖 - {time_opt} (含九轉/DMA)")
+    with t_col2:
+        st.markdown("""
+            <div class="header-legend">
+                <span style="color:#ff6b6b; font-weight:bold; margin-right:15px;">▼ 紅9: 下跌力竭 (潛在買點)</span>
+                <span style="color:#4a9eff; font-weight:bold;">▲ 藍9: 上漲力竭 (潛在賣點)</span>
+            </div>
+        """, unsafe_allow_html=True)
+
     plot_data = df
     if "當沖" in time_opt: plot_data = df.tail(50) 
     elif "日線" in time_opt: plot_data = df.tail(120) 
-    elif "3日" in time_opt: plot_data = df.tail(150)
+    elif "週線" in time_opt: plot_data = df.tail(150)
 
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_width=[0.2, 0.2, 0.6])
     fig.add_trace(go.Candlestick(x=plot_data.index, open=plot_data['Open'], high=plot_data['High'], low=plot_data['Low'], close=plot_data['Close'], name='Price'), row=1, col=1)
     
-    # [V11.0] 新增賣點條件：TD藍9 或 MACD死叉 或 RSI過熱
     for i in range(1, len(plot_data)):
         curr = plot_data.iloc[i]; prior = plot_data.iloc[i-1]
-        
-        # 買點條件
+        date_str = plot_data.index[i].strftime('%m/%d')
         is_macd_buy = (curr['MACD'] > curr['Signal_Line']) and (prior['MACD'] <= prior['Signal_Line'])
         is_rsi_buy = (curr['RSI'] < 30) and (prior['RSI'] >= 30)
         is_td_buy_9 = not np.isnan(curr.get('TD_Buy_9', np.nan))
         
-        # 賣點條件
-        is_macd_sell = (curr['MACD'] < curr['Signal_Line']) and (prior['MACD'] >= prior['Signal_Line']) and curr['MACD'] > 0 # 零軸上死叉才算強烈賣點
-        is_rsi_sell = (curr['RSI'] > 75) and (prior['RSI'] <= 75) # RSI過熱反轉
-        is_td_sell_9 = not np.isnan(curr.get('TD_Sell_9', np.nan))
-
         if is_macd_buy or is_rsi_buy or is_td_buy_9:
-            fig.add_annotation(x=plot_data.index[i], y=curr['Low']*0.98, text=f"BUY<br>${curr['Close']:.2f}", showarrow=True, arrowhead=1, row=1, col=1, bgcolor="#28a745", font=dict(color="white", size=10))
+            fig.add_annotation(x=plot_data.index[i], y=curr['Low']*0.98, text=f"BUY<br>{date_str}<br>${curr['Close']:.2f}", showarrow=True, arrowhead=1, ay=50, row=1, col=1, bgcolor="#28a745", font=dict(color="white", size=10))
+        
+        is_macd_sell = (curr['MACD'] < curr['Signal_Line']) and (prior['MACD'] >= prior['Signal_Line']) and curr['MACD'] > 0
+        is_rsi_sell = (curr['RSI'] > 75) and (prior['RSI'] <= 75)
+        is_td_sell_9 = not np.isnan(curr.get('TD_Sell_9', np.nan))
         
         if is_macd_sell or is_rsi_sell or is_td_sell_9:
-            fig.add_annotation(x=plot_data.index[i], y=curr['High']*1.02, text=f"SELL<br>${curr['Close']:.2f}", showarrow=True, arrowhead=1, row=1, col=1, bgcolor="#dc3545", font=dict(color="white", size=10))
+            fig.add_annotation(x=plot_data.index[i], y=curr['High']*1.02, text=f"SELL<br>{date_str}<br>${curr['Close']:.2f}", showarrow=True, arrowhead=1, ay=-50, row=1, col=1, bgcolor="#dc3545", font=dict(color="white", size=10))
 
     fig.add_hline(y=s1, line_dash="dash", line_color="#00d4ff", annotation_text=f"S1 (MA20)", row=1, col=1)
     fig.add_hline(y=s2, line_dash="dot", line_color="orange", annotation_text=f"S2 (Key Bar)", row=1, col=1)
     fig.add_hline(y=target_short, line_dash="dashdot", line_color="#4ade80", annotation_text=f"Target 1", row=1, col=1)
     
-    # TD 9轉
-    buy_9_data = plot_data[~np.isnan(plot_data['TD_Buy_9'])]
-    for idx, row in buy_9_data.iterrows():
-        fig.add_annotation(x=idx, y=row['Low']*0.97, text="<b>9</b>", showarrow=False, font=dict(color='#ff6b6b', size=16), row=1, col=1)
-        # 詳細資訊
-        fig.add_annotation(x=idx, y=row['Low'],ay=40, text=f"紅9買點<br>{idx.strftime('%m/%d')}<br>${row['Close']:.2f}", showarrow=True, arrowhead=1, arrowcolor='#ff6b6b', bgcolor="#3a1b1b", bordercolor="#ff6b6b", font=dict(color="#ff6b6b", size=11), row=1, col=1)
+    for idx, row in plot_data[~np.isnan(plot_data['TD_Buy_9'])].iterrows():
+        date_str = idx.strftime('%m/%d')
+        fig.add_annotation(x=idx, y=row['Low'], text=f"<b>紅9</b><br>{date_str}<br>${row['Close']:.2f}", showarrow=True, arrowhead=1, ay=70, arrowcolor='#ff6b6b', bgcolor="#3a1b1b", bordercolor="#ff6b6b", font=dict(color='#ff6b6b', size=11), row=1, col=1)
 
-    sell_9_data = plot_data[~np.isnan(plot_data['TD_Sell_9'])]
-    for idx, row in sell_9_data.iterrows():
-        fig.add_annotation(x=idx, y=row['High']*1.03, text="<b>9</b>", showarrow=False, font=dict(color='#4a9eff', size=16), row=1, col=1)
-        # 詳細資訊
-        fig.add_annotation(x=idx, y=row['High'], ay=-40, text=f"藍9賣點<br>{idx.strftime('%m/%d')}<br>${row['Close']:.2f}", showarrow=True, arrowhead=1, arrowcolor='#4a9eff', bgcolor="#1b3a4a", bordercolor="#4a9eff", font=dict(color="#4a9eff", size=11), row=1, col=1)
-
-    # [V11.0 修正] 說明位置移至紅框區域 (Paper coordinates, y=0.8 大約對齊第一張圖的右上方)
-    fig.add_annotation(xref="paper", yref="paper", x=1.12, y=0.8, text="<b>TD 九轉說明</b><br><span style='color:#ff6b6b'>紅9: 下跌力竭 (潛在買點)</span><br><span style='color:#4a9eff'>藍9: 上漲力竭 (潛在賣點)</span>", showarrow=False, align="left", bgcolor="#333", bordercolor="#555", font=dict(size=12, color="#ccc"))
+    for idx, row in plot_data[~np.isnan(plot_data['TD_Sell_9'])].iterrows():
+        date_str = idx.strftime('%m/%d')
+        fig.add_annotation(x=idx, y=row['High'], text=f"<b>藍9</b><br>{date_str}<br>${row['Close']:.2f}", showarrow=True, arrowhead=1, ay=-70, arrowcolor='#4a9eff', bgcolor="#1b3a4a", bordercolor="#4a9eff", font=dict(color='#4a9eff', size=11), row=1, col=1)
 
     if 'MACD_Hist' in plot_data.columns:
         colors = ['green' if v >= 0 else 'red' for v in plot_data['MACD_Hist']]
@@ -513,9 +532,10 @@ try:
         fig.add_trace(go.Scatter(x=plot_data.index, y=plot_data['DMA_DDD'], fill='tonexty', fillcolor='rgba(216, 180, 254, 0.1)', mode='none', showlegend=False), row=3, col=1)
 
     fig.update_xaxes(tickformat=xaxis_format)
-    # 增加右邊距 (r=180) 讓說明文字不會被切掉
-    fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=30, b=10, r=180))
-    st.plotly_chart(fig, use_container_width=True)
+    
+    # [V11.8] 啟用滾輪縮放 (scrollZoom: True)
+    fig.update_layout(height=700, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=30, b=10, r=50))
+    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
     st.subheader("🐳 籌碼與主力動向分析")
     chip_col1, chip_col2 = st.columns(2)
