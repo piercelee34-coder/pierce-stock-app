@@ -8,7 +8,7 @@ import json
 import os
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V12.9 (行動觸控切換版)", layout="wide", page_icon="💎")
+st.set_page_config(page_title="AI 實戰戰情室 V12.6 (視覺與操作終極優化版)", layout="wide", page_icon="💎")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -295,7 +295,7 @@ with st.sidebar:
                 save_watchlist(st.session_state.watchlist); st.rerun()
 
 # --- 4. 主程式 ---
-st.title(f"📈 {current_ticker} 實戰戰情室 V12.9")
+st.title(f"📈 {current_ticker} 實戰戰情室 V12.6")
 
 @st.cache_data(ttl=300)
 def fetch_main_data(ticker, period, interval):
@@ -311,7 +311,7 @@ def fetch_fundamental_info(ticker):
         return info
     except Exception: return None
 
-# [Section 1] 預留頂部容器 (Layout Shift)
+# [Section 1] 預留頂部容器
 metrics_placeholder = st.container()
 
 st.write("") 
@@ -321,7 +321,6 @@ t_col1, t_col2 = st.columns([0.65, 0.35])
 with t_col1:
     st.subheader(f"📈 走勢圖 (含九轉/DMA)")
 with t_col2:
-    # 標題右側說明
     st.markdown("""
         <div class="header-legend">
             <span style="color:#ff6b6b; font-weight:bold; margin-right:10px;">▼ 紅9: 潛在買點</span>
@@ -329,8 +328,7 @@ with t_col2:
         </div>
     """, unsafe_allow_html=True)
 
-# [V12.9] 新增：圖表操作切換開關 (解決手機誤觸)
-# 放在選單上方或旁邊，這裡放在選單上方
+# 手機圖表觸控開關
 enable_touch = st.toggle("🖐️ 啟用圖表操作 (開啟後可縮放/平移，關閉後可滑動網頁)", value=False)
 
 # 週期選單
@@ -392,7 +390,13 @@ try:
             </div>
             """, unsafe_allow_html=True)
         with r_col2:
-            st.markdown(f"""<div class="ai-box"><h5 style="color:white; margin:0;">⚖️ 格局&評級</h5><div style="font-size: 30px; margin-top:5px;">{trend_icon.split(' ')[0]} <span style="font-size:20px; color:#FFD700;">{ai_rating}</span></div><p style="font-size:12px; color:#ccc;">{trend_icon.split(' ')[1]} | {trend_desc}</p></div>""", unsafe_allow_html=True)
+            # [V12.6] 彩色化 格局&評級 提示
+            trend_color = "#ccc"
+            if "牛市" in trend_icon: trend_color = "#4ade80" # Green
+            elif "熊市" in trend_icon: trend_color = "#ff6b6b" # Red
+            elif "震盪" in trend_icon: trend_color = "#ffc107" # Yellow
+            
+            st.markdown(f"""<div class="ai-box"><h5 style="color:white; margin:0;">⚖️ 格局&評級</h5><div style="font-size: 30px; margin-top:5px;">{trend_icon.split(' ')[0]} <span style="font-size:20px; color:#FFD700;">{ai_rating}</span></div><p style="font-size:12px; color:{trend_color}; font-weight:bold;">{trend_icon.split(' ')[1]} | {trend_desc}</p></div>""", unsafe_allow_html=True)
         with r_col3:
             st.markdown(f"""<div class="ai-box" style="border: 1px solid #00d4ff;"><h5 style="color:white; margin:0;">🎯 AI 目標價</h5><div style="margin-top:10px; text-align:left;"><div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span style="color:#4ade80;">🚀 短線</span><span style="font-weight:bold; font-size:18px;">${target_short:.2f}</span></div><div style="display:flex; justify-content:space-between; border-top:1px solid #555; padding-top:5px;"><span style="color:#FFD700;">🌊 波段</span><span style="font-weight:bold; font-size:18px;">${target_long:.2f}</span></div></div></div>""", unsafe_allow_html=True)
         
@@ -426,9 +430,11 @@ try:
             if rev_growth is not None: 
                 st.metric("成長率", f"{rev_growth*100:.2f}%")
                 if rev_growth > 0.2:
-                    st.caption("高成長")
+                    st.markdown('<div class="val-good">🔥 高成長</div>', unsafe_allow_html=True)
+                elif rev_growth > 0:
+                    st.markdown('<div class="val-fair">📈 正成長</div>', unsafe_allow_html=True)
                 else:
-                    st.caption("正成長")
+                    st.markdown('<div class="val-bad">📉 衰退中</div>', unsafe_allow_html=True)
             else: 
                 st.metric("成長率", "N/A")
                 st.caption("無資料")
@@ -462,17 +468,21 @@ try:
         
         st.markdown("---")
         
-        # S1/S2
+        # S1/S2 (V13.1 彩色化)
         s_col1, s_col2 = st.columns(2)
         s1_delta = "normal" if latest['Close'] >= s1 else "inverse"
+        
         with s_col1: 
             st.metric("🛡️ S1 趨勢 (MA20)", f"${s1:.2f}", delta_color=s1_delta)
-            st.caption(s1_note)
+            s1_class = "val-good" if latest['Close'] >= s1 else "val-bad"
+            st.markdown(f'<div class="{s1_class}">{s1_note}</div>', unsafe_allow_html=True)
+
         with s_col2: 
             st.metric("🛡️ S2 籌碼 (大量低)", f"${s2:.2f}")
-            st.caption(s2_note)
+            s2_class = "val-good" if latest['Close'] >= s2 else "val-bad"
+            st.markdown(f'<div class="{s2_class}">{s2_note}</div>', unsafe_allow_html=True)
 
-    # [Section 5] 繪圖 (V12.9 修改: 根據 enable_touch 設定 dragmode)
+    # [Section 5] 繪圖
     plot_data = df
     if "當沖" in time_opt: plot_data = df.tail(50) 
     elif "日線" in time_opt: plot_data = df.tail(120) 
@@ -535,12 +545,11 @@ try:
         fig.add_trace(go.Scatter(x=plot_data[dma_dead].index, y=plot_data[dma_dead]['DMA_DDD'], mode='markers', marker=dict(symbol='triangle-down', size=8, color='#facc15'), name='DMA死叉', showlegend=False), row=3, col=1)
 
     fig.update_xaxes(tickformat=xaxis_format)
+    
     # [V12.9 修改] dragmode 設定：如果開啟觸控操作則 'pan'，否則 False (鎖定，允許網頁捲動)
     chart_dragmode = 'pan' if enable_touch else False
     
-    fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=30, b=10, l=10, r=10), 
-                      dragmode=chart_dragmode, showlegend=False)
-                      
+    fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=30, b=10, l=10, r=10), dragmode=chart_dragmode, showlegend=False)
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': enable_touch, 'displayModeBar': enable_touch})
 
     st.subheader("🐳 籌碼與主力動向分析")
@@ -560,8 +569,9 @@ try:
             else:
                 fig_mf.add_annotation(x=plot_data.index[-1], y=mf_cum.iloc[-1], text="🔴 主力出貨", showarrow=True, arrowhead=1, bgcolor="#3a1b1b", font=dict(color="#ff6b6b"))
 
+        # [V12.6] 下方圖表鎖定 (staticPlot)
         fig_mf.update_layout(height=350, template="plotly_dark", margin=dict(l=10, r=10, t=30, b=10), showlegend=False)
-        st.plotly_chart(fig_mf, use_container_width=True)
+        st.plotly_chart(fig_mf, use_container_width=True, config={'staticPlot': True})
 
     with chip_col2:
         st.markdown("##### 👥 主力 vs 散戶 持股成本")
@@ -576,8 +586,9 @@ try:
             fig_vp.add_trace(go.Scatter(x=inst_profile['Price'], y=inst_profile['Volume'], fill='tozeroy', mode='lines', line=dict(color='#00d4ff', width=2), name='主力'))
             
         fig_vp.add_vline(x=latest['Close'], line_dash="dash", line_color="white", annotation_text="現價")
+        # [V12.6] 下方圖表鎖定 (staticPlot)
         fig_vp.update_layout(height=350, template="plotly_dark", margin=dict(l=10, r=10, t=30, b=10), showlegend=True, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-        st.plotly_chart(fig_vp, use_container_width=True)
+        st.plotly_chart(fig_vp, use_container_width=True, config={'staticPlot': True})
         st.markdown("""<div class="guide-box"><b>🧐 說明：</b><br>🟡 黃色山峰 = 散戶套牢區<br>🔵 青色山峰 = 主力成本區<br>若現價 > 青色山峰 👉 主力獲利 (強支撐)<br>若現價 < 青色山峰 👉 主力套牢 (強壓力)</div>""", unsafe_allow_html=True)
 
 except Exception as e:
