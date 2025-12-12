@@ -8,7 +8,7 @@ import json
 import os
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V12.6 (極致全螢幕圖表版)", layout="wide", page_icon="💎")
+st.set_page_config(page_title="AI 實戰戰情室 V12.7 (行動防誤觸 & 指標訊號版)", layout="wide", page_icon="💎")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -34,7 +34,7 @@ st.markdown("""
     .stButton>button {width: 100%; border-radius: 5px;}
     .guide-box {background-color: #262730; padding: 15px; border-radius: 5px; border-left: 4px solid #00d4ff; font-size: 14px; line-height: 1.6;}
     
-    /* [V12.6] 全新圖例樣式 (緊湊排列) */
+    /* 標題右側說明樣式 (精簡圖例) */
     .custom-legend {
         text-align: right; 
         font-size: 12px; 
@@ -70,19 +70,15 @@ if 'watchlist' not in st.session_state:
 
 def calculate_volume_profile(df, bins=40, filter_mask=None):
     if df.empty: return pd.DataFrame({'Price': [], 'Volume': []})
-    
     price_min = df['Low'].min()
     price_max = df['High'].max()
-    
     if price_min == price_max: return pd.DataFrame({'Price': [], 'Volume': []})
     
     bin_edges = np.linspace(price_min, price_max, bins + 1)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
     
     target_df = df if filter_mask is None else df[filter_mask]
-    
-    if target_df.empty: 
-        return pd.DataFrame({'Price': bin_centers, 'Volume': np.zeros(bins)})
+    if target_df.empty: return pd.DataFrame({'Price': bin_centers, 'Volume': np.zeros(bins)})
     
     bin_indices = pd.cut(target_df['Close'], bins=bin_edges, labels=False, include_lowest=True)
     profile_series = target_df.groupby(bin_indices)['Volume'].sum()
@@ -297,7 +293,7 @@ with st.sidebar:
                 save_watchlist(st.session_state.watchlist); st.rerun()
 
 # --- 4. 主程式 ---
-st.title(f"📈 {current_ticker} 實戰戰情室 V12.6")
+st.title(f"📈 {current_ticker} 實戰戰情室 V12.7")
 
 @st.cache_data(ttl=300)
 def fetch_main_data(ticker, period, interval):
@@ -313,17 +309,16 @@ def fetch_fundamental_info(ticker):
         return info
     except Exception: return None
 
-# [Section 1] 預留頂部容器 (Layout Shift)
+# [Section 1] 預留頂部容器
 metrics_placeholder = st.container()
 
 st.write("") 
 
-# [Section 2] 控制選單 & 標題 (配置於中間)
+# [Section 2] 控制選單
 t_col1, t_col2 = st.columns([0.65, 0.35])
 with t_col1:
     st.subheader(f"📈 走勢圖 (含九轉/DMA)")
 with t_col2:
-    # [V12.6] 使用自定義 HTML 圖例 (包含紅9藍9與所有線型)
     st.markdown("""
         <div class="custom-legend">
             <span style="color:#ff6b6b">▼紅9買</span> <span style="color:#4a9eff; margin-right:10px;">▲藍9賣</span>
@@ -336,11 +331,10 @@ with t_col2:
         </div>
     """, unsafe_allow_html=True)
 
-# 週期選單
 time_opt = st.radio("選擇週期", ["當沖 (分時)", "日線 (Daily)", "週線 (Weekly)", "月線 (長線)"], 
                     index=1, horizontal=True, label_visibility="collapsed")
 
-# [Section 3] 資料邏輯
+# [Section 3] 邏輯計算
 api_period = "1y"; api_interval = "1d"; xaxis_format = "%Y-%m-%d"
 if "當沖" in time_opt: api_period = "5d"; api_interval = "15m"; xaxis_format = "%H:%M" 
 elif "日線" in time_opt: api_period = "6mo"; api_interval = "1d"; xaxis_format = "%m-%d" 
@@ -368,9 +362,8 @@ try:
     pct_change = ((latest['Close'] - prev['Close']) / prev['Close']) * 100
     color_price = "green" if pct_change >= 0 else "red"
 
-    # [Section 4] 回填頂部容器 (Layout Shift)
+    # [Section 4] 回填頂部容器
     with metrics_placeholder:
-        # 1. 現價卡片
         st.markdown(f"""
         <div class="price-card">
             <h1 style="margin:0; font-size: 50px;">${latest['Close']:.2f}</h1>
@@ -380,7 +373,6 @@ try:
         </div>
         """, unsafe_allow_html=True)
         
-        # 2. 戰略雷達
         r_col1, r_col2, r_col3 = st.columns(3)
         with r_col1:
             st.markdown(f"""
@@ -401,7 +393,6 @@ try:
         
         st.write("")
         
-        # 3. 基本面與防守 (含重抓按鈕)
         f_header, f_btn = st.columns([0.8, 0.2])
         with f_header: st.caption("📊 基本面與結構防守")
         with f_btn: 
@@ -436,7 +427,6 @@ try:
                 st.metric("成長率", "N/A")
                 st.caption("無資料")
         
-        # FCF
         try:
             t_obj = yf.Ticker(current_ticker)
             cf = t_obj.cash_flow
@@ -465,7 +455,6 @@ try:
         
         st.markdown("---")
         
-        # S1/S2
         s_col1, s_col2 = st.columns(2)
         s1_delta = "normal" if latest['Close'] >= s1 else "inverse"
         with s_col1: 
@@ -475,7 +464,7 @@ try:
             st.metric("🛡️ S2 籌碼 (大量低)", f"${s2:.2f}")
             st.caption(s2_note)
 
-    # [Section 5] 繪圖 (V12.6: showlegend=False, custom legend)
+    # [Section 5] 繪圖 (V12.7 修改：dragmode=False, 增加指標訊號)
     plot_data = df
     if "當沖" in time_opt: plot_data = df.tail(50) 
     elif "日線" in time_opt: plot_data = df.tail(120) 
@@ -487,7 +476,6 @@ try:
     for i in range(1, len(plot_data)):
         curr = plot_data.iloc[i]; prior = plot_data.iloc[i-1]
         date_str = plot_data.index[i].strftime('%m/%d')
-        
         is_macd_buy = (curr['MACD'] > curr['Signal_Line']) and (prior['MACD'] <= prior['Signal_Line'])
         is_rsi_buy = (curr['RSI'] < 30) and (prior['RSI'] >= 30)
         is_td_buy_9 = not np.isnan(curr.get('TD_Buy_9', np.nan))
@@ -502,8 +490,8 @@ try:
         if is_macd_sell or is_rsi_sell or is_td_sell_9:
             fig.add_annotation(x=plot_data.index[i], y=curr['High']*1.02, text=f"SELL<br>{date_str}<br>${curr['Close']:.2f}", showarrow=True, arrowhead=1, ay=-50, row=1, col=1, bgcolor="#dc3545", font=dict(color="white", size=10))
 
-    fig.add_hline(y=s1, line_dash="dash", line_color="#00d4ff", annotation_text=f"S1", row=1, col=1)
-    fig.add_hline(y=s2, line_dash="dot", line_color="orange", annotation_text=f"S2", row=1, col=1)
+    fig.add_hline(y=s1, line_dash="dash", line_color="#00d4ff", annotation_text=f"S1 (MA20)", row=1, col=1)
+    fig.add_hline(y=s2, line_dash="dot", line_color="orange", annotation_text=f"S2 (Key Bar)", row=1, col=1)
     fig.add_hline(y=target_short, line_dash="dashdot", line_color="#4ade80", annotation_text=f"Target 1", row=1, col=1)
     
     for idx, row in plot_data[~np.isnan(plot_data['TD_Buy_9'])].iterrows():
@@ -514,21 +502,34 @@ try:
         date_str = idx.strftime('%m/%d')
         fig.add_annotation(x=idx, y=row['High'], text=f"<b>藍9</b><br>{date_str}<br>${row['Close']:.2f}", showarrow=True, arrowhead=1, ay=-70, arrowcolor='#4a9eff', bgcolor="#1b3a4a", bordercolor="#4a9eff", font=dict(color='#4a9eff', size=11), row=1, col=1)
 
+    # [V12.7 新增] 繪製 MACD/DMA 交叉訊號
     if 'MACD_Hist' in plot_data.columns:
         colors = ['green' if v >= 0 else 'red' for v in plot_data['MACD_Hist']]
         fig.add_trace(go.Bar(x=plot_data.index, y=plot_data['MACD_Hist'], marker_color=colors, name='MACD Hist'), row=2, col=1)
         fig.add_trace(go.Scatter(x=plot_data.index, y=plot_data['MACD'], line=dict(color='white', width=1), name='DIF'), row=2, col=1)
         fig.add_trace(go.Scatter(x=plot_data.index, y=plot_data['Signal_Line'], line=dict(color='yellow', width=1), name='DEM'), row=2, col=1)
         
+        # MACD Cross Markers
+        macd_gold = (plot_data['MACD'] > plot_data['Signal_Line']) & (plot_data['MACD'].shift(1) <= plot_data['Signal_Line'].shift(1))
+        macd_dead = (plot_data['MACD'] < plot_data['Signal_Line']) & (plot_data['MACD'].shift(1) >= plot_data['Signal_Line'].shift(1))
+        fig.add_trace(go.Scatter(x=plot_data[macd_gold].index, y=plot_data[macd_gold]['MACD'], mode='markers', marker=dict(symbol='triangle-up', size=8, color='#d8b4fe'), name='MACD金叉', showlegend=False), row=2, col=1)
+        fig.add_trace(go.Scatter(x=plot_data[macd_dead].index, y=plot_data[macd_dead]['MACD'], mode='markers', marker=dict(symbol='triangle-down', size=8, color='#facc15'), name='MACD死叉', showlegend=False), row=2, col=1)
+
     if 'DMA_DDD' in plot_data.columns:
         fig.add_trace(go.Scatter(x=plot_data.index, y=plot_data['DMA_DDD'], line=dict(color='#d8b4fe', width=1.5), name='DMA (DDD)'), row=3, col=1)
         fig.add_trace(go.Scatter(x=plot_data.index, y=plot_data['DMA_AMA'], line=dict(color='#facc15', width=1.5), name='AMA (Avg)'), row=3, col=1)
         fig.add_trace(go.Scatter(x=plot_data.index, y=plot_data['DMA_DDD'], fill='tonexty', fillcolor='rgba(216, 180, 254, 0.1)', mode='none', showlegend=False), row=3, col=1)
+        
+        # DMA Cross Markers
+        dma_gold = (plot_data['DMA_DDD'] > plot_data['DMA_AMA']) & (plot_data['DMA_DDD'].shift(1) <= plot_data['DMA_AMA'].shift(1))
+        dma_dead = (plot_data['DMA_DDD'] < plot_data['DMA_AMA']) & (plot_data['DMA_DDD'].shift(1) >= plot_data['DMA_AMA'].shift(1))
+        fig.add_trace(go.Scatter(x=plot_data[dma_gold].index, y=plot_data[dma_gold]['DMA_DDD'], mode='markers', marker=dict(symbol='triangle-up', size=8, color='#d8b4fe'), name='DMA金叉', showlegend=False), row=3, col=1)
+        fig.add_trace(go.Scatter(x=plot_data[dma_dead].index, y=plot_data[dma_dead]['DMA_DDD'], mode='markers', marker=dict(symbol='triangle-down', size=8, color='#facc15'), name='DMA死叉', showlegend=False), row=3, col=1)
 
     fig.update_xaxes(tickformat=xaxis_format)
-    # [V12.6] 隱藏原生圖例 (showlegend=False)，並將邊距縮到最小
-    fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=30, b=10, l=10, r=10), dragmode='zoom', showlegend=False)
-    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
+    # [V12.7] 設定 dragmode=False 防止手機誤觸
+    fig.update_layout(height=950, template="plotly_dark", xaxis_rangeslider_visible=False, margin=dict(t=30, b=10, l=10, r=10), dragmode=False, showlegend=False)
+    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True})
 
     st.subheader("🐳 籌碼與主力動向分析")
     chip_col1, chip_col2 = st.columns(2)
