@@ -14,7 +14,7 @@ import json
 from streamlit_local_storage import LocalStorage
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V13.21 (內部人熔斷版)", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="AI 實戰戰情室 V13.22 (操作優化版)", layout="wide", page_icon="🦅")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -92,15 +92,11 @@ def get_chinese_ticker_name(ticker):
     return mapping.get(base, '')
 
 def fetch_strict_news(ticker, is_macro=False):
-    """
-    [V13.15] 嚴格雙境搜尋：台股搜重訊，美股搜SEC+財聯社
-    """
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         is_tw_stock = ".TW" in ticker or ".TWO" in ticker
         items = []
         
-        # 1. 宏觀模式
         if is_macro:
             url = f"https://news.google.com/rss/search?q=聯準會+升息+通膨+鮑爾&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
             resp = requests.get(url, headers=headers, timeout=4)
@@ -113,7 +109,6 @@ def fetch_strict_news(ticker, is_macro=False):
         cn_name = get_chinese_ticker_name(ticker)
         search_target = f"{ticker} OR {cn_name}" if cn_name else ticker
         
-        # 通道 A: 台股
         if is_tw_stock:
             clean_ticker = ticker.replace('.TW', '').replace('.TWO', '')
             q_tw = f"{clean_ticker}+(重訊+OR+重大訊息+OR+營收+OR+公告+OR+自結+OR+EPS+OR+配息+OR+法說)"
@@ -125,12 +120,9 @@ def fetch_strict_news(ticker, is_macro=False):
                     for item in root.findall('.//item')[:8]:
                         items.append(parse_rss_item(item, "tw_local"))
             except: pass
-
-        # 通道 B: 美股
         else:
             q_sec = f"{ticker}+stock+(SEC+Filing+OR+Form+4+OR+10-Q+OR+8-K+OR+Insider+Trading)"
             url_sec = f"https://news.google.com/rss/search?q={q_sec}&hl=en-US&gl=US&ceid=US:en"
-            
             q_news = f"{search_target}+stock+(財聯社+OR+鉅亨網+OR+華爾街見聞+OR+營收+OR+訂單+OR+黃仁勳+OR+馬斯克+OR+CEO+OR+財報)"
             url_news = f"https://news.google.com/rss/search?q={q_news}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
             
@@ -161,29 +153,21 @@ def parse_rss_item(item, category):
     return {'title': title, 'link': link, 'date': date_str, 'dt': dt, 'cat': category}
 
 def analyze_news_weight_strict(title, category):
-    """
-    [V13.21] 內部人熔斷邏輯 + 身份階級扣分
-    回傳: score, tag, is_major, insider_penalty
-    """
     t = title.lower()
     score = 0
     tag = ""
     is_major = False
-    insider_penalty = 0.0 # 獨立計算內部人扣分
+    insider_penalty = 0.0
     
-    # 1. 農場/閒聊過濾
     farm_words = ['豪宅', '買房', '房貸', '藝人', '神操作', '心法', '財富自由', '被動收入', '月領', '開箱', '曬單', '退休', '名師', '達人', '股市名嘴', '怎麼買', '懶人包', 'how to', 'why i', 'motley fool', '後悔', '賓士', '人生', '笑談', '護身符', '護體', '收藏', '獨木', '挑大樑']
     if any(w in t for w in farm_words): return 0, "", False, 0
 
-    # 2. 陷阱過濾
     trap_words = ['減持', '賣出', '劣於', '降評', '損', '疲軟', '警告', '重挫', '砍單', '大跌', '崩盤', '利空', 'sell', 'underweight', 'miss', 'probe', 'lawsuit']
     for w in trap_words:
         if w in t: 
-            # 如果是 form 4 賣出，後面會處理，這裡先給個基礎負分
             if 'form 4' not in t and 'insider' not in t:
                 return -2.0, '<span class="tag-red">Risk</span>', False, 0
 
-    # 3. 財報/營收/官方重訊 (+4.0)
     if any(x in t for x in ['營收', 'revenue', 'eps', 'profit', '獲利', '自結', 'free cash flow', '財報', 'earnings', '8-k', '10-q', '重大訊息', '重訊']):
         if any(x in t for x in ['新高', 'record', 'beat', 'up', '增', '漲', '超預期']):
             score = 4.0; tag = '<span class="tag-filing">💎 財報/營運利多</span>'; is_major = True
@@ -192,27 +176,19 @@ def analyze_news_weight_strict(title, category):
         else:
             score = 1.5; tag = '<span class="tag-div">📊 財務數據</span>'
 
-    # 4. 內部人交易 (V13.21 核心：身份階級扣分)
     elif category == "us_sec" or 'form 4' in t or '申報轉讓' in t or 'insider' in t:
         if any(x in t for x in ['buy', 'purchase', 'bought', '買進', '增持']):
             score = 4.0; tag = '<span class="tag-vip">👑 VIP買進</span>'; is_major = True
-            
         elif any(x in t for x in ['sell', 'sold', 'dispose', '賣出', '減持']):
-            # 判斷是誰在賣
             if any(p in t for p in ['cfo', 'chief financial', 'controller', 'accounting', '財務長', '會計']):
-                score = -4.0; insider_penalty = -4.0
-                tag = '<span class="tag-risk">⚠️ CFO/財務長拋售</span>'
+                score = -4.0; insider_penalty = -4.0; tag = '<span class="tag-risk">⚠️ CFO/財務長拋售</span>'
             elif any(p in t for p in ['ceo', 'chief executive', '執行長', '董事長']):
-                score = -3.5; insider_penalty = -3.5
-                tag = '<span class="tag-risk">⚠️ CEO/老闆拋售</span>'
+                score = -3.5; insider_penalty = -3.5; tag = '<span class="tag-risk">⚠️ CEO/老闆拋售</span>'
             elif any(p in t for p in ['president', 'evp', 'director', '副總', '董事']):
-                score = -2.0; insider_penalty = -2.0
-                tag = '<span class="tag-red">📉 高管拋售</span>'
+                score = -2.0; insider_penalty = -2.0; tag = '<span class="tag-red">📉 高管拋售</span>'
             else:
-                score = -1.5; insider_penalty = -1.5
-                tag = '<span class="tag-gray">內部人賣出</span>'
+                score = -1.5; insider_penalty = -1.5; tag = '<span class="tag-gray">內部人賣出</span>'
 
-    # 5. 訂單/VIP
     elif any(x in t for x in ['order', 'contract', '訂單', '簽約', 'backlog', '擴產']):
         score = 3.0; tag = '<span class="tag-hard">🔥 實質訂單</span>'
     elif any(x in t for x in ['musk', 'jensen', '黃仁勳', '馬斯克', '張忠謀', '魏哲家']):
@@ -393,8 +369,23 @@ def format_volume(num):
 # --- 4. 主介面 ---
 with st.sidebar:
     st.title("🎛️ 控制台")
+    st.header("📌 自選股清單")
     selection = st.radio("選擇股票", st.session_state.watchlist)
     current_ticker = selection
+    
+    # 復刻 V13.22: 加入上下移按鈕
+    c_up, c_down = st.columns(2)
+    if c_up.button("⬆️ 上移") and current_ticker in st.session_state.watchlist:
+        idx = st.session_state.watchlist.index(current_ticker)
+        if idx > 0:
+            st.session_state.watchlist[idx], st.session_state.watchlist[idx-1] = st.session_state.watchlist[idx-1], st.session_state.watchlist[idx]
+            save_watchlist(ls, st.session_state.watchlist); st.rerun()
+    if c_down.button("⬇️ 下移") and current_ticker in st.session_state.watchlist:
+        idx = st.session_state.watchlist.index(current_ticker)
+        if idx < len(st.session_state.watchlist) - 1:
+            st.session_state.watchlist[idx], st.session_state.watchlist[idx+1] = st.session_state.watchlist[idx+1], st.session_state.watchlist[idx]
+            save_watchlist(ls, st.session_state.watchlist); st.rerun()
+            
     st.markdown("---")
     time_opt = st.radio("選擇週期", ["當沖 (分時)", "日線 (Daily)", "週線 (Weekly)", "月線 (長線)"], index=1)
     st.markdown("---")
@@ -407,7 +398,7 @@ with st.sidebar:
             if current_ticker in st.session_state.watchlist:
                 st.session_state.watchlist.remove(current_ticker); save_watchlist(ls, st.session_state.watchlist); st.rerun()
 
-st.title(f"📈 {current_ticker} 實戰戰情室 V13.21")
+st.title(f"📈 {current_ticker} 實戰戰情室 V13.22")
 
 api_period = "1y"; api_int = "1d"; fmt = "%Y-%m-%d"
 if "當沖" in time_opt: api_period = "5d"; api_int = "15m"; fmt = "%H:%M"
@@ -441,7 +432,7 @@ try:
     t_s, t_l, rating = predict_target_and_rating(df)
     buy_hint_text = generate_buy_hint(df, close_v, s1, s2)
     
-    # 宏觀環境
+    # 宏觀環境 (雙格局)
     macro_txt, macro_note, macro_col, macro_score = get_macro_environment()
 
     # 頂部資訊
@@ -454,13 +445,13 @@ try:
     </div>
     """, unsafe_allow_html=True)
     
-    # 戰略雷達
+    # 2. 雙格局戰略雷達
     r1, r2, r3 = st.columns(3)
     with r1:
         st.markdown(f"""
         <div class="ai-box">
-            <h5 style="color:white; margin:0; margin-bottom:5px;">📡 綜合戰略</h5>
-            <div class="signal-tag {sigs['Summary_Color']}" style="font-size:16px;">{sigs['Summary']}</div>
+            <h5 style="color:white; margin:0; margin-bottom:5px;">📡 短線戰略 (MACD/RSI)</h5>
+            <div style="font-size:16px;" class="{sigs['Summary_Color']}">{sigs['Summary']}</div>
             <div class="radar-grid" style="margin-top:5px;">
                 <div class="radar-item"><span>MACD</span><span class="{sigs['MACD_Color']}">{sigs['MACD_Text']}</span></div>
                 <div class="radar-item"><span>RSI</span><span class="{sigs['RSI_Color']}">{sigs['RSI_Text']}</span></div>
@@ -470,7 +461,7 @@ try:
     with r2:
         st.markdown(f"""
         <div class="ai-box">
-            <h5 style="color:white; margin:0;">⚖️ 雙重格局</h5>
+            <h5 style="color:white; margin:0;">⚖️ 長線格局 (MA均線)</h5>
             <div style="margin-top:5px;">
                 <div>🏢 個股: <span class="{trend_col}">{trend_txt}</span></div>
                 <div>🌍 宏觀: <span class="{macro_col}">{macro_txt}</span></div>
@@ -479,7 +470,7 @@ try:
     with r3:
         st.markdown(f"""<div class="ai-box" style="border: 1px solid #00d4ff;"><h5 style="color:white; margin:0;">🎯 AI 目標</h5><div>短: ${t_s:.2f}</div><div>長: ${t_l:.2f}</div></div>""", unsafe_allow_html=True)
 
-    # 繪圖 (V13.20 標註修復)
+    # 繪圖
     p_data = df.tail(150) if "週" in time_opt else (df.tail(120) if "日" in time_opt else df.tail(60))
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_width=[0.2, 0.2, 0.6])
     fig.add_trace(go.Candlestick(x=p_data.index, open=p_data['Open'], high=p_data['High'], low=p_data['Low'], close=p_data['Close'], name='Price'), row=1, col=1)
@@ -550,8 +541,10 @@ try:
         # 主力動向標籤 (V13.20 回歸)
         if len(mf) > 5:
             trend = mf.iloc[-1] - mf.iloc[-5]
-            if trend > 0: fig_mf.add_annotation(x=p_data.index[-1], y=mf.iloc[-1], text="🟢 主力吸籌", showarrow=True, arrowhead=1, bgcolor="#1b3a1b", font=dict(color="#4ade80"))
-            else: fig_mf.add_annotation(x=p_data.index[-1], y=mf.iloc[-1], text="🔴 主力出貨", showarrow=True, arrowhead=1, bgcolor="#3a1b1b", font=dict(color="#ff6b6b"))
+            if trend > 0:
+                fig_mf.add_annotation(x=p_data.index[-1], y=mf.iloc[-1], text="🟢 主力吸籌", showarrow=True, arrowhead=1, font=dict(color="#4ade80", size=12), bgcolor="#1b3a1b")
+            else:
+                fig_mf.add_annotation(x=p_data.index[-1], y=mf.iloc[-1], text="🔴 主力出貨", showarrow=True, arrowhead=1, font=dict(color="#ff6b6b", size=12), bgcolor="#3a1b1b")
 
         fig_mf.update_layout(height=250, template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10))
         st.plotly_chart(fig_mf, use_container_width=True)
@@ -578,6 +571,8 @@ try:
         fig_vp = go.Figure()
         fig_vp.add_trace(go.Scatter(x=vp_all['P'], y=vp_all['V'], fill='tozeroy', line=dict(color='#ffaa00', width=0), name='整體'))
         fig_vp.add_trace(go.Scatter(x=vp_main['P'], y=vp_main['V'], fill='tozeroy', line=dict(color='#00d4ff', width=2), name='主力'))
+        
+        # 標示現價
         fig_vp.add_vline(x=close_v, line_dash="dash", line_color="white", annotation_text="現價")
         fig_vp.update_layout(height=250, template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10), showlegend=True, legend=dict(orientation="h", y=1.1))
         st.plotly_chart(fig_vp, use_container_width=True)
