@@ -15,7 +15,7 @@ import time
 from streamlit_local_storage import LocalStorage
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V13.24 (除錯防護版)", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="AI 實戰戰情室 V14.4 (訊號導航版)", layout="wide", page_icon="🧭")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -26,8 +26,15 @@ st.markdown("""
     .news-card:hover {transform: translateX(5px);}
     .news-link {text-decoration: none; color: #e0e0e0; font-weight: bold; display: block;}
     .news-link:hover {color: #FFD700;}
+    .news-date {color: #aaa; font-size: 12px; margin-right: 5px;}
+    .news-src {background-color: #444; color: #eee; border: 1px solid #777; padding: 1px 5px; border-radius: 3px; font-size: 11px; margin-right: 5px;}
+    
     .macro-alert {background-color: #3a1b1b; color: #ff6b6b; padding: 10px; border-radius: 5px; border: 1px solid #dc3545; margin-bottom: 10px; font-weight: bold;}
-    .anchor-box {background-color: #1b3a4a; color: #00d4ff; padding: 10px; border-radius: 5px; border: 1px solid #00d4ff; margin-bottom: 10px; font-size: 13px;}
+    
+    /* 錨定區塊樣式優化 */
+    .anchor-box {background-color: #1b3a4a; color: #00d4ff; padding: 12px; border-radius: 5px; border: 1px solid #00d4ff; margin-bottom: 10px; font-size: 13px; text-align: left;}
+    .anchor-title-cn {color: #fff; font-weight: bold; font-size: 14px; margin-bottom: 4px;}
+    .anchor-title-en {color: #aaa; font-size: 11px; font-style: italic;}
     
     /* 標籤系統 */
     .tag-sec {background-color: #003366; color: #00ffff; border: 1px solid #00ffff; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; margin-right: 5px;}
@@ -35,6 +42,7 @@ st.markdown("""
     .tag-hard {background-color: #1b3a1b; color: #4ade80; border: 1px solid #28a745; padding: 2px 6px; border-radius: 4px; font-size: 12px; margin-right: 5px;}
     .tag-div {background-color: #4a3b1b; color: #ffaa00; border: 1px solid #ffaa00; padding: 2px 6px; border-radius: 4px; font-size: 12px; margin-right: 5px;}
     .tag-risk {background-color: #3a1b1b; color: #ff6b6b; border: 1px solid #dc3545; padding: 2px 6px; border-radius: 4px; font-size: 12px; font-weight: bold;}
+    .tag-chip {background-color: #555; color: #facc15; border: 1px solid #facc15; padding: 2px 6px; border-radius: 4px; font-size: 12px; font-weight: bold;}
 
     /* 戰略雷達信號燈 */
     .sig-green {background-color: #1b3a1b; color: #4ade80; border: 1px solid #28a745; padding: 2px 6px; border-radius: 4px; font-size: 12px;}
@@ -48,7 +56,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 1. 自選股儲存系統 ---
-DEFAULT_LIST = ['NVDA', 'TSM', 'AAPL', 'MU', 'TSLA', 'ONDS', 'QQQ', '0050.TW', '2330.TW', '3535.TW']
+DEFAULT_LIST = ['NVDA', 'TSM', 'ONDS', 'RXRX', 'CRCL', 'AAPL', 'TSLA', '0050.TW', '2330.TW', '3535.TW']
 
 def init_storage(): return LocalStorage()
 
@@ -66,10 +74,30 @@ def save_watchlist(ls, watchlist):
         time.sleep(0.1) 
     except: pass
 
-def save_anchor(ls, ticker, news_title, score):
+def simple_translate(text):
+    text_lower = text.lower()
+    if "insider buy" in text_lower or "insider purchase" in text_lower: return "內部人買進"
+    if "insider sale" in text_lower or "insider sell" in text_lower: return "內部人拋售"
+    if "earnings beat" in text_lower or "tops estimates" in text_lower: return "財報優於預期"
+    if "revenue growth" in text_lower: return "營收成長"
+    if "options" in text_lower and "volume" in text_lower: return "期權成交異動"
+    if "record high" in text_lower: return "創歷史新高"
+    if "upgrade" in text_lower: return "機構升評"
+    if "downgrade" in text_lower: return "機構降評"
+    return "重大情報"
+
+def save_anchor(ls, ticker, news_title, score, news_date_str):
     try:
         key = f"anchor_{ticker}"
-        data = {"title": news_title, "score": score, "date": datetime.now().strftime("%Y-%m-%d")}
+        summary_cn = simple_translate(news_title)
+        
+        data = {
+            "title": news_title, 
+            "summary": summary_cn, 
+            "score": score, 
+            "date": news_date_str, 
+            "saved_at": datetime.now().strftime("%Y-%m-%d")
+        }
         ls.setItem(key, data)
     except: pass
 
@@ -78,7 +106,7 @@ def get_valid_anchor(ls, ticker):
         key = f"anchor_{ticker}"
         data = ls.getItem(key)
         if not data: return None
-        saved_date = datetime.strptime(data["date"], "%Y-%m-%d")
+        saved_date = datetime.strptime(data["saved_at"], "%Y-%m-%d")
         if (datetime.now() - saved_date).days > 5:
             ls.deleteItem(key)
             return None
@@ -89,18 +117,46 @@ ls = init_storage()
 if 'watchlist' not in st.session_state:
     st.session_state.watchlist = load_watchlist(ls)
 
-# --- 2. 核心搜尋引擎 (雙境獵手) ---
+# --- 2. 核心搜尋引擎 (V14.3 深海拖網) ---
 
-def get_chinese_ticker_name(ticker):
-    mapping = {'NVDA': '輝達', 'TSLA': '特斯拉', 'AAPL': '蘋果', 'AMD': '超微', 'MSFT': '微軟', 'GOOG': '谷歌', 'AMZN': '亞馬遜', 'META': '臉書', 'TSM': '台積電', 'MU': '美光', 'INTC': '英特爾', 'ONDS': 'ONDS'}
+def get_ticker_metadata(ticker):
+    mapping = {
+        'NVDA': {'name': '輝達', 'ceo': ['黃仁勳', 'Jensen', 'Huang'], 'key': ['Nvidia']},
+        'TSLA': {'name': '特斯拉', 'ceo': ['馬斯克', 'Elon', 'Musk'], 'key': ['Tesla']},
+        'AAPL': {'name': '蘋果', 'ceo': ['庫克', 'Tim', 'Cook'], 'key': ['Apple', 'iPhone']},
+        'ONDS': {'name': 'ONDS', 'ceo': [], 'key': ['Ondas', 'Networks']},
+        'RXRX': {'name': 'RXRX', 'ceo': [], 'key': ['Recursion', 'Pharma']},
+        'CRCL': {'name': 'CRCL', 'ceo': [], 'key': ['Circle']},
+        'SOUN': {'name': 'SOUN', 'ceo': [], 'key': ['SoundHound']},
+        'PLTR': {'name': 'PLTR', 'ceo': ['Karp'], 'key': ['Palantir']},
+        'TSM': {'name': '台積電', 'ceo': ['魏哲家'], 'key': ['TSMC']},
+    }
     base = ticker.split('.')[0]
-    return mapping.get(base, '')
+    return mapping.get(base, {'name': ticker, 'ceo': [], 'key': [ticker]})
 
-def fetch_strict_news(ticker, is_macro=False):
+def validate_news_relevance(title, ticker, info, strict_mode=True):
+    t = title.lower()
+    base_ticker = ticker.split('.')[0].lower()
+    
+    whitelist = [base_ticker] + [k.lower() for k in info['key']]
+    if info['name'] != ticker: whitelist.append(info['name'].lower())
+    for c in info['ceo']: whitelist.append(c.lower())
+    
+    hit = any(w in t for w in whitelist)
+    
+    if not strict_mode:
+        small_cap_keywords = ['options', 'volume', 'shares', 'trading', '期權', '成交', '異動', '大漲', '大跌', 'implied volatility']
+        if base_ticker in t and any(k in t for k in small_cap_keywords):
+            return True
+            
+    return hit
+
+def fetch_deep_news(ticker, is_macro=False):
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         is_tw_stock = ".TW" in ticker or ".TWO" in ticker
         items = []
+        now = datetime.now()
         
         if is_macro:
             url = f"https://news.google.com/rss/search?q=聯準會+升息+通膨+鮑爾&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
@@ -108,11 +164,15 @@ def fetch_strict_news(ticker, is_macro=False):
             if resp.status_code == 200:
                 root = ET.fromstring(resp.content)
                 for item in root.findall('.//item')[:6]:
-                    items.append(parse_rss_item(item, "macro"))
+                    data = parse_rss_item(item, "macro", "Global")
+                    if (now - data['dt']).days <= 30: items.append(data)
             return items
 
-        cn_name = get_chinese_ticker_name(ticker)
+        ticker_info = get_ticker_metadata(ticker)
+        cn_name = ticker_info['name']
         search_target = f"{ticker} OR {cn_name}" if cn_name else ticker
+        
+        is_small_cap = ticker.split('.')[0] in ['ONDS', 'RXRX', 'CRCL', 'SOUN', 'PLTR'] 
         
         if is_tw_stock:
             clean_ticker = ticker.replace('.TW', '').replace('.TWO', '')
@@ -122,30 +182,44 @@ def fetch_strict_news(ticker, is_macro=False):
                 resp = requests.get(url_tw, headers=headers, timeout=4)
                 if resp.status_code == 200:
                     root = ET.fromstring(resp.content)
-                    for item in root.findall('.//item')[:8]:
-                        items.append(parse_rss_item(item, "tw_local"))
+                    for item in root.findall('.//item')[:10]:
+                        data = parse_rss_item(item, "tw_local", "台股重訊")
+                        if (now - data['dt']).days <= 30 and validate_news_relevance(data['title'], ticker, ticker_info):
+                            items.append(data)
             except: pass
+            
         else:
             q_sec = f"{ticker}+stock+(SEC+Filing+OR+Form+4+OR+10-Q+OR+8-K+OR+Insider+Trading)"
+            
+            if is_small_cap:
+                q_news = f"{ticker}+stock+(Options+OR+Volume+OR+Implied+Volatility+OR+期權+OR+成交+OR+異動+OR+財報)"
+            else:
+                q_news = f"{search_target}+stock+(財聯社+OR+鉅亨網+OR+營收+OR+訂單+OR+CEO+OR+財報)"
+
             url_sec = f"https://news.google.com/rss/search?q={q_sec}&hl=en-US&gl=US&ceid=US:en"
-            q_news = f"{search_target}+stock+(財聯社+OR+鉅亨網+OR+華爾街見聞+OR+營收+OR+訂單+OR+黃仁勳+OR+馬斯克+OR+CEO+OR+財報)"
             url_news = f"https://news.google.com/rss/search?q={q_news}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
             
-            for url, cat in [(url_sec, "us_sec"), (url_news, "us_news")]:
+            sources = [(url_sec, "us_sec", "🏛️ SEC"), (url_news, "us_news", "📰 News")]
+            
+            for url, cat, src_name in sources:
                 try:
                     resp = requests.get(url, headers=headers, timeout=4)
                     if resp.status_code == 200:
                         root = ET.fromstring(resp.content)
-                        limit = 4 if cat == "us_sec" else 6
+                        limit = 8 
                         for item in root.findall('.//item')[:limit]:
-                            items.append(parse_rss_item(item, cat))
+                            data = parse_rss_item(item, cat, src_name)
+                            strict = not is_small_cap
+                            is_relevant = validate_news_relevance(data['title'], ticker, ticker_info, strict_mode=strict)
+                            if (now - data['dt']).days <= 30 and is_relevant:
+                                items.append(data)
                 except: pass
 
         items.sort(key=lambda x: x['dt'], reverse=True)
         return items
     except: return []
 
-def parse_rss_item(item, category):
+def parse_rss_item(item, category, source_name):
     title = re.sub('<[^<]+?>', '', item.find('title').text)
     link = item.find('link').text
     try:
@@ -155,7 +229,11 @@ def parse_rss_item(item, category):
     except: 
         dt = datetime.now()
         date_str = "近期"
-    return {'title': title, 'link': link, 'date': date_str, 'dt': dt, 'cat': category}
+    
+    if "futunn" in link: source_name = "🐂 富途"
+    elif "yahoo" in link: source_name = "🇺🇸 Yahoo"
+    
+    return {'title': title, 'link': link, 'date': date_str, 'dt': dt, 'cat': category, 'src': source_name}
 
 def analyze_news_weight_strict(title, category):
     t = title.lower()
@@ -164,7 +242,7 @@ def analyze_news_weight_strict(title, category):
     is_major = False
     insider_penalty = 0.0
     
-    farm_words = ['豪宅', '買房', '房貸', '藝人', '神操作', '心法', '財富自由', '被動收入', '月領', '開箱', '曬單', '退休', '名師', '達人', '股市名嘴', '怎麼買', '懶人包', 'how to', 'why i', 'motley fool', '後悔', '賓士', '人生', '笑談', '護身符', '護體', '收藏', '獨木', '挑大樑']
+    farm_words = ['豪宅', '買房', '房貸', '藝人', '神操作', '心法', '財富自由', '被動收入', '開箱', '曬單', '退休', '名師', '股市名嘴', '怎麼買', '懶人包', 'motley fool', '後悔', '賓士', '人生', '笑談', '護身符', '收藏', '獨木', '挑大樑']
     if any(w in t for w in farm_words): return 0, "", False, 0
 
     trap_words = ['減持', '賣出', '劣於', '降評', '損', '疲軟', '警告', '重挫', '砍單', '大跌', '崩盤', '利空', 'sell', 'underweight', 'miss', 'probe', 'lawsuit']
@@ -173,7 +251,13 @@ def analyze_news_weight_strict(title, category):
             if 'form 4' not in t and 'insider' not in t:
                 return -2.0, '<span class="tag-red">Risk</span>', False, 0
 
-    if any(x in t for x in ['營收', 'revenue', 'eps', 'profit', '獲利', '自結', 'free cash flow', '財報', 'earnings', '8-k', '10-q', '重大訊息', '重訊']):
+    if any(x in t for x in ['options', 'volume', '期權', '成交', '異動', 'implied volatility']):
+        if any(x in t for x in ['high', 'surge', 'active', 'jump', '活躍', '大增', '激增']):
+            score = 2.0; tag = '<span class="tag-chip">🌊 籌碼異動</span>'
+        else:
+            score = 0.5; tag = '<span class="tag-gray">📊 籌碼面</span>'
+
+    elif any(x in t for x in ['營收', 'revenue', 'eps', 'profit', '獲利', '自結', 'free cash flow', '財報', 'earnings', '8-k', '10-q', '重大訊息', '重訊']):
         if any(x in t for x in ['新高', 'record', 'beat', 'up', '增', '漲', '超預期']):
             score = 4.0; tag = '<span class="tag-filing">💎 財報/營運利多</span>'; is_major = True
         elif any(x in t for x in ['miss', 'down', 'loss', 'cut', '減', '虧', '不如']):
@@ -185,19 +269,17 @@ def analyze_news_weight_strict(title, category):
         if any(x in t for x in ['buy', 'purchase', 'bought', '買進', '增持']):
             score = 4.0; tag = '<span class="tag-vip">👑 VIP買進</span>'; is_major = True
         elif any(x in t for x in ['sell', 'sold', 'dispose', '賣出', '減持']):
-            if any(p in t for p in ['cfo', 'chief financial', 'controller', 'accounting', '財務長', '會計']):
-                score = -4.0; insider_penalty = -4.0; tag = '<span class="tag-risk">⚠️ CFO/財務長拋售</span>'
-            elif any(p in t for p in ['ceo', 'chief executive', '執行長', '董事長']):
-                score = -3.5; insider_penalty = -3.5; tag = '<span class="tag-risk">⚠️ CEO/老闆拋售</span>'
-            elif any(p in t for p in ['president', 'evp', 'director', '副總', '董事']):
-                score = -2.0; insider_penalty = -2.0; tag = '<span class="tag-red">📉 高管拋售</span>'
+            if any(p in t for p in ['cfo', 'chief financial', 'controller', 'accounting', '財務長']):
+                score = -4.0; insider_penalty = -4.0; tag = '<span class="tag-risk">⚠️ CFO拋售</span>'
+            elif any(p in t for p in ['ceo', 'chief executive', '執行長']):
+                score = -3.5; insider_penalty = -3.5; tag = '<span class="tag-risk">⚠️ CEO拋售</span>'
             else:
                 score = -1.5; insider_penalty = -1.5; tag = '<span class="tag-gray">內部人賣出</span>'
 
     elif any(x in t for x in ['order', 'contract', '訂單', '簽約', 'backlog', '擴產']):
         score = 3.0; tag = '<span class="tag-hard">🔥 實質訂單</span>'
     elif any(x in t for x in ['musk', 'jensen', '黃仁勳', '馬斯克', '張忠謀', '魏哲家']):
-        action_verbs = ['說', '稱', '表示', '回應', '宣布', 'talks', 'says', 'confirms', 'announces', '指出', '強調']
+        action_verbs = ['說', '稱', '表示', '回應', '宣布', 'talks', 'says', 'confirms', 'announces']
         if any(v in t for v in action_verbs): score = 2.0; tag = '<span class="tag-vip">👑 VIP發言</span>'
         else: score = 0.5; tag = '<span class="tag-gray">🗣️ VIP相關</span>'
 
@@ -208,7 +290,7 @@ def analyze_news_weight_strict(title, category):
     return score, tag, is_major, insider_penalty
 
 def get_macro_environment():
-    news = fetch_strict_news("Macro", is_macro=True)
+    news = fetch_deep_news("Macro", is_macro=True)
     score = 0
     for n in news:
         t = n['title'].lower()
@@ -226,10 +308,8 @@ def calculate_volume_profile(df, bins=40, filter_mask=None):
     price_min = df['Low'].min(); price_max = df['High'].max()
     bin_edges = np.linspace(price_min, price_max, bins + 1)
     bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-    
     target_df = df if filter_mask is None else df[filter_mask]
     if target_df.empty: return pd.DataFrame({'Price': bin_centers, 'Volume': np.zeros(bins)})
-    
     bin_indices = pd.cut(target_df['Close'], bins=bin_edges, labels=False, include_lowest=True)
     profile = target_df.groupby(bin_indices)['Volume'].sum().reindex(range(bins), fill_value=0)
     return pd.DataFrame({'Price': bin_centers, 'Volume': profile.values})
@@ -241,25 +321,20 @@ def calculate_indicators(df):
     df['Vol_SMA5'] = df['Volume'].rolling(window=5).mean()
     df['Std_Dev'] = df['Close'].rolling(window=20).std()
     df['Bollinger_Upper'] = df['SMA_20'] + (df['Std_Dev'] * 2)
-    
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
-    
     exp12 = df['Close'].ewm(span=12, adjust=False).mean()
     exp26 = df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = exp12 - exp26
     df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
     df['MACD_Hist'] = df['MACD'] - df['Signal_Line']
-    
     clv = ((df['Close'] - df['Low']) - (df['High'] - df['Close'])) / (df['High'] - df['Low'])
     df['AD_Line'] = (clv.fillna(0) * df['Volume']).cumsum()
-    
     df['DMA_DDD'] = df['Close'].rolling(window=10).mean() - df['Close'].rolling(window=50).mean()
     df['DMA_AMA'] = df['DMA_DDD'].rolling(window=10).mean()
-    
     close = df['Close'].values
     buy_seq = np.zeros(len(close), dtype=int)
     sell_seq = np.zeros(len(close), dtype=int)
@@ -304,33 +379,27 @@ def analyze_strategic_signals(df):
     macd = latest['MACD']; signal = latest['Signal_Line']
     if isinstance(macd, pd.Series): macd = macd.iloc[0]
     if isinstance(signal, pd.Series): signal = signal.iloc[0]
-    
     if macd > signal:
         if macd > 0: macd_text, macd_color = "零軸上金叉 (多頭)", "sig-green"
         else: macd_text, macd_color = "零軸下金叉 (反彈)", "sig-orange"
     else:
         if macd > 0: macd_text, macd_color = "零軸上死叉 (修正)", "sig-orange"
         else: macd_text, macd_color = "零軸下死叉 (空頭)", "sig-red"
-        
     vol = latest['Volume']; vol_ma = latest['Vol_SMA5']
     if vol > vol_ma * 1.5: vol_text, vol_color = "爆量", "sig-green"
     elif vol > vol_ma * 1.1: vol_text, vol_color = "量增", "sig-green"
     else: vol_text, vol_color = "量縮", "sig-gray"
-    
     rsi = latest['RSI']
     if rsi > 70: rsi_text, rsi_color = f"過熱 ({rsi:.0f})", "sig-red"
     elif rsi < 30: rsi_text, rsi_color = f"超賣 ({rsi:.0f})", "sig-green"
     else: rsi_text, rsi_color = f"中性 ({rsi:.0f})", "sig-gray"
-    
     summary = "觀望"; summary_color = "sig-gray"
     if not np.isnan(latest.get('TD_Sell_9', np.nan)): summary, summary_color = "🔺 九轉賣點", "sig-red"
     elif not np.isnan(latest.get('TD_Buy_9', np.nan)): summary, summary_color = f"🔻 九轉買點", "sig-green"
     elif macd > signal: summary, summary_color = "📈 偏多震盪", "sig-green"
     else: summary, summary_color = "⛈️ 空頭走勢", "sig-red"
-    
     hunter = detect_smart_money_divergence(df)
     if hunter: summary = hunter; summary_color = "sig-blue"
-    
     return {"MACD_Text": macd_text, "MACD_Color": macd_color, "Vol_Text": vol_text, "Vol_Color": vol_color, "RSI_Text": rsi_text, "RSI_Color": rsi_color, "Summary": summary, "Summary_Color": summary_color}
 
 def analyze_market_trend(df):
@@ -338,7 +407,6 @@ def analyze_market_trend(df):
     if isinstance(price, pd.Series): price = price.iloc[0]
     if isinstance(ma20, pd.Series): ma20 = ma20.iloc[0]
     if isinstance(ma60, pd.Series): ma60 = ma60.iloc[0]
-
     if price > ma20 and ma20 > ma60: return "🐂 牛市 (Bull)", "多頭排列", "sig-green"
     elif price < ma20 and ma20 < ma60: return "🐻 熊市 (Bear)", "空頭排列", "sig-red"
     else: return "⚖️ 震盪 (Range)", "區間整理", "sig-orange"
@@ -348,10 +416,8 @@ def predict_target_and_rating(df):
     upper = df['Bollinger_Upper'].iloc[-1]
     if isinstance(price, pd.Series): price = price.iloc[0]
     if isinstance(upper, pd.Series): upper = upper.iloc[0]
-    
     rating = "持有"
     if price > df['SMA_20'].iloc[-1]: rating = "強勢"
-    
     target_short = upper if price < upper else price * 1.05
     recent_high = df['High'].tail(60).max()
     if isinstance(recent_high, pd.Series): recent_high = recent_high.iloc[0]
@@ -362,13 +428,9 @@ def generate_buy_hint(df, current_price, s1, s2):
     latest = df.iloc[-1]
     if not np.isnan(latest.get('TD_Sell_9', np.nan)): return "🔺 藍色9 (上漲力竭)，注意獲利"
     if not np.isnan(latest.get('TD_Buy_9', np.nan)): return f"🔻 紅色9 (潛在買點)，SL:{latest.get('TD_Buy_Stop', 0):.2f}"
-    
-    if (latest['DMA_DDD'] > latest['DMA_AMA']) and (df['DMA_DDD'].iloc[-2] <= df['DMA_AMA'].iloc[-2]): 
-        return "🚀 DMA 金叉，中線轉多"
-        
+    if (latest['DMA_DDD'] > latest['DMA_AMA']) and (df['DMA_DDD'].iloc[-2] <= df['DMA_AMA'].iloc[-2]): return "🚀 DMA 金叉，中線轉多"
     divergence = detect_smart_money_divergence(df)
     if divergence: return f"🚨 {divergence}"
-    
     if abs(current_price - s1) / current_price < 0.015 and current_price > s1: return "回測月線有撐"
     return "觀望，等待訊號"
 
@@ -390,19 +452,17 @@ with st.sidebar:
         if idx > 0:
             st.session_state.watchlist[idx], st.session_state.watchlist[idx-1] = st.session_state.watchlist[idx-1], st.session_state.watchlist[idx]
             save_watchlist(ls, st.session_state.watchlist); st.rerun()
-            
     if c_down.button("⬇️ 下移", key="down") and current_ticker in st.session_state.watchlist:
         idx = st.session_state.watchlist.index(current_ticker)
         if idx < len(st.session_state.watchlist) - 1:
             st.session_state.watchlist[idx], st.session_state.watchlist[idx+1] = st.session_state.watchlist[idx+1], st.session_state.watchlist[idx]
             save_watchlist(ls, st.session_state.watchlist); st.rerun()
-            
+    
     c_top, c_bot = st.columns(2)
     if c_top.button("⏫ 置頂", key="top") and current_ticker in st.session_state.watchlist:
         st.session_state.watchlist.remove(current_ticker)
         st.session_state.watchlist.insert(0, current_ticker)
         save_watchlist(ls, st.session_state.watchlist); st.rerun()
-        
     if c_bot.button("⏬ 置底", key="bot") and current_ticker in st.session_state.watchlist:
         st.session_state.watchlist.remove(current_ticker)
         st.session_state.watchlist.append(current_ticker)
@@ -415,14 +475,21 @@ with st.sidebar:
         new_t = st.text_input("代號", placeholder="MSTR").upper()
         if st.button("➕", key="add") and new_t:
             if new_t not in st.session_state.watchlist:
-                st.session_state.watchlist.append(new_t)
-                save_watchlist(ls, st.session_state.watchlist); st.rerun()
+                st.session_state.watchlist.append(new_t); save_watchlist(ls, st.session_state.watchlist); st.rerun()
         if st.button("❌", key="del"):
             if current_ticker in st.session_state.watchlist:
-                st.session_state.watchlist.remove(current_ticker)
-                save_watchlist(ls, st.session_state.watchlist); st.rerun()
+                st.session_state.watchlist.remove(current_ticker); save_watchlist(ls, st.session_state.watchlist); st.rerun()
+    
+    # [V14.4 新增] 訊號解讀指南
+    with st.expander("📖 訊號解讀指南"):
+        st.markdown("""
+        📉 **股價還在跌** ➔ 出現 **【🐳吸】** (主力偷偷進場)
+        📈 **股價剛起漲** ➔ 出現 **【BUY】** (趨勢確立，散戶進場)
+        🚀 **股價噴出中** ➔ 出現 **【💰達標】** (漲太快了，短線客獲利了結)
+        📉 **頭部成型跌** ➔ 出現 **【SELL】** (趨勢反轉，全面撤退)
+        """)
 
-st.title(f"📈 {current_ticker} 實戰戰情室 V13.24")
+st.title(f"📈 {current_ticker} 實戰戰情室 V14.4")
 
 api_period = "1y"; api_int = "1d"; fmt = "%Y-%m-%d"
 if "當沖" in time_opt: api_period = "5d"; api_int = "15m"; fmt = "%H:%M"
@@ -435,24 +502,17 @@ def fetch_data(t, p, i):
     try: return yf.download(t, period=p, interval=i, progress=False)
     except: return pd.DataFrame()
 
-# 🛡️ 核心防護罩 (Try-Catch)
 try:
     df = fetch_data(current_ticker, api_period, api_int)
     if df.empty: st.error("無數據，請確認代號或網路"); st.stop()
     
-    # 🧹 針對台股/美股的格式大清洗 (V13.24 關鍵修正)
-    if isinstance(df.columns, pd.MultiIndex): 
-        # 嘗試只取第一層，避免 (Close, NVDA) 這種結構
-        df.columns = df.columns.get_level_values(0)
-    
-    # 再次檢查重複欄位並移除 (有些 yfinance 版本會重複 columns)
+    if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
     df = df.loc[:, ~df.columns.duplicated()]
 
     df = calculate_indicators(df)
     if 'DMA_DDD' not in df.columns: st.error("數據不足計算指標"); st.stop()
     
     latest = df.iloc[-1]; prev = df.iloc[-2]
-    # Series Fix
     close_v = latest['Close'] if not isinstance(latest['Close'], pd.Series) else latest['Close'].iloc[0]
     prev_v = prev['Close'] if not isinstance(prev['Close'], pd.Series) else prev['Close'].iloc[0]
     
@@ -467,7 +527,6 @@ try:
     
     macro_txt, macro_note, macro_col, macro_score = get_macro_environment()
 
-    # 頂部資訊
     st.markdown(f"""
     <div class="price-card">
         <h1 style="margin:0; font-size: 50px;">${close_v:.2f}</h1>
@@ -477,7 +536,6 @@ try:
     </div>
     """, unsafe_allow_html=True)
     
-    # 2. 雙格局戰略雷達
     r1, r2, r3 = st.columns(3)
     with r1:
         st.markdown(f"""
@@ -502,128 +560,110 @@ try:
     with r3:
         st.markdown(f"""<div class="ai-box" style="border: 1px solid #00d4ff;"><h5 style="color:white; margin:0;">🎯 AI 目標</h5><div>短: ${t_s:.2f}</div><div>長: ${t_l:.2f}</div></div>""", unsafe_allow_html=True)
 
-    # 繪圖 (V13.20 標註修復 + V13.24 防護)
-    try:
-        p_data = df.tail(150) if "週" in time_opt else (df.tail(120) if "日" in time_opt else df.tail(60))
-        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_width=[0.2, 0.2, 0.6])
-        fig.add_trace(go.Candlestick(x=p_data.index, open=p_data['Open'], high=p_data['High'], low=p_data['Low'], close=p_data['Close'], name='Price'), row=1, col=1)
+    p_data = df.tail(150) if "週" in time_opt else (df.tail(120) if "日" in time_opt else df.tail(60))
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_width=[0.2, 0.2, 0.6])
+    fig.add_trace(go.Candlestick(x=p_data.index, open=p_data['Open'], high=p_data['High'], low=p_data['Low'], close=p_data['Close'], name='Price'), row=1, col=1)
+    
+    for i in range(5, len(p_data)):
+        curr = p_data.iloc[i]
+        prior = p_data.iloc[i-1]
         
-        # 復刻標記 (含價格)
-        for i in range(5, len(p_data)):
-            curr = p_data.iloc[i]
-            prior = p_data.iloc[i-1]
-            
-            # 九轉
-            if not np.isnan(curr.get('TD_Buy_9', np.nan)):
-                 fig.add_annotation(x=p_data.index[i], y=curr['Low'], text="9", showarrow=False, font=dict(color='#ff6b6b', size=12, weight="bold"), row=1, col=1)
-            if not np.isnan(curr.get('TD_Sell_9', np.nan)):
-                 fig.add_annotation(x=p_data.index[i], y=curr['High'], text="9", showarrow=False, font=dict(color='#4a9eff', size=12, weight="bold"), row=1, col=1)
-                 
-            # 主力吸籌
-            price_drop = curr['Close'] <= p_data.iloc[i-5]['Close'] * 0.99
-            ad_rise = curr['AD_Line'] > p_data.iloc[i-5]['AD_Line']
-            if price_drop and ad_rise and curr['RSI'] < 60:
-                 fig.add_annotation(x=p_data.index[i], y=curr['Low']*0.98, text=f"🐳吸<br>${curr['Low']:.1f}", showarrow=True, arrowhead=1, ay=40, row=1, col=1, bgcolor="#6f42c1", font=dict(color="white", size=9))
+        if not np.isnan(curr.get('TD_Buy_9', np.nan)):
+             fig.add_annotation(x=p_data.index[i], y=curr['Low'], text="9", showarrow=False, font=dict(color='#ff6b6b', size=12, weight="bold"), row=1, col=1)
+        if not np.isnan(curr.get('TD_Sell_9', np.nan)):
+             fig.add_annotation(x=p_data.index[i], y=curr['High'], text="9", showarrow=False, font=dict(color='#4a9eff', size=12, weight="bold"), row=1, col=1)
+             
+        price_drop = curr['Close'] <= p_data.iloc[i-5]['Close'] * 0.99
+        ad_rise = curr['AD_Line'] > p_data.iloc[i-5]['AD_Line']
+        if price_drop and ad_rise and curr['RSI'] < 60:
+             fig.add_annotation(x=p_data.index[i], y=curr['Low']*0.98, text=f"🐳吸<br>${curr['Low']:.1f}", showarrow=True, arrowhead=1, ay=40, row=1, col=1, bgcolor="#6f42c1", font=dict(color="white", size=9))
 
-            # 買入/賣出訊號
-            macd_buy = (curr['MACD'] > curr['Signal_Line']) and (prior['MACD'] <= prior['Signal_Line'])
-            macd_sell = (curr['MACD'] < curr['Signal_Line']) and (prior['MACD'] >= prior['Signal_Line'])
-            
-            if macd_buy:
-                 fig.add_annotation(x=p_data.index[i], y=curr['Low']*0.98, text=f"BUY<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=40, row=1, col=1, bgcolor="#28a745", font=dict(color="white", size=9))
-            if macd_sell:
-                 fig.add_annotation(x=p_data.index[i], y=curr['High']*1.02, text=f"SELL<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=-40, row=1, col=1, bgcolor="#dc3545", font=dict(color="white", size=9))
-
-            # 達標提示
-            if curr['High'] >= t_s and prior['High'] < t_s:
-                 fig.add_annotation(x=p_data.index[i], y=curr['High']*1.02, text=f"💰達標<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=-60, row=1, col=1, bgcolor="#ffc107", font=dict(color="black", size=9))
-
-        # 金叉死叉
-        macd_gold = (p_data['MACD'] > p_data['Signal_Line']) & (p_data['MACD'].shift(1) <= p_data['Signal_Line'].shift(1))
-        macd_dead = (p_data['MACD'] < p_data['Signal_Line']) & (p_data['MACD'].shift(1) >= p_data['Signal_Line'].shift(1))
+        macd_buy = (curr['MACD'] > curr['Signal_Line']) and (prior['MACD'] <= prior['Signal_Line'])
+        macd_sell = (curr['MACD'] < curr['Signal_Line']) and (prior['MACD'] >= prior['Signal_Line'])
         
-        valid_gold = p_data[macd_gold]
-        valid_dead = p_data[macd_dead]
+        if macd_buy:
+             fig.add_annotation(x=p_data.index[i], y=curr['Low']*0.98, text=f"BUY<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=40, row=1, col=1, bgcolor="#28a745", font=dict(color="white", size=9))
+        if macd_sell:
+             fig.add_annotation(x=p_data.index[i], y=curr['High']*1.02, text=f"SELL<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=-40, row=1, col=1, bgcolor="#dc3545", font=dict(color="white", size=9))
+
+        if curr['High'] >= t_s and prior['High'] < t_s:
+             fig.add_annotation(x=p_data.index[i], y=curr['High']*1.02, text=f"💰達標<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=-60, row=1, col=1, bgcolor="#ffc107", font=dict(color="black", size=9))
+
+    macd_gold = (p_data['MACD'] > p_data['Signal_Line']) & (p_data['MACD'].shift(1) <= p_data['Signal_Line'].shift(1))
+    macd_dead = (p_data['MACD'] < p_data['Signal_Line']) & (p_data['MACD'].shift(1) >= p_data['Signal_Line'].shift(1))
+    
+    valid_gold = p_data[macd_gold]
+    valid_dead = p_data[macd_dead]
+    
+    if not valid_gold.empty:
+        fig.add_trace(go.Scatter(x=valid_gold.index, y=valid_gold['MACD'], mode='markers', marker=dict(symbol='triangle-up', size=10, color='#d8b4fe'), name='金叉'), row=2, col=1)
+    if not valid_dead.empty:
+        fig.add_trace(go.Scatter(x=valid_dead.index, y=valid_dead['MACD'], mode='markers', marker=dict(symbol='triangle-down', size=10, color='#facc15'), name='死叉'), row=2, col=1)
+
+    fig.add_hline(y=s1, line_dash="dash", line_color="#00d4ff", annotation_text="MA20", row=1, col=1)
+    
+    colors = ['green' if v >= 0 else 'red' for v in p_data['MACD_Hist']]
+    fig.add_trace(go.Bar(x=p_data.index, y=p_data['MACD_Hist'], marker_color=colors), row=2, col=1)
+    fig.add_trace(go.Scatter(x=p_data.index, y=p_data['MACD'], line=dict(color='white', width=1)), row=2, col=1)
+    fig.add_trace(go.Scatter(x=p_data.index, y=p_data['Signal_Line'], line=dict(color='yellow', width=1)), row=2, col=1)
+    
+    fig.add_trace(go.Scatter(x=p_data.index, y=p_data['DMA_DDD'], line=dict(color='#d8b4fe', width=1)), row=3, col=1)
+    fig.add_trace(go.Scatter(x=p_data.index, y=p_data['DMA_AMA'], line=dict(color='#facc15', width=1)), row=3, col=1)
+    
+    fig.update_xaxes(tickformat=fmt)
+    fig.update_layout(height=800, template="plotly_dark", xaxis_rangeslider_visible=False, showlegend=False, margin=dict(t=10, b=10, l=10, r=10))
+    st.plotly_chart(fig, use_container_width=True)
+    
+    c1, c2 = st.columns(2)
+    mf = ((p_data['Close'] - p_data['Open']) / (p_data['High'] - p_data['Low'])) * p_data['Volume']
+    mf = mf.fillna(0).cumsum()
+    with c1:
+        st.caption("主力資金流 (Money Flow)")
+        fig_mf = go.Figure(go.Scatter(x=p_data.index, y=mf, fill='tozeroy', line=dict(color='#00d4ff')))
         
-        if not valid_gold.empty:
-            fig.add_trace(go.Scatter(x=valid_gold.index, y=valid_gold['MACD'], mode='markers', marker=dict(symbol='triangle-up', size=10, color='#d8b4fe'), name='金叉'), row=2, col=1)
-        if not valid_dead.empty:
-            fig.add_trace(go.Scatter(x=valid_dead.index, y=valid_dead['MACD'], mode='markers', marker=dict(symbol='triangle-down', size=10, color='#facc15'), name='死叉'), row=2, col=1)
+        if len(mf) > 5:
+            trend = mf.iloc[-1] - mf.iloc[-5]
+            if trend > 0:
+                fig_mf.add_annotation(x=p_data.index[-1], y=mf.iloc[-1], text="🟢 主力吸籌", showarrow=True, arrowhead=1, font=dict(color="#4ade80", size=12), bgcolor="#1b3a1b")
+            else:
+                fig_mf.add_annotation(x=p_data.index[-1], y=mf.iloc[-1], text="🔴 主力出貨", showarrow=True, arrowhead=1, font=dict(color="#ff6b6b", size=12), bgcolor="#3a1b1b")
 
-        fig.add_hline(y=s1, line_dash="dash", line_color="#00d4ff", annotation_text="MA20", row=1, col=1)
+        fig_mf.update_layout(height=250, template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10))
+        st.plotly_chart(fig_mf, use_container_width=True)
         
-        colors = ['green' if v >= 0 else 'red' for v in p_data['MACD_Hist']]
-        fig.add_trace(go.Bar(x=p_data.index, y=p_data['MACD_Hist'], marker_color=colors), row=2, col=1)
-        fig.add_trace(go.Scatter(x=p_data.index, y=p_data['MACD'], line=dict(color='white', width=1)), row=2, col=1)
-        fig.add_trace(go.Scatter(x=p_data.index, y=p_data['Signal_Line'], line=dict(color='yellow', width=1)), row=2, col=1)
+    with c2:
+        st.caption("籌碼分佈 (主力 vs 散戶)")
+        inst_mask = (p_data['Close'] > p_data['Open']) & (p_data['Volume'] > p_data['Vol_SMA5'])
         
-        fig.add_trace(go.Scatter(x=p_data.index, y=p_data['DMA_DDD'], line=dict(color='#d8b4fe', width=1)), row=3, col=1)
-        fig.add_trace(go.Scatter(x=p_data.index, y=p_data['DMA_AMA'], line=dict(color='#facc15', width=1)), row=3, col=1)
+        def calc_vp_layer(d, mask=None):
+            if d.empty: return pd.DataFrame({'P':[], 'V':[]})
+            p_min, p_max = d['Low'].min(), d['High'].max()
+            edges = np.linspace(p_min, p_max, 41)
+            centers = (edges[:-1] + edges[1:]) / 2
+            sub = d if mask is None else d[mask]
+            if sub.empty: return pd.DataFrame({'P': centers, 'V': np.zeros(40)})
+            idx = pd.cut(sub['Close'], bins=edges, labels=False, include_lowest=True)
+            v_sum = sub.groupby(idx)['Volume'].sum().reindex(range(40), fill_value=0)
+            return pd.DataFrame({'P': centers, 'V': v_sum.values})
+
+        vp_all = calc_vp_layer(p_data)
+        vp_main = calc_vp_layer(p_data, inst_mask)
+
+        fig_vp = go.Figure()
+        fig_vp.add_trace(go.Scatter(x=vp_all['P'], y=vp_all['V'], fill='tozeroy', line=dict(color='#ffaa00', width=0), name='整體'))
+        fig_vp.add_trace(go.Scatter(x=vp_main['P'], y=vp_main['V'], fill='tozeroy', line=dict(color='#00d4ff', width=2), name='主力'))
         
-        fig.update_xaxes(tickformat=fmt)
-        fig.update_layout(height=800, template="plotly_dark", xaxis_rangeslider_visible=False, showlegend=False, margin=dict(t=10, b=10, l=10, r=10))
-        st.plotly_chart(fig, use_container_width=True)
-    except Exception as e:
-        st.error(f"圖表繪製發生錯誤 (可能是資料格式問題): {e}")
-
-    # 籌碼與新聞區 (加裝 Try-Catch)
-    try:
-        c1, c2 = st.columns(2)
-        mf = ((p_data['Close'] - p_data['Open']) / (p_data['High'] - p_data['Low'])) * p_data['Volume']
-        mf = mf.fillna(0).cumsum()
-        with c1:
-            st.caption("主力資金流 (Money Flow)")
-            fig_mf = go.Figure(go.Scatter(x=p_data.index, y=mf, fill='tozeroy', line=dict(color='#00d4ff')))
-            
-            # 主力動向標籤 (V13.20 回歸)
-            if len(mf) > 5:
-                trend = mf.iloc[-1] - mf.iloc[-5]
-                if trend > 0:
-                    fig_mf.add_annotation(x=p_data.index[-1], y=mf.iloc[-1], text="🟢 主力吸籌", showarrow=True, arrowhead=1, font=dict(color="#4ade80", size=12), bgcolor="#1b3a1b")
-                else:
-                    fig_mf.add_annotation(x=p_data.index[-1], y=mf.iloc[-1], text="🔴 主力出貨", showarrow=True, arrowhead=1, font=dict(color="#ff6b6b", size=12), bgcolor="#3a1b1b")
-
-            fig_mf.update_layout(height=250, template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10))
-            st.plotly_chart(fig_mf, use_container_width=True)
-            
-        with c2:
-            st.caption("籌碼分佈 (主力 vs 散戶)")
-            # 雙層籌碼
-            inst_mask = (p_data['Close'] > p_data['Open']) & (p_data['Volume'] > p_data['Vol_SMA5'])
-            
-            def calc_vp_layer(d, mask=None):
-                if d.empty: return pd.DataFrame({'P':[], 'V':[]})
-                p_min, p_max = d['Low'].min(), d['High'].max()
-                edges = np.linspace(p_min, p_max, 41)
-                centers = (edges[:-1] + edges[1:]) / 2
-                sub = d if mask is None else d[mask]
-                if sub.empty: return pd.DataFrame({'P': centers, 'V': np.zeros(40)})
-                idx = pd.cut(sub['Close'], bins=edges, labels=False, include_lowest=True)
-                v_sum = sub.groupby(idx)['Volume'].sum().reindex(range(40), fill_value=0)
-                return pd.DataFrame({'P': centers, 'V': v_sum.values})
-
-            vp_all = calc_vp_layer(p_data)
-            vp_main = calc_vp_layer(p_data, inst_mask)
-
-            fig_vp = go.Figure()
-            fig_vp.add_trace(go.Scatter(x=vp_all['P'], y=vp_all['V'], fill='tozeroy', line=dict(color='#ffaa00', width=0), name='整體'))
-            fig_vp.add_trace(go.Scatter(x=vp_main['P'], y=vp_main['V'], fill='tozeroy', line=dict(color='#00d4ff', width=2), name='主力'))
-            
-            # 標示現價
-            fig_vp.add_vline(x=close_v, line_dash="dash", line_color="white", annotation_text="現價")
-            fig_vp.update_layout(height=250, template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10), showlegend=True, legend=dict(orientation="h", y=1.1))
-            st.plotly_chart(fig_vp, use_container_width=True)
-    except Exception as e:
-        st.error(f"籌碼分析發生錯誤: {e}")
+        fig_vp.add_vline(x=close_v, line_dash="dash", line_color="white", annotation_text="現價")
+        fig_vp.update_layout(height=250, template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10), showlegend=True, legend=dict(orientation="h", y=1.1))
+        st.plotly_chart(fig_vp, use_container_width=True)
 
     st.markdown("---")
 
-    # 搜尋與分析
     is_tw = ".TW" in current_ticker or ".TWO" in current_ticker
     engine_name = "🇹🇼 台股重訊模式" if is_tw else "🇺🇸 美股雙境獵手 (SEC+財聯社)"
     
     with st.spinner(f"🕵️‍♂️ 啟動{engine_name}：正在掃描並過濾農場新聞..."):
-        items = fetch_strict_news(current_ticker, is_macro=False)
+        items = fetch_deep_news(current_ticker, is_macro=False)
     
     news_score = 0
     total_insider_penalty = 0
@@ -643,15 +683,19 @@ try:
         valid_count += 1
         if major: has_major = True
         
-        if major and s > 0: save_anchor(ls, current_ticker, item['title'], 3.0)
+        if major and s > 0: save_anchor(ls, current_ticker, item['title'], 3.0, item['date'])
         processed.append({'data': item, 'score': s, 'tag': tag})
 
-    # [V13.21] 熔斷機制
+    base_win_rate = 50.0
+    win_rate = base_win_rate + (news_score * 5)
+    if total_insider_penalty <= -3.0: win_rate -= 20 
+    win_rate = max(10.0, min(95.0, win_rate))
+    
     final_verdict = ""
     v_col = "gray"
     
     if total_insider_penalty <= -4.0:
-        final_verdict = f"⚠️ 謹慎持有 (熔斷)！內部人/CFO 大量拋售，抵銷利多"
+        final_verdict = f"⚠️ 謹慎持有 (熔斷)！內部人/CFO 大量拋售"
         v_col = "#ffc107"
         m_disp = f'<div class="macro-alert" style="background-color:#3a1b1b; color:#ffc107; border:1px solid #ffc107;">⚡ 觸發內部人熔斷：高管拋售過大，強制降評</div>'
     elif has_major:
@@ -671,12 +715,18 @@ try:
     with nc1:
         st.markdown(m_disp, unsafe_allow_html=True)
         if anchor:
-            st.markdown(f"""<div class="anchor-box"><b>⚓ 記憶錨定</b><br>{anchor['date']} {anchor['title']}</div>""", unsafe_allow_html=True)
+            st.markdown(f"""
+            <div class="anchor-box">
+                <div class="anchor-title-cn">⚓ 記憶錨定 ({anchor['date']})</div>
+                <div style="color: #00ffff; margin-bottom:5px;">{anchor['summary']} (+{anchor['score']}分)</div>
+                <div class="anchor-title-en">{anchor['title']}</div>
+            </div>""", unsafe_allow_html=True)
             
         st.markdown(f"""
         <div class="ai-box" style="text-align:left;">
             <h3 style="color:white; margin:0;">🔮 AI 戰情推演</h3>
             <div style="font-size:18px; color:{v_col}; font-weight:bold; margin-top:10px;">{final_verdict}</div>
+            <div style="font-size:24px; color:#00ffff; font-weight:bold; margin-top:5px;">📈 多方勝率：{win_rate:.1f}%</div>
             <hr style="border-color:#555;">
             <div style="font-size:14px; color:#ccc;">
                 <b>基本面總分：</b> {news_score:.1f}<br>
@@ -698,7 +748,9 @@ try:
                 st.markdown(f"""
                 <div class="news-card" style="{style}">
                     <a href="{p['data']['link']}" target="_blank" class="news-link">
-                        {p['tag']} <b>{p['data']['date']}</b> | {p['data']['title']}
+                        <span class="news-src">{p['data'].get('src', 'News')}</span> 
+                        <span class="news-date">{p['data']['date']}</span>
+                        {p['tag']} {p['data']['title']}
                     </a>
                 </div>
                 """, unsafe_allow_html=True)
