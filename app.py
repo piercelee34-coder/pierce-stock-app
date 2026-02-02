@@ -15,7 +15,7 @@ import time
 from streamlit_local_storage import LocalStorage
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V14.4 (訊號導航版)", layout="wide", page_icon="🧭")
+st.set_page_config(page_title="AI 實戰戰情室 V14.5 (永恆記憶版)", layout="wide", page_icon="🧠")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -55,23 +55,30 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. 自選股儲存系統 ---
+# --- 1. 自選股儲存系統 (記憶核心修復) ---
 DEFAULT_LIST = ['NVDA', 'TSM', 'ONDS', 'RXRX', 'CRCL', 'AAPL', 'TSLA', '0050.TW', '2330.TW', '3535.TW']
 
-def init_storage(): return LocalStorage()
+def init_storage(): 
+    return LocalStorage()
 
 def load_watchlist(ls):
     try:
+        # 嘗試從瀏覽器讀取
         stored = ls.getItem("my_watchlist")
+        # 確保讀到的是有效的清單
         if stored and isinstance(stored, list) and len(stored) > 0:
             return stored
         return DEFAULT_LIST
-    except: return DEFAULT_LIST
+    except:
+        return DEFAULT_LIST
 
 def save_watchlist(ls, watchlist):
     try: 
+        # 寫入瀏覽器
         ls.setItem("my_watchlist", watchlist)
-        time.sleep(0.1) 
+        # [V14.5] 增加彈出提示，這能確保寫入時間足夠，不會被立即刷新打斷
+        st.toast("✅ 清單已記憶！(F5 後將保留)", icon="💾")
+        time.sleep(0.2) 
     except: pass
 
 def simple_translate(text):
@@ -106,6 +113,7 @@ def get_valid_anchor(ls, ticker):
         key = f"anchor_{ticker}"
         data = ls.getItem(key)
         if not data: return None
+        # 檢查是否過期
         saved_date = datetime.strptime(data["saved_at"], "%Y-%m-%d")
         if (datetime.now() - saved_date).days > 5:
             ls.deleteItem(key)
@@ -113,11 +121,14 @@ def get_valid_anchor(ls, ticker):
         return data
     except: return None
 
+# 初始化儲存
 ls = init_storage()
+
+# 首次載入：如果 session_state 還沒有 watchlist，就從 LocalStorage 讀取
 if 'watchlist' not in st.session_state:
     st.session_state.watchlist = load_watchlist(ls)
 
-# --- 2. 核心搜尋引擎 (V14.3 深海拖網) ---
+# --- 2. 核心搜尋引擎 (V14.2 狙擊手過濾) ---
 
 def get_ticker_metadata(ticker):
     mapping = {
@@ -446,23 +457,26 @@ with st.sidebar:
     selection = st.radio("選擇股票", st.session_state.watchlist)
     current_ticker = selection
     
+    # [V14.5] 清單編輯區 (含記憶功能)
     c_up, c_down = st.columns(2)
     if c_up.button("⬆️ 上移", key="up") and current_ticker in st.session_state.watchlist:
         idx = st.session_state.watchlist.index(current_ticker)
         if idx > 0:
             st.session_state.watchlist[idx], st.session_state.watchlist[idx-1] = st.session_state.watchlist[idx-1], st.session_state.watchlist[idx]
             save_watchlist(ls, st.session_state.watchlist); st.rerun()
+            
     if c_down.button("⬇️ 下移", key="down") and current_ticker in st.session_state.watchlist:
         idx = st.session_state.watchlist.index(current_ticker)
         if idx < len(st.session_state.watchlist) - 1:
             st.session_state.watchlist[idx], st.session_state.watchlist[idx+1] = st.session_state.watchlist[idx+1], st.session_state.watchlist[idx]
             save_watchlist(ls, st.session_state.watchlist); st.rerun()
-    
+            
     c_top, c_bot = st.columns(2)
     if c_top.button("⏫ 置頂", key="top") and current_ticker in st.session_state.watchlist:
         st.session_state.watchlist.remove(current_ticker)
         st.session_state.watchlist.insert(0, current_ticker)
         save_watchlist(ls, st.session_state.watchlist); st.rerun()
+        
     if c_bot.button("⏬ 置底", key="bot") and current_ticker in st.session_state.watchlist:
         st.session_state.watchlist.remove(current_ticker)
         st.session_state.watchlist.append(current_ticker)
@@ -475,12 +489,14 @@ with st.sidebar:
         new_t = st.text_input("代號", placeholder="MSTR").upper()
         if st.button("➕", key="add") and new_t:
             if new_t not in st.session_state.watchlist:
-                st.session_state.watchlist.append(new_t); save_watchlist(ls, st.session_state.watchlist); st.rerun()
+                st.session_state.watchlist.append(new_t)
+                save_watchlist(ls, st.session_state.watchlist); st.rerun()
         if st.button("❌", key="del"):
             if current_ticker in st.session_state.watchlist:
-                st.session_state.watchlist.remove(current_ticker); save_watchlist(ls, st.session_state.watchlist); st.rerun()
+                st.session_state.watchlist.remove(current_ticker)
+                save_watchlist(ls, st.session_state.watchlist); st.rerun()
     
-    # [V14.4 新增] 訊號解讀指南
+    # [V14.4 功能保留] 訊號解讀指南
     with st.expander("📖 訊號解讀指南"):
         st.markdown("""
         📉 **股價還在跌** ➔ 出現 **【🐳吸】** (主力偷偷進場)
@@ -489,7 +505,7 @@ with st.sidebar:
         📉 **頭部成型跌** ➔ 出現 **【SELL】** (趨勢反轉，全面撤退)
         """)
 
-st.title(f"📈 {current_ticker} 實戰戰情室 V14.4")
+st.title(f"📈 {current_ticker} 實戰戰情室 V14.5")
 
 api_period = "1y"; api_int = "1d"; fmt = "%Y-%m-%d"
 if "當沖" in time_opt: api_period = "5d"; api_int = "15m"; fmt = "%H:%M"
@@ -683,6 +699,7 @@ try:
         valid_count += 1
         if major: has_major = True
         
+        # [V14.3] 傳入新聞日期
         if major and s > 0: save_anchor(ls, current_ticker, item['title'], 3.0, item['date'])
         processed.append({'data': item, 'score': s, 'tag': tag})
 
