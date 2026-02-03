@@ -13,7 +13,7 @@ import time
 import os
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V14.6 (檔案刻印版)", layout="wide", page_icon="🗿")
+st.set_page_config(page_title="AI 實戰戰情室 V14.7 (防誤觸鎖定版)", layout="wide", page_icon="🔒")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -400,27 +400,33 @@ def analyze_strategic_signals(df):
     macd = latest['MACD']; signal = latest['Signal_Line']
     if isinstance(macd, pd.Series): macd = macd.iloc[0]
     if isinstance(signal, pd.Series): signal = signal.iloc[0]
+    
     if macd > signal:
         if macd > 0: macd_text, macd_color = "零軸上金叉 (多頭)", "sig-green"
         else: macd_text, macd_color = "零軸下金叉 (反彈)", "sig-orange"
     else:
         if macd > 0: macd_text, macd_color = "零軸上死叉 (修正)", "sig-orange"
         else: macd_text, macd_color = "零軸下死叉 (空頭)", "sig-red"
+        
     vol = latest['Volume']; vol_ma = latest['Vol_SMA5']
     if vol > vol_ma * 1.5: vol_text, vol_color = "爆量", "sig-green"
     elif vol > vol_ma * 1.1: vol_text, vol_color = "量增", "sig-green"
     else: vol_text, vol_color = "量縮", "sig-gray"
+    
     rsi = latest['RSI']
     if rsi > 70: rsi_text, rsi_color = f"過熱 ({rsi:.0f})", "sig-red"
     elif rsi < 30: rsi_text, rsi_color = f"超賣 ({rsi:.0f})", "sig-green"
     else: rsi_text, rsi_color = f"中性 ({rsi:.0f})", "sig-gray"
+    
     summary = "觀望"; summary_color = "sig-gray"
     if not np.isnan(latest.get('TD_Sell_9', np.nan)): summary, summary_color = "🔺 九轉賣點", "sig-red"
     elif not np.isnan(latest.get('TD_Buy_9', np.nan)): summary, summary_color = f"🔻 九轉買點", "sig-green"
     elif macd > signal: summary, summary_color = "📈 偏多震盪", "sig-green"
     else: summary, summary_color = "⛈️ 空頭走勢", "sig-red"
+    
     hunter = detect_smart_money_divergence(df)
     if hunter: summary = hunter; summary_color = "sig-blue"
+    
     return {"MACD_Text": macd_text, "MACD_Color": macd_color, "Vol_Text": vol_text, "Vol_Color": vol_color, "RSI_Text": rsi_text, "RSI_Color": rsi_color, "Summary": summary, "Summary_Color": summary_color}
 
 def analyze_market_trend(df):
@@ -428,6 +434,7 @@ def analyze_market_trend(df):
     if isinstance(price, pd.Series): price = price.iloc[0]
     if isinstance(ma20, pd.Series): ma20 = ma20.iloc[0]
     if isinstance(ma60, pd.Series): ma60 = ma60.iloc[0]
+
     if price > ma20 and ma20 > ma60: return "🐂 牛市 (Bull)", "多頭排列", "sig-green"
     elif price < ma20 and ma20 < ma60: return "🐻 熊市 (Bear)", "空頭排列", "sig-red"
     else: return "⚖️ 震盪 (Range)", "區間整理", "sig-orange"
@@ -437,8 +444,10 @@ def predict_target_and_rating(df):
     upper = df['Bollinger_Upper'].iloc[-1]
     if isinstance(price, pd.Series): price = price.iloc[0]
     if isinstance(upper, pd.Series): upper = upper.iloc[0]
+    
     rating = "持有"
     if price > df['SMA_20'].iloc[-1]: rating = "強勢"
+    
     target_short = upper if price < upper else price * 1.05
     recent_high = df['High'].tail(60).max()
     if isinstance(recent_high, pd.Series): recent_high = recent_high.iloc[0]
@@ -449,9 +458,13 @@ def generate_buy_hint(df, current_price, s1, s2):
     latest = df.iloc[-1]
     if not np.isnan(latest.get('TD_Sell_9', np.nan)): return "🔺 藍色9 (上漲力竭)，注意獲利"
     if not np.isnan(latest.get('TD_Buy_9', np.nan)): return f"🔻 紅色9 (潛在買點)，SL:{latest.get('TD_Buy_Stop', 0):.2f}"
-    if (latest['DMA_DDD'] > latest['DMA_AMA']) and (df['DMA_DDD'].iloc[-2] <= df['DMA_AMA'].iloc[-2]): return "🚀 DMA 金叉，中線轉多"
+    
+    if (latest['DMA_DDD'] > latest['DMA_AMA']) and (df['DMA_DDD'].iloc[-2] <= df['DMA_AMA'].iloc[-2]): 
+        return "🚀 DMA 金叉，中線轉多"
+        
     divergence = detect_smart_money_divergence(df)
     if divergence: return f"🚨 {divergence}"
+    
     if abs(current_price - s1) / current_price < 0.015 and current_price > s1: return "回測月線有撐"
     return "觀望，等待訊號"
 
@@ -515,7 +528,7 @@ with st.sidebar:
         📉 **頭部成型跌** ➔ 出現 **【SELL】** (趨勢反轉，全面撤退)
         """)
 
-st.title(f"📈 {current_ticker} 實戰戰情室 V14.6")
+st.title(f"📈 {current_ticker} 實戰戰情室 V14.7")
 
 api_period = "1y"; api_int = "1d"; fmt = "%Y-%m-%d"
 if "當沖" in time_opt: api_period = "5d"; api_int = "15m"; fmt = "%H:%M"
@@ -528,11 +541,14 @@ def fetch_data(t, p, i):
     try: return yf.download(t, period=p, interval=i, progress=False)
     except: return pd.DataFrame()
 
+# 🛡️ 核心防護罩 (Try-Catch)
 try:
     df = fetch_data(current_ticker, api_period, api_int)
     if df.empty: st.error("無數據，請確認代號或網路"); st.stop()
     
-    if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+    if isinstance(df.columns, pd.MultiIndex): 
+        df.columns = df.columns.get_level_values(0)
+    
     df = df.loc[:, ~df.columns.duplicated()]
 
     df = calculate_indicators(df)
@@ -553,6 +569,7 @@ try:
     
     macro_txt, macro_note, macro_col, macro_score = get_macro_environment()
 
+    # 頂部資訊
     st.markdown(f"""
     <div class="price-card">
         <h1 style="margin:0; font-size: 50px;">${close_v:.2f}</h1>
@@ -562,6 +579,7 @@ try:
     </div>
     """, unsafe_allow_html=True)
     
+    # 2. 雙格局戰略雷達
     r1, r2, r3 = st.columns(3)
     with r1:
         st.markdown(f"""
@@ -586,105 +604,127 @@ try:
     with r3:
         st.markdown(f"""<div class="ai-box" style="border: 1px solid #00d4ff;"><h5 style="color:white; margin:0;">🎯 AI 目標</h5><div>短: ${t_s:.2f}</div><div>長: ${t_l:.2f}</div></div>""", unsafe_allow_html=True)
 
-    p_data = df.tail(150) if "週" in time_opt else (df.tail(120) if "日" in time_opt else df.tail(60))
-    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_width=[0.2, 0.2, 0.6])
-    fig.add_trace(go.Candlestick(x=p_data.index, open=p_data['Open'], high=p_data['High'], low=p_data['Low'], close=p_data['Close'], name='Price'), row=1, col=1)
-    
-    for i in range(5, len(p_data)):
-        curr = p_data.iloc[i]
-        prior = p_data.iloc[i-1]
+    # 繪圖 (V14.7 防誤觸鎖定)
+    try:
+        p_data = df.tail(150) if "週" in time_opt else (df.tail(120) if "日" in time_opt else df.tail(60))
+        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_width=[0.2, 0.2, 0.6])
+        fig.add_trace(go.Candlestick(x=p_data.index, open=p_data['Open'], high=p_data['High'], low=p_data['Low'], close=p_data['Close'], name='Price'), row=1, col=1)
         
-        if not np.isnan(curr.get('TD_Buy_9', np.nan)):
-             fig.add_annotation(x=p_data.index[i], y=curr['Low'], text="9", showarrow=False, font=dict(color='#ff6b6b', size=12, weight="bold"), row=1, col=1)
-        if not np.isnan(curr.get('TD_Sell_9', np.nan)):
-             fig.add_annotation(x=p_data.index[i], y=curr['High'], text="9", showarrow=False, font=dict(color='#4a9eff', size=12, weight="bold"), row=1, col=1)
-             
-        price_drop = curr['Close'] <= p_data.iloc[i-5]['Close'] * 0.99
-        ad_rise = curr['AD_Line'] > p_data.iloc[i-5]['AD_Line']
-        if price_drop and ad_rise and curr['RSI'] < 60:
-             fig.add_annotation(x=p_data.index[i], y=curr['Low']*0.98, text=f"🐳吸<br>${curr['Low']:.1f}", showarrow=True, arrowhead=1, ay=40, row=1, col=1, bgcolor="#6f42c1", font=dict(color="white", size=9))
+        # 復刻標記 (含價格)
+        for i in range(5, len(p_data)):
+            curr = p_data.iloc[i]
+            prior = p_data.iloc[i-1]
+            
+            # 九轉
+            if not np.isnan(curr.get('TD_Buy_9', np.nan)):
+                 fig.add_annotation(x=p_data.index[i], y=curr['Low'], text="9", showarrow=False, font=dict(color='#ff6b6b', size=12, weight="bold"), row=1, col=1)
+            if not np.isnan(curr.get('TD_Sell_9', np.nan)):
+                 fig.add_annotation(x=p_data.index[i], y=curr['High'], text="9", showarrow=False, font=dict(color='#4a9eff', size=12, weight="bold"), row=1, col=1)
+                 
+            # 主力吸籌
+            price_drop = curr['Close'] <= p_data.iloc[i-5]['Close'] * 0.99
+            ad_rise = curr['AD_Line'] > p_data.iloc[i-5]['AD_Line']
+            if price_drop and ad_rise and curr['RSI'] < 60:
+                 fig.add_annotation(x=p_data.index[i], y=curr['Low']*0.98, text=f"🐳吸<br>${curr['Low']:.1f}", showarrow=True, arrowhead=1, ay=40, row=1, col=1, bgcolor="#6f42c1", font=dict(color="white", size=9))
 
-        macd_buy = (curr['MACD'] > curr['Signal_Line']) and (prior['MACD'] <= prior['Signal_Line'])
-        macd_sell = (curr['MACD'] < curr['Signal_Line']) and (prior['MACD'] >= prior['Signal_Line'])
+            # 買入/賣出訊號
+            macd_buy = (curr['MACD'] > curr['Signal_Line']) and (prior['MACD'] <= prior['Signal_Line'])
+            macd_sell = (curr['MACD'] < curr['Signal_Line']) and (prior['MACD'] >= prior['Signal_Line'])
+            
+            if macd_buy:
+                 fig.add_annotation(x=p_data.index[i], y=curr['Low']*0.98, text=f"BUY<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=40, row=1, col=1, bgcolor="#28a745", font=dict(color="white", size=9))
+            if macd_sell:
+                 fig.add_annotation(x=p_data.index[i], y=curr['High']*1.02, text=f"SELL<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=-40, row=1, col=1, bgcolor="#dc3545", font=dict(color="white", size=9))
+
+            # 達標提示
+            if curr['High'] >= t_s and prior['High'] < t_s:
+                 fig.add_annotation(x=p_data.index[i], y=curr['High']*1.02, text=f"💰達標<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=-60, row=1, col=1, bgcolor="#ffc107", font=dict(color="black", size=9))
+
+        # 金叉死叉
+        macd_gold = (p_data['MACD'] > p_data['Signal_Line']) & (p_data['MACD'].shift(1) <= p_data['Signal_Line'].shift(1))
+        macd_dead = (p_data['MACD'] < p_data['Signal_Line']) & (p_data['MACD'].shift(1) >= p_data['Signal_Line'].shift(1))
         
-        if macd_buy:
-             fig.add_annotation(x=p_data.index[i], y=curr['Low']*0.98, text=f"BUY<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=40, row=1, col=1, bgcolor="#28a745", font=dict(color="white", size=9))
-        if macd_sell:
-             fig.add_annotation(x=p_data.index[i], y=curr['High']*1.02, text=f"SELL<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=-40, row=1, col=1, bgcolor="#dc3545", font=dict(color="white", size=9))
-
-        if curr['High'] >= t_s and prior['High'] < t_s:
-             fig.add_annotation(x=p_data.index[i], y=curr['High']*1.02, text=f"💰達標<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=-60, row=1, col=1, bgcolor="#ffc107", font=dict(color="black", size=9))
-
-    macd_gold = (p_data['MACD'] > p_data['Signal_Line']) & (p_data['MACD'].shift(1) <= p_data['Signal_Line'].shift(1))
-    macd_dead = (p_data['MACD'] < p_data['Signal_Line']) & (p_data['MACD'].shift(1) >= p_data['Signal_Line'].shift(1))
-    
-    valid_gold = p_data[macd_gold]
-    valid_dead = p_data[macd_dead]
-    
-    if not valid_gold.empty:
-        fig.add_trace(go.Scatter(x=valid_gold.index, y=valid_gold['MACD'], mode='markers', marker=dict(symbol='triangle-up', size=10, color='#d8b4fe'), name='金叉'), row=2, col=1)
-    if not valid_dead.empty:
-        fig.add_trace(go.Scatter(x=valid_dead.index, y=valid_dead['MACD'], mode='markers', marker=dict(symbol='triangle-down', size=10, color='#facc15'), name='死叉'), row=2, col=1)
-
-    fig.add_hline(y=s1, line_dash="dash", line_color="#00d4ff", annotation_text="MA20", row=1, col=1)
-    
-    colors = ['green' if v >= 0 else 'red' for v in p_data['MACD_Hist']]
-    fig.add_trace(go.Bar(x=p_data.index, y=p_data['MACD_Hist'], marker_color=colors), row=2, col=1)
-    fig.add_trace(go.Scatter(x=p_data.index, y=p_data['MACD'], line=dict(color='white', width=1)), row=2, col=1)
-    fig.add_trace(go.Scatter(x=p_data.index, y=p_data['Signal_Line'], line=dict(color='yellow', width=1)), row=2, col=1)
-    
-    fig.add_trace(go.Scatter(x=p_data.index, y=p_data['DMA_DDD'], line=dict(color='#d8b4fe', width=1)), row=3, col=1)
-    fig.add_trace(go.Scatter(x=p_data.index, y=p_data['DMA_AMA'], line=dict(color='#facc15', width=1)), row=3, col=1)
-    
-    fig.update_xaxes(tickformat=fmt)
-    fig.update_layout(height=800, template="plotly_dark", xaxis_rangeslider_visible=False, showlegend=False, margin=dict(t=10, b=10, l=10, r=10))
-    st.plotly_chart(fig, use_container_width=True)
-    
-    c1, c2 = st.columns(2)
-    mf = ((p_data['Close'] - p_data['Open']) / (p_data['High'] - p_data['Low'])) * p_data['Volume']
-    mf = mf.fillna(0).cumsum()
-    with c1:
-        st.caption("主力資金流 (Money Flow)")
-        fig_mf = go.Figure(go.Scatter(x=p_data.index, y=mf, fill='tozeroy', line=dict(color='#00d4ff')))
+        valid_gold = p_data[macd_gold]
+        valid_dead = p_data[macd_dead]
         
-        if len(mf) > 5:
-            trend = mf.iloc[-1] - mf.iloc[-5]
-            if trend > 0:
-                fig_mf.add_annotation(x=p_data.index[-1], y=mf.iloc[-1], text="🟢 主力吸籌", showarrow=True, arrowhead=1, font=dict(color="#4ade80", size=12), bgcolor="#1b3a1b")
-            else:
-                fig_mf.add_annotation(x=p_data.index[-1], y=mf.iloc[-1], text="🔴 主力出貨", showarrow=True, arrowhead=1, font=dict(color="#ff6b6b", size=12), bgcolor="#3a1b1b")
+        if not valid_gold.empty:
+            fig.add_trace(go.Scatter(x=valid_gold.index, y=valid_gold['MACD'], mode='markers', marker=dict(symbol='triangle-up', size=10, color='#d8b4fe'), name='金叉'), row=2, col=1)
+        if not valid_dead.empty:
+            fig.add_trace(go.Scatter(x=valid_dead.index, y=valid_dead['MACD'], mode='markers', marker=dict(symbol='triangle-down', size=10, color='#facc15'), name='死叉'), row=2, col=1)
 
-        fig_mf.update_layout(height=250, template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10))
-        st.plotly_chart(fig_mf, use_container_width=True)
+        fig.add_hline(y=s1, line_dash="dash", line_color="#00d4ff", annotation_text="MA20", row=1, col=1)
         
-    with c2:
-        st.caption("籌碼分佈 (主力 vs 散戶)")
-        inst_mask = (p_data['Close'] > p_data['Open']) & (p_data['Volume'] > p_data['Vol_SMA5'])
+        colors = ['green' if v >= 0 else 'red' for v in p_data['MACD_Hist']]
+        fig.add_trace(go.Bar(x=p_data.index, y=p_data['MACD_Hist'], marker_color=colors), row=2, col=1)
+        fig.add_trace(go.Scatter(x=p_data.index, y=p_data['MACD'], line=dict(color='white', width=1)), row=2, col=1)
+        fig.add_trace(go.Scatter(x=p_data.index, y=p_data['Signal_Line'], line=dict(color='yellow', width=1)), row=2, col=1)
         
-        def calc_vp_layer(d, mask=None):
-            if d.empty: return pd.DataFrame({'P':[], 'V':[]})
-            p_min, p_max = d['Low'].min(), d['High'].max()
-            edges = np.linspace(p_min, p_max, 41)
-            centers = (edges[:-1] + edges[1:]) / 2
-            sub = d if mask is None else d[mask]
-            if sub.empty: return pd.DataFrame({'P': centers, 'V': np.zeros(40)})
-            idx = pd.cut(sub['Close'], bins=edges, labels=False, include_lowest=True)
-            v_sum = sub.groupby(idx)['Volume'].sum().reindex(range(40), fill_value=0)
-            return pd.DataFrame({'P': centers, 'V': v_sum.values})
+        fig.add_trace(go.Scatter(x=p_data.index, y=p_data['DMA_DDD'], line=dict(color='#d8b4fe', width=1)), row=3, col=1)
+        fig.add_trace(go.Scatter(x=p_data.index, y=p_data['DMA_AMA'], line=dict(color='#facc15', width=1)), row=3, col=1)
+        
+        # [V14.7] 鎖定拖曳，防止誤觸
+        fig.update_layout(dragmode=False)
+        fig.update_xaxes(tickformat=fmt)
+        fig.update_layout(height=800, template="plotly_dark", xaxis_rangeslider_visible=False, showlegend=False, margin=dict(t=10, b=10, l=10, r=10))
+        
+        # [V14.7] 關閉工具列
+        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False, 'scrollZoom': False})
+    except Exception as e:
+        st.error(f"圖表繪製發生錯誤 (可能是資料格式問題): {e}")
 
-        vp_all = calc_vp_layer(p_data)
-        vp_main = calc_vp_layer(p_data, inst_mask)
+    # 籌碼與新聞區 (加裝 Try-Catch)
+    try:
+        c1, c2 = st.columns(2)
+        mf = ((p_data['Close'] - p_data['Open']) / (p_data['High'] - p_data['Low'])) * p_data['Volume']
+        mf = mf.fillna(0).cumsum()
+        with c1:
+            st.caption("主力資金流 (Money Flow)")
+            fig_mf = go.Figure(go.Scatter(x=p_data.index, y=mf, fill='tozeroy', line=dict(color='#00d4ff')))
+            
+            # 主力動向標籤 (V13.20 回歸)
+            if len(mf) > 5:
+                trend = mf.iloc[-1] - mf.iloc[-5]
+                if trend > 0:
+                    fig_mf.add_annotation(x=p_data.index[-1], y=mf.iloc[-1], text="🟢 主力吸籌", showarrow=True, arrowhead=1, font=dict(color="#4ade80", size=12), bgcolor="#1b3a1b")
+                else:
+                    fig_mf.add_annotation(x=p_data.index[-1], y=mf.iloc[-1], text="🔴 主力出貨", showarrow=True, arrowhead=1, font=dict(color="#ff6b6b", size=12), bgcolor="#3a1b1b")
 
-        fig_vp = go.Figure()
-        fig_vp.add_trace(go.Scatter(x=vp_all['P'], y=vp_all['V'], fill='tozeroy', line=dict(color='#ffaa00', width=0), name='整體'))
-        fig_vp.add_trace(go.Scatter(x=vp_main['P'], y=vp_main['V'], fill='tozeroy', line=dict(color='#00d4ff', width=2), name='主力'))
-        
-        fig_vp.add_vline(x=close_v, line_dash="dash", line_color="white", annotation_text="現價")
-        fig_vp.update_layout(height=250, template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10), showlegend=True, legend=dict(orientation="h", y=1.1))
-        st.plotly_chart(fig_vp, use_container_width=True)
+            fig_mf.update_layout(height=250, template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10), dragmode=False)
+            st.plotly_chart(fig_mf, use_container_width=True, config={'displayModeBar': False, 'scrollZoom': False})
+            
+        with c2:
+            st.caption("籌碼分佈 (主力 vs 散戶)")
+            # 雙層籌碼
+            inst_mask = (p_data['Close'] > p_data['Open']) & (p_data['Volume'] > p_data['Vol_SMA5'])
+            
+            def calc_vp_layer(d, mask=None):
+                if d.empty: return pd.DataFrame({'P':[], 'V':[]})
+                p_min, p_max = d['Low'].min(), d['High'].max()
+                edges = np.linspace(p_min, p_max, 41)
+                centers = (edges[:-1] + edges[1:]) / 2
+                sub = d if mask is None else d[mask]
+                if sub.empty: return pd.DataFrame({'P': centers, 'V': np.zeros(40)})
+                idx = pd.cut(sub['Close'], bins=edges, labels=False, include_lowest=True)
+                v_sum = sub.groupby(idx)['Volume'].sum().reindex(range(40), fill_value=0)
+                return pd.DataFrame({'P': centers, 'V': v_sum.values})
+
+            vp_all = calc_vp_layer(p_data)
+            vp_main = calc_vp_layer(p_data, inst_mask)
+
+            fig_vp = go.Figure()
+            fig_vp.add_trace(go.Scatter(x=vp_all['P'], y=vp_all['V'], fill='tozeroy', line=dict(color='#ffaa00', width=0), name='整體'))
+            fig_vp.add_trace(go.Scatter(x=vp_main['P'], y=vp_main['V'], fill='tozeroy', line=dict(color='#00d4ff', width=2), name='主力'))
+            
+            # 標示現價
+            fig_vp.add_vline(x=close_v, line_dash="dash", line_color="white", annotation_text="現價")
+            fig_vp.update_layout(height=250, template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10), showlegend=True, legend=dict(orientation="h", y=1.1), dragmode=False)
+            st.plotly_chart(fig_vp, use_container_width=True, config={'displayModeBar': False, 'scrollZoom': False})
+    except Exception as e:
+        st.error(f"籌碼分析發生錯誤: {e}")
 
     st.markdown("---")
 
+    # 搜尋與分析
     is_tw = ".TW" in current_ticker or ".TWO" in current_ticker
     engine_name = "🇹🇼 台股重訊模式" if is_tw else "🇺🇸 美股雙境獵手 (SEC+財聯社)"
     
@@ -713,11 +753,13 @@ try:
         if major and s > 0: update_anchor(current_ticker, item['title'], 3.0, item['date'])
         processed.append({'data': item, 'score': s, 'tag': tag})
 
+    # [V14.1] 勝率計算
     base_win_rate = 50.0
     win_rate = base_win_rate + (news_score * 5)
     if total_insider_penalty <= -3.0: win_rate -= 20 
     win_rate = max(10.0, min(95.0, win_rate))
     
+    # 熔斷機制
     final_verdict = ""
     v_col = "gray"
     
