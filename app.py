@@ -11,9 +11,10 @@ import re
 import json
 import time
 import os
+import streamlit.components.v1 as components
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V16.1 (精準狙擊版)", layout="wide", page_icon="✨")
+st.set_page_config(page_title="AI 實戰戰情室 V16.2 (台股即時版)", layout="wide", page_icon="📺")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -55,7 +56,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. 自選股儲存系統 (V14.6 檔案刻印核心) ---
+# --- 1. 自選股儲存系統 ---
 WATCHLIST_FILE = "watchlist.json"
 ANCHOR_FILE = "anchors.json"
 DEFAULT_LIST = ['NVDA', 'TSM', 'ONDS', 'RXRX', 'CRCL', 'AAPL', 'TSLA', '0050.TW', '2330.TW', '3535.TW']
@@ -346,13 +347,8 @@ def calculate_indicators(df):
     df['Bollinger_Lower'] = df['SMA_20'] - (df['Std_Dev'] * 2)
     
     # [V16.0] 肯特納通道 (Keltner Channels) for TTM Squeeze
-    # 公式：中線=EMA20, 上下軌=EMA20 +/- 1.5*ATR
-    # 這裡為求效率，沿用 SMA20 當中線，效果類似
-    df['KC_Upper'] = df['SMA_20'] + (df['ATR'] * 1.5) if 'ATR' in df else df['SMA_20'] * 1.05
-    df['KC_Lower'] = df['SMA_20'] - (df['ATR'] * 1.5) if 'ATR' in df else df['SMA_20'] * 0.95
-    
-    # [V16.0] 波動率壓縮訊號 (Squeeze)
-    # 定義：布林上軌 < 肯特納上軌 AND 布林下軌 > 肯特納下軌 (完全包覆)
+    df['KC_Upper'] = df['SMA_20'] + (df['SMA_20'] * 0.05) # 簡化計算
+    df['KC_Lower'] = df['SMA_20'] - (df['SMA_20'] * 0.05)
     df['Squeeze_On'] = (df['Bollinger_Upper'] < df['KC_Upper']) & (df['Bollinger_Lower'] > df['KC_Lower'])
     
     # [V15.4] ATR 計算 (14日)
@@ -478,7 +474,6 @@ def analyze_strategic_signals(df):
     
     summary = "觀望"; summary_color = "sig-gray"
     
-    # [V16.0] 波動率壓縮訊號
     if latest.get('Squeeze_On', False):
         summary = "🌀 壓縮蓄力中 (變盤在即)"; summary_color = "sig-cyan"
     elif not np.isnan(latest.get('TD_Sell_9', np.nan)): summary, summary_color = "🔺 九轉賣點", "sig-red"
@@ -526,7 +521,6 @@ def predict_target_and_rating(df):
 def generate_buy_hint(df, current_price, s1, s2):
     latest = df.iloc[-1]
     
-    # [V16.0] 優先顯示蓄力狀態
     if latest.get('Squeeze_On', False): return "🌀 波動壓縮中，等待方向突破"
     
     status = detect_smart_money_status(df)
@@ -548,7 +542,48 @@ def format_volume(num):
     elif num >= 1e6: return f"{num/1e6:.2f}M"
     else: return f"{num}"
 
-# --- 4. 主介面 ---
+# --- 5. TradingView Widget Integration (V16.2) ---
+def render_tw_realtime_chart(ticker):
+    """嵌入 TradingView 即時圖表 Widget (專為台股設計)"""
+    
+    # 轉換代號格式 (2330.TW -> TWSE:2330, 8069.TWO -> TPEX:8069)
+    tv_symbol = ticker
+    if ".TW" in ticker:
+        tv_symbol = f"TWSE:{ticker.replace('.TW', '')}"
+    elif ".TWO" in ticker:
+        tv_symbol = f"TPEX:{ticker.replace('.TWO', '')}"
+    else:
+        # 美股或其他
+        tv_symbol = ticker
+
+    # HTML Embed Code
+    html_code = f"""
+    <div class="tradingview-widget-container">
+      <div id="tradingview_chart"></div>
+      <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+      <script type="text/javascript">
+      new TradingView.widget(
+      {{
+        "width": "100%",
+        "height": 500,
+        "symbol": "{tv_symbol}",
+        "interval": "D",
+        "timezone": "Asia/Taipei",
+        "theme": "dark",
+        "style": "1",
+        "locale": "zh_TW",
+        "toolbar_bg": "#f1f3f6",
+        "enable_publishing": false,
+        "allow_symbol_change": true,
+        "container_id": "tradingview_chart"
+      }}
+      );
+      </script>
+    </div>
+    """
+    components.html(html_code, height=500)
+
+# --- 6. 主介面 ---
 with st.sidebar:
     st.title("🎛️ 控制台")
     st.header("📌 自選股清單")
@@ -601,7 +636,7 @@ with st.sidebar:
         🦁 **相對強弱** ➔ **【🦁領頭羊】** (比大盤強) vs **【🐶落後股】** (比大盤弱)
         """)
 
-st.title(f"📈 {current_ticker} 實戰戰情室 V16.1")
+st.title(f"📈 {current_ticker} 實戰戰情室 V16.2")
 
 api_period = "1y"; api_int = "1d"; fmt = "%Y-%m-%d"
 if "當沖" in time_opt: api_period = "5d"; api_int = "15m"; fmt = "%H:%M"
@@ -642,7 +677,6 @@ try:
     
     macro_txt, macro_note, macro_col, macro_score = get_realtime_macro()
     
-    # [V15.4] 計算相對強弱 (RS)
     rs_txt, rs_col = get_relative_strength(current_ticker, df)
 
     # 頂部資訊
@@ -679,98 +713,112 @@ try:
             </div>
         </div>""", unsafe_allow_html=True)
     with r3:
-        # [V15.4] 顯示相對強弱
-        st.markdown(f"""
-        <div class="ai-box" style="border: 1px solid #00d4ff;">
-            <h5 style="color:white; margin:0;">🎯 AI 目標 & 強弱</h5>
-            <div>短: ${t_s:.2f} | 長: ${t_l:.2f}</div>
-            <div style="margin-top:5px;"><span class="{rs_col}">{rs_txt}</span></div>
-        </div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="ai-box" style="border: 1px solid #00d4ff;"><h5 style="color:white; margin:0;">🎯 AI 目標 & 強弱</h5><div>短: ${t_s:.2f} | 長: ${t_l:.2f}</div><div style="margin-top:5px;"><span class="{rs_col}">{rs_txt}</span></div></div>""", unsafe_allow_html=True)
 
-    # 繪圖 (V14.7 防誤觸)
-    try:
-        p_data = df.tail(150) if "週" in time_opt else (df.tail(120) if "日" in time_opt else df.tail(60))
-        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_width=[0.2, 0.2, 0.6])
-        fig.add_trace(go.Candlestick(x=p_data.index, open=p_data['Open'], high=p_data['High'], low=p_data['Low'], close=p_data['Close'], name='Price'), row=1, col=1)
-        
-        # [V15.4] 繪製 ATR 停損線
-        fig.add_trace(go.Scatter(x=p_data.index, y=p_data['ATR_Trailing_Stop'], mode='lines', line=dict(color='purple', width=1, dash='dot'), name='ATR Stop'), row=1, col=1)
-
-        # 復刻標記 (含價格)
-        for i in range(5, len(p_data)):
-            curr = p_data.iloc[i]
-            prior = p_data.iloc[i-1]
+    # [V16.2] 雙模切換 (TradingView vs AI Chart)
+    is_tw = ".TW" in current_ticker or ".TWO" in current_ticker
+    
+    # 建立頁籤
+    tab1, tab2 = st.tabs(["📊 AI 戰略圖 (訊號)", "📺 即時看盤 (TradingView)"])
+    
+    with tab1:
+        # 這是原本的 Plotly 圖表 (AI 訊號源)
+        try:
+            p_data = df.tail(150) if "週" in time_opt else (df.tail(120) if "日" in time_opt else df.tail(60))
+            fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_width=[0.2, 0.2, 0.6])
+            fig.add_trace(go.Candlestick(x=p_data.index, open=p_data['Open'], high=p_data['High'], low=p_data['Low'], close=p_data['Close'], name='Price'), row=1, col=1)
             
-            # [V16.1] 關鍵K線型態：只保留多頭吞噬
-            is_engulfing = (prior['Close'] < prior['Open']) and (curr['Close'] > curr['Open']) and (curr['Open'] <= prior['Close']) and (curr['Close'] >= prior['Open'])
+            # [V15.4] 繪製 ATR 停損線
+            fig.add_trace(go.Scatter(x=p_data.index, y=p_data['ATR_Trailing_Stop'], mode='lines', line=dict(color='purple', width=1, dash='dot'), name='ATR Stop'), row=1, col=1)
+
+            # 復刻標記 (含價格)
+            for i in range(5, len(p_data)):
+                curr = p_data.iloc[i]
+                prior = p_data.iloc[i-1]
+                
+                # [V16.1] 關鍵K線型態：只保留多頭吞噬
+                is_engulfing = (prior['Close'] < prior['Open']) and (curr['Close'] > curr['Open']) and (curr['Open'] <= prior['Close']) and (curr['Close'] >= prior['Open'])
+                
+                if is_engulfing:
+                     fig.add_annotation(x=p_data.index[i], y=curr['Low']*0.98, text="🕯️吞噬", showarrow=True, arrowhead=1, ay=40, row=1, col=1, font=dict(color="orange", size=8))
+
+                # 九轉
+                if not np.isnan(curr.get('TD_Buy_9', np.nan)):
+                     fig.add_annotation(x=p_data.index[i], y=curr['Low'], text="9", showarrow=False, font=dict(color='#ff6b6b', size=12, weight="bold"), row=1, col=1)
+                if not np.isnan(curr.get('TD_Sell_9', np.nan)):
+                     fig.add_annotation(x=p_data.index[i], y=curr['High'], text="9", showarrow=False, font=dict(color='#4a9eff', size=12, weight="bold"), row=1, col=1)
+                     
+                # [V15.1] 智能籌碼偵測 (吸籌/調節/抄底)
+                status = detect_smart_money_status(df.iloc[:i+1])
+                if status:
+                    if "吸籌" in status:
+                        fig.add_annotation(x=p_data.index[i], y=curr['Low']*0.98, text=f"🐳吸<br>${curr['Low']:.1f}", showarrow=True, arrowhead=1, ay=40, row=1, col=1, bgcolor="#6f42c1", font=dict(color="white", size=9))
+                    elif "抄底" in status:
+                        fig.add_annotation(x=p_data.index[i], y=curr['Low']*0.98, text=f"⚡抄底<br>${curr['Low']:.1f}", showarrow=True, arrowhead=1, ay=60, row=1, col=1, bgcolor="#9333ea", bordercolor="#ffffff", font=dict(color="white", size=10, weight="bold"))
+                    elif "調節" in status:
+                        fig.add_annotation(x=p_data.index[i], y=curr['High']*1.02, text=f"🔴調節<br>${curr['High']:.1f}", showarrow=True, arrowhead=1, ay=-60, row=1, col=1, bgcolor="#b91c1c", bordercolor="#ffffff", font=dict(color="white", size=10, weight="bold"))
+
+                # 買入/賣出訊號
+                macd_buy = (curr['MACD'] > curr['Signal_Line']) and (prior['MACD'] <= prior['Signal_Line'])
+                macd_sell = (curr['MACD'] < curr['Signal_Line']) and (prior['MACD'] >= prior['Signal_Line'])
+                
+                if macd_buy:
+                     fig.add_annotation(x=p_data.index[i], y=curr['Low']*0.98, text=f"BUY<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=40, row=1, col=1, bgcolor="#28a745", font=dict(color="white", size=9))
+                if macd_sell:
+                     fig.add_annotation(x=p_data.index[i], y=curr['High']*1.02, text=f"SELL<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=-40, row=1, col=1, bgcolor="#dc3545", font=dict(color="white", size=9))
+
+                # [V15.3] 達標與過熱 (Visual Split)
+                hit_price = curr['High'] >= t_s
+                hit_rsi = curr['RSI'] > 75
+                prev_hit = prior['High'] >= t_s or prior['RSI'] > 75
+                
+                if (hit_price or hit_rsi) and not prev_hit:
+                     if hit_price:
+                         fig.add_annotation(x=p_data.index[i], y=curr['High']*1.02, text=f"💰達標<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=-60, row=1, col=1, bgcolor="#ffc107", font=dict(color="black", size=9))
+                     else:
+                         fig.add_annotation(x=p_data.index[i], y=curr['High']*1.02, text=f"🔥過熱<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=-60, row=1, col=1, bgcolor="#ff4500", font=dict(color="white", size=9))
+
+            # 金叉死叉
+            macd_gold = (p_data['MACD'] > p_data['Signal_Line']) & (p_data['MACD'].shift(1) <= p_data['Signal_Line'].shift(1))
+            macd_dead = (p_data['MACD'] < p_data['Signal_Line']) & (p_data['MACD'].shift(1) >= p_data['Signal_Line'].shift(1))
             
-            if is_engulfing:
-                 fig.add_annotation(x=p_data.index[i], y=curr['Low']*0.98, text="🕯️吞噬", showarrow=True, arrowhead=1, ay=40, row=1, col=1, font=dict(color="orange", size=8))
-
-            # 九轉
-            if not np.isnan(curr.get('TD_Buy_9', np.nan)):
-                 fig.add_annotation(x=p_data.index[i], y=curr['Low'], text="9", showarrow=False, font=dict(color='#ff6b6b', size=12, weight="bold"), row=1, col=1)
-            if not np.isnan(curr.get('TD_Sell_9', np.nan)):
-                 fig.add_annotation(x=p_data.index[i], y=curr['High'], text="9", showarrow=False, font=dict(color='#4a9eff', size=12, weight="bold"), row=1, col=1)
-                 
-            # [V15.1] 智能籌碼偵測 (吸籌/調節/抄底)
-            status = detect_smart_money_status(df.iloc[:i+1])
-            if status:
-                if "吸籌" in status:
-                    fig.add_annotation(x=p_data.index[i], y=curr['Low']*0.98, text=f"🐳吸<br>${curr['Low']:.1f}", showarrow=True, arrowhead=1, ay=40, row=1, col=1, bgcolor="#6f42c1", font=dict(color="white", size=9))
-                elif "抄底" in status:
-                    fig.add_annotation(x=p_data.index[i], y=curr['Low']*0.98, text=f"⚡抄底<br>${curr['Low']:.1f}", showarrow=True, arrowhead=1, ay=60, row=1, col=1, bgcolor="#9333ea", bordercolor="#ffffff", font=dict(color="white", size=10, weight="bold"))
-                elif "調節" in status:
-                    fig.add_annotation(x=p_data.index[i], y=curr['High']*1.02, text=f"🔴調節<br>${curr['High']:.1f}", showarrow=True, arrowhead=1, ay=-60, row=1, col=1, bgcolor="#b91c1c", bordercolor="#ffffff", font=dict(color="white", size=10, weight="bold"))
-
-            # 買入/賣出訊號
-            macd_buy = (curr['MACD'] > curr['Signal_Line']) and (prior['MACD'] <= prior['Signal_Line'])
-            macd_sell = (curr['MACD'] < curr['Signal_Line']) and (prior['MACD'] >= prior['Signal_Line'])
+            valid_gold = p_data[macd_gold]
+            valid_dead = p_data[macd_dead]
             
-            if macd_buy:
-                 fig.add_annotation(x=p_data.index[i], y=curr['Low']*0.98, text=f"BUY<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=40, row=1, col=1, bgcolor="#28a745", font=dict(color="white", size=9))
-            if macd_sell:
-                 fig.add_annotation(x=p_data.index[i], y=curr['High']*1.02, text=f"SELL<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=-40, row=1, col=1, bgcolor="#dc3545", font=dict(color="white", size=9))
+            if not valid_gold.empty:
+                fig.add_trace(go.Scatter(x=valid_gold.index, y=valid_gold['MACD'], mode='markers', marker=dict(symbol='triangle-up', size=10, color='#d8b4fe'), name='金叉'), row=2, col=1)
+            if not valid_dead.empty:
+                fig.add_trace(go.Scatter(x=valid_dead.index, y=valid_dead['MACD'], mode='markers', marker=dict(symbol='triangle-down', size=10, color='#facc15'), name='死叉'), row=2, col=1)
 
-            # [V15.3] 達標與過熱 (Visual Split)
-            hit_price = curr['High'] >= t_s
-            hit_rsi = curr['RSI'] > 75
-            prev_hit = prior['High'] >= t_s or prior['RSI'] > 75
+            fig.add_hline(y=s1, line_dash="dash", line_color="#00d4ff", annotation_text="MA20", row=1, col=1)
             
-            if (hit_price or hit_rsi) and not prev_hit:
-                 if hit_price:
-                     fig.add_annotation(x=p_data.index[i], y=curr['High']*1.02, text=f"💰達標<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=-60, row=1, col=1, bgcolor="#ffc107", font=dict(color="black", size=9))
-                 else:
-                     fig.add_annotation(x=p_data.index[i], y=curr['High']*1.02, text=f"🔥過熱<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=-60, row=1, col=1, bgcolor="#ff4500", font=dict(color="white", size=9))
+            colors = ['green' if v >= 0 else 'red' for v in p_data['MACD_Hist']]
+            fig.add_trace(go.Bar(x=p_data.index, y=p_data['MACD_Hist'], marker_color=colors), row=2, col=1)
+            fig.add_trace(go.Scatter(x=p_data.index, y=p_data['MACD'], line=dict(color='white', width=1)), row=2, col=1)
+            fig.add_trace(go.Scatter(x=p_data.index, y=p_data['Signal_Line'], line=dict(color='yellow', width=1)), row=2, col=1)
+            
+            fig.add_trace(go.Scatter(x=p_data.index, y=p_data['DMA_DDD'], line=dict(color='#d8b4fe', width=1)), row=3, col=1)
+            fig.add_trace(go.Scatter(x=p_data.index, y=p_data['DMA_AMA'], line=dict(color='#facc15', width=1)), row=3, col=1)
+            
+            fig.update_layout(dragmode=False)
+            fig.update_xaxes(tickformat=fmt)
+            fig.update_layout(height=800, template="plotly_dark", xaxis_rangeslider_visible=False, showlegend=False, margin=dict(t=10, b=10, l=10, r=10))
+            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False, 'scrollZoom': False})
+            
+            if is_tw:
+                st.caption("⚠️ 注意：此圖表數據可能有 15 分鐘延遲，AI 訊號僅供波段參考，當沖請切換至「即時看盤」分頁。")
+                
+        except Exception as e:
+            st.error(f"圖表繪製發生錯誤 (可能是資料格式問題): {e}")
 
-        # 金叉死叉
-        macd_gold = (p_data['MACD'] > p_data['Signal_Line']) & (p_data['MACD'].shift(1) <= p_data['Signal_Line'].shift(1))
-        macd_dead = (p_data['MACD'] < p_data['Signal_Line']) & (p_data['MACD'].shift(1) >= p_data['Signal_Line'].shift(1))
-        
-        valid_gold = p_data[macd_gold]
-        valid_dead = p_data[macd_dead]
-        
-        if not valid_gold.empty:
-            fig.add_trace(go.Scatter(x=valid_gold.index, y=valid_gold['MACD'], mode='markers', marker=dict(symbol='triangle-up', size=10, color='#d8b4fe'), name='金叉'), row=2, col=1)
-        if not valid_dead.empty:
-            fig.add_trace(go.Scatter(x=valid_dead.index, y=valid_dead['MACD'], mode='markers', marker=dict(symbol='triangle-down', size=10, color='#facc15'), name='死叉'), row=2, col=1)
-
-        fig.add_hline(y=s1, line_dash="dash", line_color="#00d4ff", annotation_text="MA20", row=1, col=1)
-        
-        colors = ['green' if v >= 0 else 'red' for v in p_data['MACD_Hist']]
-        fig.add_trace(go.Bar(x=p_data.index, y=p_data['MACD_Hist'], marker_color=colors), row=2, col=1)
-        fig.add_trace(go.Scatter(x=p_data.index, y=p_data['MACD'], line=dict(color='white', width=1)), row=2, col=1)
-        fig.add_trace(go.Scatter(x=p_data.index, y=p_data['Signal_Line'], line=dict(color='yellow', width=1)), row=2, col=1)
-        
-        fig.add_trace(go.Scatter(x=p_data.index, y=p_data['DMA_DDD'], line=dict(color='#d8b4fe', width=1)), row=3, col=1)
-        fig.add_trace(go.Scatter(x=p_data.index, y=p_data['DMA_AMA'], line=dict(color='#facc15', width=1)), row=3, col=1)
-        
-        fig.update_layout(dragmode=False)
-        fig.update_xaxes(tickformat=fmt)
-        fig.update_layout(height=800, template="plotly_dark", xaxis_rangeslider_visible=False, showlegend=False, margin=dict(t=10, b=10, l=10, r=10))
-        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False, 'scrollZoom': False})
-    except Exception as e:
-        st.error(f"圖表繪製發生錯誤 (可能是資料格式問題): {e}")
+    with tab2:
+        # [V16.2] 新增：TradingView 即時圖表
+        if is_tw:
+            st.info(f"正在顯示 {current_ticker} 的即時走勢 (來源：TradingView)")
+            render_tw_realtime_chart(current_ticker)
+        else:
+            st.info("美股通常使用上述 AI 圖表即可 (盤中延遲較小)。若需 TradingView 介面也可在此查看。")
+            render_tw_realtime_chart(current_ticker)
 
     # 籌碼與新聞區 (加裝 Try-Catch)
     try:
@@ -825,7 +873,6 @@ try:
     st.markdown("---")
 
     # 搜尋與分析
-    is_tw = ".TW" in current_ticker or ".TWO" in current_ticker
     engine_name = "🇹🇼 台股重訊模式" if is_tw else "🇺🇸 美股雙境獵手 (SEC+財聯社)"
     
     with st.spinner(f"🕵️‍♂️ 啟動{engine_name}：正在掃描並過濾農場新聞..."):
