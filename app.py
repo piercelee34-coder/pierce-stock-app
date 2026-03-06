@@ -14,7 +14,7 @@ import os
 import streamlit.components.v1 as components
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V16.8 (財報深挖版)", layout="wide", page_icon="⛏️")
+st.set_page_config(page_title="AI 實戰戰情室 V17.2 (財報透視版)", layout="wide", page_icon="🩻")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -35,10 +35,13 @@ st.markdown("""
     .anchor-title-cn {color: #fff; font-weight: bold; font-size: 14px; margin-bottom: 4px;}
     .anchor-title-en {color: #aaa; font-size: 11px; font-style: italic;}
     
-    /* 財報資訊樣式 */
-    .earnings-tag {background-color: #2c2c2e; padding: 5px 10px; border-radius: 15px; font-size: 13px; margin-top: 10px; border: 1px solid #555; display: inline-block;}
+    /* 財報與引擎資訊樣式 (V17.2 B+C 方案) */
+    .earnings-tag {background-color: #2c2c2e; padding: 5px 10px; border-radius: 15px; font-size: 13px; margin-top: 10px; border: 1px solid #555; display: inline-block; margin-right: 8px;}
+    .engine-tag {background-color: #1e3a8a; color: #38bdf8; padding: 5px 10px; border-radius: 15px; font-size: 13px; margin-top: 10px; border: 1px solid #38bdf8; display: inline-block; font-weight: bold;}
     .earn-beat {color: #4ade80; font-weight: bold;}
     .earn-miss {color: #ff6b6b; font-weight: bold;}
+    .earn-warn {color: #ffaa00; font-weight: bold;}
+    .earn-turn {color: #facc15; font-weight: bold;}
     
     /* 標籤系統 */
     .tag-sec {background-color: #003366; color: #00ffff; border: 1px solid #00ffff; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; margin-right: 5px;}
@@ -347,22 +350,23 @@ def calculate_indicators(df):
     df['Vol_SMA5'] = df['Volume'].rolling(window=5).mean()
     df['Std_Dev'] = df['Close'].rolling(window=20).std()
     
-    # 布林通道 (標準差)
     df['Bollinger_Upper'] = df['SMA_20'] + (df['Std_Dev'] * 2)
     df['Bollinger_Lower'] = df['SMA_20'] - (df['Std_Dev'] * 2)
     
-    # [V16.0] 肯特納通道 (Keltner Channels) for TTM Squeeze
     df['KC_Upper'] = df['SMA_20'] + (df['SMA_20'] * 0.05) 
     df['KC_Lower'] = df['SMA_20'] - (df['SMA_20'] * 0.05)
     df['Squeeze_On'] = (df['Bollinger_Upper'] < df['KC_Upper']) & (df['Bollinger_Lower'] > df['KC_Lower'])
     
-    # [V15.4] ATR 計算 (14日)
     high_low = df['High'] - df['Low']
     high_close = np.abs(df['High'] - df['Close'].shift())
     low_close = np.abs(df['Low'] - df['Close'].shift())
     ranges = pd.concat([high_low, high_close, low_close], axis=1)
     true_range = np.max(ranges, axis=1)
     df['ATR'] = true_range.rolling(14).mean()
+    
+    df['ATR_Pct'] = (df['ATR'] / df['Close']) * 100
+    df['Vol_60D_Avg'] = df['ATR_Pct'].rolling(window=60).mean()
+    
     df['ATR_Trailing_Stop'] = df['High'].rolling(22).max() - (df['ATR'] * 3)
 
     delta = df['Close'].diff()
@@ -396,6 +400,33 @@ def calculate_indicators(df):
             min_low = df['Low'].iloc[start_idx:i+1].min()
             df.loc[df.index[i], 'TD_Buy_Stop'] = min_low
     return df
+
+@st.cache_data(ttl=3600)
+def get_stock_engine_mode(ticker, df_data):
+    try:
+        info = yf.Ticker(ticker).info
+        mcap = info.get('marketCap', 0)
+        
+        vol_data = df_data['Vol_60D_Avg'].dropna()
+        latest_vol = vol_data.iloc[-1] if not vol_data.empty else 3.0
+        
+        is_tw = ".TW" in ticker or ".TWO" in ticker
+        mcap_threshold = 300_000_000_000 if is_tw else 10_000_000_000
+        
+        is_large_cap = mcap >= mcap_threshold
+        
+        if mcap == 0:
+            is_large_cap = latest_vol < 3.5
+
+        if is_large_cap and latest_vol < 4.0:
+            return "🏢 權值穩健 (啟動 MA60 濾網)", "trend"
+        elif is_large_cap and latest_vol >= 4.0:
+            return "🚀 巨型動能 (啟動 MA20 濾網)", "momentum"
+        else:
+            return "🎢 妖股轉折 (關閉均線濾網)", "reversal"
+    except:
+        return "🎢 動態模式 (預設)", "reversal"
+
 
 def get_relative_strength(ticker, stock_df):
     try:
@@ -547,7 +578,7 @@ def format_volume(num):
     elif num >= 1e6: return f"{num/1e6:.2f}M"
     else: return f"{num}"
 
-# [V16.8] 財報深挖 (Deep Dig: Info + Calendar + History)
+# [V17.2] 財報透視 (B+C 方案：真實 EPS 結合公司體質判定)
 @st.cache_data(ttl=3600)
 def get_earnings_status(ticker):
     ignore_list = ["0050", "0056", "00878", "QQQ", "SPY", "DIA", "IWM", "^TWII", "^IXIC", "^GSPC"]
@@ -557,11 +588,10 @@ def get_earnings_status(ticker):
     try:
         t = yf.Ticker(ticker)
         
-        # --- 策略 A: 優先挖取 Info (Next Earnings) ---
+        # 1. 抓取日期
         next_date = "N/A"
         try:
             info = t.info
-            # 嘗試欄位: earningsTimestamp, earningsTimestampStart
             if 'earningsTimestamp' in info and info['earningsTimestamp']:
                 ts = info['earningsTimestamp']
                 next_date = datetime.fromtimestamp(ts).strftime('%Y-%m-%d')
@@ -570,44 +600,50 @@ def get_earnings_status(ticker):
                 next_date = datetime.fromtimestamp(ts).strftime('%Y-%m-%d')
         except: pass
 
-        # --- 策略 B: 備用挖取 Calendar (Next or Last) ---
-        # 如果 Info 失敗，才用 Calendar 補救
         if next_date == "N/A":
             try:
                 cal = t.calendar
                 if cal and isinstance(cal, dict) and 'Earnings Date' in cal:
                     next_date = cal['Earnings Date'][0].strftime('%Y-%m-%d')
                 elif isinstance(cal, pd.DataFrame) and not cal.empty:
-                    # 嘗試抓未來
                     future = cal.index[cal.index > datetime.now()]
                     if not future.empty:
                         next_date = future[0].strftime('%Y-%m-%d')
                     else:
-                        # 真的沒有未來，就顯示最近一次
                         next_date = f"{cal.index[-1].strftime('%Y-%m-%d')} (已公佈)"
             except: pass
 
-        # --- 策略 C: 挖取歷史表現 (Surprise) ---
-        last_result = "N/A"
+        # 2. B+C 方案：真實 EPS 與預估比對
+        last_result = "⚪ 無數據"
         try:
             hist = t.earnings_dates
             if hist is not None and not hist.empty:
                 past = hist[hist['Reported EPS'].notna()]
                 if not past.empty:
                     last = past.iloc[0]
-                    surprise = last['Surprise(%)']
-                    if pd.notna(surprise):
-                        if abs(surprise) > 10.0:
-                            if surprise > 0: last_result = '<span class="earn-beat">🚀 大幅優於預期</span>'
-                            else: last_result = '<span class="earn-miss">📉 大幅低於預期</span>'
-                        else:
-                            val_str = f"{surprise*100:.1f}%"
-                            if surprise > 0: last_result = f'<span class="earn-beat">🟢優於預期 (+{val_str})</span>'
-                            elif surprise < 0: last_result = f'<span class="earn-miss">🔴低於預期 ({val_str})</span>'
-                            else: last_result = "⚪符合預期"
+                    actual = last['Reported EPS']
+                    estimate = last.get('EPS Estimate', np.nan)
+                    
+                    if pd.notna(actual) and pd.notna(estimate):
+                        # 四大情境判斷
+                        if actual > 0 and actual >= estimate:
+                            last_result = f'<span class="earn-beat">🟢 獲利且優於預期 (EPS: {actual:.2f} | 預估: {estimate:.2f})</span>'
+                        elif actual <= 0 and actual >= estimate:
+                            last_result = f'<span class="earn-turn">🟡 虧損收斂/優於預期 (EPS: {actual:.2f} | 預估: {estimate:.2f})</span>'
+                        elif actual > 0 and actual < estimate:
+                            last_result = f'<span class="earn-warn">🟠 獲利但遜於預期 (EPS: {actual:.2f} | 預估: {estimate:.2f})</span>'
+                        else: # actual <= 0 and actual < estimate
+                            last_result = f'<span class="earn-miss">🔴 虧損且遜於預期 (EPS: {actual:.2f} | 預估: {estimate:.2f})</span>'
+                    
+                    # 備案：如果沒有預估值，只看驚喜度 (修復之前 % 乘錯的問題)
+                    elif pd.notna(last.get('Surprise(%)')):
+                        surprise = last['Surprise(%)']
+                        val_str = f"{surprise:.1f}%" # 修復 Bug: 移除 * 100
+                        if surprise > 0: last_result = f'<span class="earn-beat">🟢 優於預期 (+{val_str})</span>'
+                        elif surprise < 0: last_result = f'<span class="earn-miss">🔴 遜於預期 ({val_str})</span>'
+                        else: last_result = "⚪ 符合預期"
         except: pass
         
-        # V16.8 絕對顯示: 只要不是 ETF，就算全是 N/A 也要顯示出來，讓使用者知道
         display_label = "📅 財報"
         if "已公佈" in next_date: display_label = "🔙 上次財報"
         elif next_date == "N/A": display_label = "📅 財報日"
@@ -615,7 +651,7 @@ def get_earnings_status(ticker):
         return display_label + f": {next_date}", last_result
         
     except:
-        return "📅 財報: N/A", "N/A"
+        return "📅 財報: N/A", "⚪ 無數據"
 
 # --- 6. 主介面 ---
 with st.sidebar:
@@ -624,7 +660,6 @@ with st.sidebar:
     selection = st.radio("選擇股票", st.session_state.watchlist)
     current_ticker = selection
     
-    # [V16.6] 修復：重新定義 is_tw
     is_tw = ".TW" in current_ticker or ".TWO" in current_ticker
 
     c_up, c_down = st.columns(2)
@@ -667,13 +702,13 @@ with st.sidebar:
     
     with st.expander("📖 訊號解讀指南"):
         st.markdown("""
-        🌀 **波動壓縮** ➔ 出現 **【🌀蓄力中】** (布林縮口，準備大行情)
+        ⚙️ **智能引擎** ➔ 自動分類大/小股票，過濾假 BUY 訊號。
+        🌀 **波動壓縮** ➔ 出現 **【🌀蓄力中】** (布林縮口，準備變盤)
         🕯️ **K線型態** ➔ 出現 **【🕯️吞噬】** (多頭強力反轉)
-        🛡️ **紫色階梯線** ➔ **【ATR停損線】** (跌破此線無條件離場)
-        🦁 **相對強弱** ➔ **【🦁領頭羊】** (比大盤強) vs **【🐶落後股】** (比大盤弱)
+        🛡️ **螢光橘階梯線** ➔ **【ATR停損線】** (跌破此線無條件離場)
         """)
 
-st.title(f"📈 {current_ticker} 實戰戰情室 V16.8")
+st.title(f"📈 {current_ticker} 實戰戰情室 V17.2")
 
 api_period = "1y"; api_int = "1d"; fmt = "%Y-%m-%d"
 if "當沖" in time_opt: api_period = "5d"; api_int = "15m"; fmt = "%H:%M"
@@ -686,7 +721,6 @@ def fetch_data(t, p, i):
     try: return yf.download(t, period=p, interval=i, progress=False)
     except: return pd.DataFrame()
 
-# 🛡️ 核心防護罩 (Try-Catch)
 try:
     df = fetch_data(current_ticker, api_period, api_int)
     if df.empty: st.error("無數據，請確認代號或網路"); st.stop()
@@ -716,24 +750,25 @@ try:
     
     rs_txt, rs_col = get_relative_strength(current_ticker, df)
     
-    # [V16.8] 財報深挖 (強制顯示)
+    engine_label, engine_type = get_stock_engine_mode(current_ticker, df)
+    
+    # [V17.2] 財報透視渲染
     ern_date_label, ern_res_html = get_earnings_status(current_ticker)
     ern_html = ""
     if ern_date_label:
         ern_html = f'<div class="earnings-tag">{ern_date_label} | {ern_res_html}</div>'
 
-    # 頂部資訊
     st.markdown(f"""
     <div class="price-card">
         <h1 style="margin:0; font-size: 50px;">${close_v:.2f}</h1>
         <h3 style="margin:0; color: {clr};">{chg:+.2f}%</h3>
         <p style="color: gray;">量: {format_volume(latest['Volume'])}</p>
-        <div class="buy-hint">💡 操作提示: {buy_hint_text}</div>
+        <div class="buy-hint" style="margin-bottom: 10px;">💡 操作提示: {buy_hint_text}</div>
+        <div class="engine-tag">⚙️ 智能引擎: {engine_label}</div>
         {ern_html}
     </div>
     """, unsafe_allow_html=True)
     
-    # 2. 雙格局戰略雷達
     r1, r2, r3 = st.columns(3)
     with r1:
         st.markdown(f"""
@@ -759,33 +794,28 @@ try:
     with r3:
         st.markdown(f"""<div class="ai-box" style="border: 1px solid #00d4ff;"><h5 style="color:white; margin:0;">🎯 AI 目標 & 強弱</h5><div>短: ${t_s:.2f} | 長: ${t_l:.2f}</div><div style="margin-top:5px;"><span class="{rs_col}">{rs_txt}</span></div></div>""", unsafe_allow_html=True)
 
-    # 繪圖 (V14.7 防誤觸)
     try:
         p_data = df.tail(150) if "週" in time_opt else (df.tail(120) if "日" in time_opt else df.tail(60))
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_width=[0.2, 0.2, 0.6])
         fig.add_trace(go.Candlestick(x=p_data.index, open=p_data['Open'], high=p_data['High'], low=p_data['Low'], close=p_data['Close'], name='Price'), row=1, col=1)
         
-        # [V15.4] 繪製 ATR 停損線
-        fig.add_trace(go.Scatter(x=p_data.index, y=p_data['ATR_Trailing_Stop'], mode='lines', line=dict(color='purple', width=1, dash='dot'), name='ATR Stop'), row=1, col=1)
+        # [V17.2] 繪製 ATR 停損線 (改為螢光橘 #FF5F1F，加寬為 1.5)
+        fig.add_trace(go.Scatter(x=p_data.index, y=p_data['ATR_Trailing_Stop'], mode='lines', line=dict(color='#FF5F1F', width=1.5, dash='dot'), name='ATR Stop'), row=1, col=1)
 
-        # 復刻標記 (含價格)
         for i in range(5, len(p_data)):
             curr = p_data.iloc[i]
             prior = p_data.iloc[i-1]
             
-            # [V16.1] 關鍵K線型態：只保留多頭吞噬
             is_engulfing = (prior['Close'] < prior['Open']) and (curr['Close'] > curr['Open']) and (curr['Open'] <= prior['Close']) and (curr['Close'] >= prior['Open'])
             
             if is_engulfing:
                  fig.add_annotation(x=p_data.index[i], y=curr['Low']*0.98, text="🕯️吞噬", showarrow=True, arrowhead=1, ay=40, row=1, col=1, font=dict(color="orange", size=8))
 
-            # 九轉
             if not np.isnan(curr.get('TD_Buy_9', np.nan)):
                  fig.add_annotation(x=p_data.index[i], y=curr['Low'], text="9", showarrow=False, font=dict(color='#ff6b6b', size=12, weight="bold"), row=1, col=1)
             if not np.isnan(curr.get('TD_Sell_9', np.nan)):
                  fig.add_annotation(x=p_data.index[i], y=curr['High'], text="9", showarrow=False, font=dict(color='#4a9eff', size=12, weight="bold"), row=1, col=1)
                  
-            # [V15.1] 智能籌碼偵測 (吸籌/調節/抄底)
             status = detect_smart_money_status(df.iloc[:i+1])
             if status:
                 if "吸籌" in status:
@@ -795,16 +825,21 @@ try:
                 elif "調節" in status:
                     fig.add_annotation(x=p_data.index[i], y=curr['High']*1.02, text=f"🔴調節<br>${curr['High']:.1f}", showarrow=True, arrowhead=1, ay=-60, row=1, col=1, bgcolor="#b91c1c", bordercolor="#ffffff", font=dict(color="white", size=10, weight="bold"))
 
-            # 買入/賣出訊號
             macd_buy = (curr['MACD'] > curr['Signal_Line']) and (prior['MACD'] <= prior['Signal_Line'])
             macd_sell = (curr['MACD'] < curr['Signal_Line']) and (prior['MACD'] >= prior['Signal_Line'])
             
-            if macd_buy:
+            is_valid_buy = macd_buy
+            if is_valid_buy:
+                if engine_type == "trend" and curr['Close'] < curr.get('SMA_60', 0):
+                    is_valid_buy = False
+                elif engine_type == "momentum" and curr['Close'] < curr.get('SMA_20', 0):
+                    is_valid_buy = False
+            
+            if is_valid_buy:
                  fig.add_annotation(x=p_data.index[i], y=curr['Low']*0.98, text=f"BUY<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=40, row=1, col=1, bgcolor="#28a745", font=dict(color="white", size=9))
             if macd_sell:
                  fig.add_annotation(x=p_data.index[i], y=curr['High']*1.02, text=f"SELL<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=-40, row=1, col=1, bgcolor="#dc3545", font=dict(color="white", size=9))
 
-            # [V15.3] 達標與過熱 (Visual Split)
             hit_price = curr['High'] >= t_s
             hit_rsi = curr['RSI'] > 75
             prev_hit = prior['High'] >= t_s or prior['RSI'] > 75
@@ -815,7 +850,6 @@ try:
                  else:
                      fig.add_annotation(x=p_data.index[i], y=curr['High']*1.02, text=f"🔥過熱<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ay=-60, row=1, col=1, bgcolor="#ff4500", font=dict(color="white", size=9))
 
-        # 金叉死叉
         macd_gold = (p_data['MACD'] > p_data['Signal_Line']) & (p_data['MACD'].shift(1) <= p_data['Signal_Line'].shift(1))
         macd_dead = (p_data['MACD'] < p_data['Signal_Line']) & (p_data['MACD'].shift(1) >= p_data['Signal_Line'].shift(1))
         
@@ -848,7 +882,6 @@ try:
     except Exception as e:
         st.error(f"圖表繪製發生錯誤 (可能是資料格式問題): {e}")
 
-    # 籌碼與新聞區 (加裝 Try-Catch)
     try:
         c1, c2 = st.columns(2)
         mf = ((p_data['Close'] - p_data['Open']) / (p_data['High'] - p_data['Low'])) * p_data['Volume']
@@ -857,7 +890,6 @@ try:
             st.caption("主力資金流 (Money Flow)")
             fig_mf = go.Figure(go.Scatter(x=p_data.index, y=mf, fill='tozeroy', line=dict(color='#00d4ff')))
             
-            # 主力動向標籤 (V13.20 回歸)
             if len(mf) > 5:
                 trend = mf.iloc[-1] - mf.iloc[-5]
                 if trend > 0:
@@ -870,7 +902,6 @@ try:
             
         with c2:
             st.caption("籌碼分佈 (主力 vs 散戶)")
-            # 雙層籌碼
             inst_mask = (p_data['Close'] > p_data['Open']) & (p_data['Volume'] > p_data['Vol_SMA5'])
             
             def calc_vp_layer(d, mask=None):
@@ -891,7 +922,6 @@ try:
             fig_vp.add_trace(go.Scatter(x=vp_all['P'], y=vp_all['V'], fill='tozeroy', line=dict(color='#ffaa00', width=0), name='整體'))
             fig_vp.add_trace(go.Scatter(x=vp_main['P'], y=vp_main['V'], fill='tozeroy', line=dict(color='#00d4ff', width=2), name='主力'))
             
-            # 標示現價
             fig_vp.add_vline(x=close_v, line_dash="dash", line_color="white", annotation_text="現價")
             fig_vp.update_layout(height=250, template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10), showlegend=True, legend=dict(orientation="h", y=1.1), dragmode=False)
             st.plotly_chart(fig_vp, use_container_width=True, config={'displayModeBar': False, 'scrollZoom': False})
@@ -900,7 +930,6 @@ try:
 
     st.markdown("---")
 
-    # 搜尋與分析
     engine_name = "🇹🇼 台股重訊模式" if is_tw else "🇺🇸 美股雙境獵手 (SEC+財聯社)"
     
     with st.spinner(f"🕵️‍♂️ 啟動{engine_name}：正在掃描並過濾農場新聞..."):
@@ -924,7 +953,6 @@ try:
         valid_count += 1
         if major: has_major = True
         
-        # [V14.3] 傳入新聞日期
         if major and s > 0: update_anchor(current_ticker, item['title'], 3.0, item['date'])
         processed.append({'data': item, 'score': s, 'tag': tag})
 
