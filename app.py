@@ -14,7 +14,7 @@ import os
 import streamlit.components.v1 as components
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V17.2 (財報透視版)", layout="wide", page_icon="🩻")
+st.set_page_config(page_title="AI 實戰戰情室 V17.3 (智能探底版)", layout="wide", page_icon="🎯")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -35,7 +35,7 @@ st.markdown("""
     .anchor-title-cn {color: #fff; font-weight: bold; font-size: 14px; margin-bottom: 4px;}
     .anchor-title-en {color: #aaa; font-size: 11px; font-style: italic;}
     
-    /* 財報與引擎資訊樣式 (V17.2 B+C 方案) */
+    /* 財報與引擎資訊樣式 */
     .earnings-tag {background-color: #2c2c2e; padding: 5px 10px; border-radius: 15px; font-size: 13px; margin-top: 10px; border: 1px solid #555; display: inline-block; margin-right: 8px;}
     .engine-tag {background-color: #1e3a8a; color: #38bdf8; padding: 5px 10px; border-radius: 15px; font-size: 13px; margin-top: 10px; border: 1px solid #38bdf8; display: inline-block; font-weight: bold;}
     .earn-beat {color: #4ade80; font-weight: bold;}
@@ -578,7 +578,6 @@ def format_volume(num):
     elif num >= 1e6: return f"{num/1e6:.2f}M"
     else: return f"{num}"
 
-# [V17.2] 財報透視 (B+C 方案：真實 EPS 結合公司體質判定)
 @st.cache_data(ttl=3600)
 def get_earnings_status(ticker):
     ignore_list = ["0050", "0056", "00878", "QQQ", "SPY", "DIA", "IWM", "^TWII", "^IXIC", "^GSPC"]
@@ -588,7 +587,6 @@ def get_earnings_status(ticker):
     try:
         t = yf.Ticker(ticker)
         
-        # 1. 抓取日期
         next_date = "N/A"
         try:
             info = t.info
@@ -613,7 +611,6 @@ def get_earnings_status(ticker):
                         next_date = f"{cal.index[-1].strftime('%Y-%m-%d')} (已公佈)"
             except: pass
 
-        # 2. B+C 方案：真實 EPS 與預估比對
         last_result = "⚪ 無數據"
         try:
             hist = t.earnings_dates
@@ -625,20 +622,18 @@ def get_earnings_status(ticker):
                     estimate = last.get('EPS Estimate', np.nan)
                     
                     if pd.notna(actual) and pd.notna(estimate):
-                        # 四大情境判斷
                         if actual > 0 and actual >= estimate:
                             last_result = f'<span class="earn-beat">🟢 獲利且優於預期 (EPS: {actual:.2f} | 預估: {estimate:.2f})</span>'
                         elif actual <= 0 and actual >= estimate:
                             last_result = f'<span class="earn-turn">🟡 虧損收斂/優於預期 (EPS: {actual:.2f} | 預估: {estimate:.2f})</span>'
                         elif actual > 0 and actual < estimate:
                             last_result = f'<span class="earn-warn">🟠 獲利但遜於預期 (EPS: {actual:.2f} | 預估: {estimate:.2f})</span>'
-                        else: # actual <= 0 and actual < estimate
+                        else:
                             last_result = f'<span class="earn-miss">🔴 虧損且遜於預期 (EPS: {actual:.2f} | 預估: {estimate:.2f})</span>'
                     
-                    # 備案：如果沒有預估值，只看驚喜度 (修復之前 % 乘錯的問題)
                     elif pd.notna(last.get('Surprise(%)')):
                         surprise = last['Surprise(%)']
-                        val_str = f"{surprise:.1f}%" # 修復 Bug: 移除 * 100
+                        val_str = f"{surprise:.1f}%"
                         if surprise > 0: last_result = f'<span class="earn-beat">🟢 優於預期 (+{val_str})</span>'
                         elif surprise < 0: last_result = f'<span class="earn-miss">🔴 遜於預期 ({val_str})</span>'
                         else: last_result = "⚪ 符合預期"
@@ -703,12 +698,13 @@ with st.sidebar:
     with st.expander("📖 訊號解讀指南"):
         st.markdown("""
         ⚙️ **智能引擎** ➔ 自動分類大/小股票，過濾假 BUY 訊號。
+        🎯 **探底目標** ➔ 顯示最佳掛單價，免去盤中盲目追高殺低。
         🌀 **波動壓縮** ➔ 出現 **【🌀蓄力中】** (布林縮口，準備變盤)
         🕯️ **K線型態** ➔ 出現 **【🕯️吞噬】** (多頭強力反轉)
-        🛡️ **螢光橘階梯線** ➔ **【ATR停損線】** (跌破此線無條件離場)
+        🛡️ **橘色階梯線** ➔ **【ATR停損線】** (跌破此線無條件離場)
         """)
 
-st.title(f"📈 {current_ticker} 實戰戰情室 V17.2")
+st.title(f"📈 {current_ticker} 實戰戰情室 V17.3")
 
 api_period = "1y"; api_int = "1d"; fmt = "%Y-%m-%d"
 if "當沖" in time_opt: api_period = "5d"; api_int = "15m"; fmt = "%H:%M"
@@ -747,23 +743,48 @@ try:
     buy_hint_text = generate_buy_hint(df, close_v, s1, s2)
     
     macro_txt, macro_note, macro_col, macro_score = get_realtime_macro()
-    
     rs_txt, rs_col = get_relative_strength(current_ticker, df)
-    
     engine_label, engine_type = get_stock_engine_mode(current_ticker, df)
     
-    # [V17.2] 財報透視渲染
+    # [V17.3] 智能探底判定邏輯 (Smart Bottom Finder)
+    recent_60 = df.tail(60)
+    vp_60 = calculate_volume_profile(recent_60, bins=40)
+    if not vp_60.empty:
+        vol_poc = vp_60.loc[vp_60['Volume'].idxmax(), 'Price']
+    else:
+        vol_poc = close_v
+        
+    lowest_20 = df['Low'].tail(20).min()
+    
+    bottom_label = ""
+    if engine_type in ["trend", "momentum"]:
+        ma60_val = latest.get('SMA_60', 0)
+        if pd.isna(ma60_val) or ma60_val == 0:
+            bottom_price = vol_poc
+        else:
+            bottom_price = max(ma60_val, vol_poc)
+        bottom_label = f"🎯 波段探底: ${bottom_price:.2f} (大戶防守/籌碼區)"
+    else:
+        bb_lower = latest.get('Bollinger_Lower', 0)
+        if pd.isna(bb_lower) or bb_lower == 0:
+            bottom_price = lowest_20
+        else:
+            bottom_price = min(bb_lower, lowest_20)
+        bottom_label = f"🎯 恐慌探底: ${bottom_price:.2f} (極端超賣/嚴設停損)"
+    
     ern_date_label, ern_res_html = get_earnings_status(current_ticker)
     ern_html = ""
     if ern_date_label:
         ern_html = f'<div class="earnings-tag">{ern_date_label} | {ern_res_html}</div>'
 
+    # [V17.3] 頂部資訊整合探底提示
     st.markdown(f"""
     <div class="price-card">
         <h1 style="margin:0; font-size: 50px;">${close_v:.2f}</h1>
         <h3 style="margin:0; color: {clr};">{chg:+.2f}%</h3>
         <p style="color: gray;">量: {format_volume(latest['Volume'])}</p>
-        <div class="buy-hint" style="margin-bottom: 10px;">💡 操作提示: {buy_hint_text}</div>
+        <div class="buy-hint" style="margin-bottom: 5px;">💡 操作提示: {buy_hint_text}</div>
+        <div class="buy-hint" style="margin-bottom: 10px; color: #00ffff; font-weight: bold;">{bottom_label}</div>
         <div class="engine-tag">⚙️ 智能引擎: {engine_label}</div>
         {ern_html}
     </div>
@@ -799,7 +820,7 @@ try:
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_width=[0.2, 0.2, 0.6])
         fig.add_trace(go.Candlestick(x=p_data.index, open=p_data['Open'], high=p_data['High'], low=p_data['Low'], close=p_data['Close'], name='Price'), row=1, col=1)
         
-        # [V17.2] 繪製 ATR 停損線 (改為螢光橘 #FF5F1F，加寬為 1.5)
+        # 繪製 ATR 停損線 (改為螢光橘 #FF5F1F，加寬為 1.5)
         fig.add_trace(go.Scatter(x=p_data.index, y=p_data['ATR_Trailing_Stop'], mode='lines', line=dict(color='#FF5F1F', width=1.5, dash='dot'), name='ATR Stop'), row=1, col=1)
 
         for i in range(5, len(p_data)):
