@@ -14,7 +14,7 @@ import os
 import streamlit.components.v1 as components
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V17.4 (大盤防護版)", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="AI 實戰戰情室 V17.5 (探底視覺強化版)", layout="wide", page_icon="🎯")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -401,17 +401,14 @@ def calculate_indicators(df):
             df.loc[df.index[i], 'TD_Buy_Stop'] = min_low
     return df
 
-# [V17.4] 指數與 ETF 強制白名單保護
 @st.cache_data(ttl=3600)
 def get_stock_engine_mode(ticker, df_data):
-    # --- 步驟 1：指數與 ETF 強制白名單 ---
     etf_list = ["QQQ", "SPY", "DIA", "IWM", "0050.TW", "0056.TW", "00878.TW"]
     is_index_or_etf = ticker.startswith("^") or any(etf in ticker for etf in etf_list)
     
     if is_index_or_etf:
         return "🏢 權值大盤 (強制 MA60 濾網)", "trend"
 
-    # --- 步驟 2：一般個股體檢邏輯 ---
     try:
         info = yf.Ticker(ticker).info
         mcap = info.get('marketCap', 0)
@@ -661,6 +658,8 @@ def get_earnings_status(ticker):
 with st.sidebar:
     st.title("🎛️ 控制台")
     st.header("📌 自選股清單")
+    
+    # 保持原樣的純代碼顯示 (不加中文翻譯遮罩)
     selection = st.radio("選擇股票", st.session_state.watchlist)
     current_ticker = selection
     
@@ -713,7 +712,7 @@ with st.sidebar:
         🛡️ **橘色階梯線** ➔ **【ATR停損線】** (跌破此線無條件離場)
         """)
 
-st.title(f"📈 {current_ticker} 實戰戰情室 V17.4")
+st.title(f"📈 {current_ticker} 實戰戰情室 V17.5")
 
 api_period = "1y"; api_int = "1d"; fmt = "%Y-%m-%d"
 if "當沖" in time_opt: api_period = "5d"; api_int = "15m"; fmt = "%H:%M"
@@ -785,13 +784,14 @@ try:
     if ern_date_label:
         ern_html = f'<div class="earnings-tag">{ern_date_label} | {ern_res_html}</div>'
 
+    # [V17.5] 放大波段探底字體，拿掉複雜中文顯示邏輯
     st.markdown(f"""
     <div class="price-card">
         <h1 style="margin:0; font-size: 50px;">${close_v:.2f}</h1>
         <h3 style="margin:0; color: {clr};">{chg:+.2f}%</h3>
         <p style="color: gray;">量: {format_volume(latest['Volume'])}</p>
         <div class="buy-hint" style="margin-bottom: 5px;">💡 操作提示: {buy_hint_text}</div>
-        <div class="buy-hint" style="margin-bottom: 10px; color: #00ffff; font-weight: bold;">{bottom_label}</div>
+        <div class="buy-hint" style="margin-bottom: 10px; color: #00ffff; font-weight: bold; font-size: 20px;">{bottom_label}</div>
         <div class="engine-tag">⚙️ 智能引擎: {engine_label}</div>
         {ern_html}
     </div>
