@@ -14,7 +14,7 @@ import os
 import streamlit.components.v1 as components
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V17.3 (智能探底版)", layout="wide", page_icon="🎯")
+st.set_page_config(page_title="AI 實戰戰情室 V17.4 (大盤防護版)", layout="wide", page_icon="🛡️")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -67,7 +67,7 @@ st.markdown("""
 # --- 1. 自選股儲存系統 ---
 WATCHLIST_FILE = "watchlist.json"
 ANCHOR_FILE = "anchors.json"
-DEFAULT_LIST = ['NVDA', 'TSM', 'ONDS', 'RXRX', 'CRCL', 'AAPL', 'TSLA', '0050.TW', '2330.TW', '3535.TW']
+DEFAULT_LIST = ['^IXIC', 'QQQ', 'NVDA', 'TSM', 'ONDS', 'RXRX', 'CRCL', 'AAPL', 'TSLA', '0050.TW']
 
 def load_watchlist():
     if os.path.exists(WATCHLIST_FILE):
@@ -401,8 +401,17 @@ def calculate_indicators(df):
             df.loc[df.index[i], 'TD_Buy_Stop'] = min_low
     return df
 
+# [V17.4] 指數與 ETF 強制白名單保護
 @st.cache_data(ttl=3600)
 def get_stock_engine_mode(ticker, df_data):
+    # --- 步驟 1：指數與 ETF 強制白名單 ---
+    etf_list = ["QQQ", "SPY", "DIA", "IWM", "0050.TW", "0056.TW", "00878.TW"]
+    is_index_or_etf = ticker.startswith("^") or any(etf in ticker for etf in etf_list)
+    
+    if is_index_or_etf:
+        return "🏢 權值大盤 (強制 MA60 濾網)", "trend"
+
+    # --- 步驟 2：一般個股體檢邏輯 ---
     try:
         info = yf.Ticker(ticker).info
         mcap = info.get('marketCap', 0)
@@ -697,14 +706,14 @@ with st.sidebar:
     
     with st.expander("📖 訊號解讀指南"):
         st.markdown("""
-        ⚙️ **智能引擎** ➔ 自動分類大/小股票，過濾假 BUY 訊號。
+        ⚙️ **智能引擎** ➔ 自動分類大/小股票與大盤，過濾假 BUY 訊號。
         🎯 **探底目標** ➔ 顯示最佳掛單價，免去盤中盲目追高殺低。
         🌀 **波動壓縮** ➔ 出現 **【🌀蓄力中】** (布林縮口，準備變盤)
         🕯️ **K線型態** ➔ 出現 **【🕯️吞噬】** (多頭強力反轉)
         🛡️ **橘色階梯線** ➔ **【ATR停損線】** (跌破此線無條件離場)
         """)
 
-st.title(f"📈 {current_ticker} 實戰戰情室 V17.3")
+st.title(f"📈 {current_ticker} 實戰戰情室 V17.4")
 
 api_period = "1y"; api_int = "1d"; fmt = "%Y-%m-%d"
 if "當沖" in time_opt: api_period = "5d"; api_int = "15m"; fmt = "%H:%M"
@@ -746,7 +755,6 @@ try:
     rs_txt, rs_col = get_relative_strength(current_ticker, df)
     engine_label, engine_type = get_stock_engine_mode(current_ticker, df)
     
-    # [V17.3] 智能探底判定邏輯 (Smart Bottom Finder)
     recent_60 = df.tail(60)
     vp_60 = calculate_volume_profile(recent_60, bins=40)
     if not vp_60.empty:
@@ -777,7 +785,6 @@ try:
     if ern_date_label:
         ern_html = f'<div class="earnings-tag">{ern_date_label} | {ern_res_html}</div>'
 
-    # [V17.3] 頂部資訊整合探底提示
     st.markdown(f"""
     <div class="price-card">
         <h1 style="margin:0; font-size: 50px;">${close_v:.2f}</h1>
@@ -820,7 +827,6 @@ try:
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_width=[0.2, 0.2, 0.6])
         fig.add_trace(go.Candlestick(x=p_data.index, open=p_data['Open'], high=p_data['High'], low=p_data['Low'], close=p_data['Close'], name='Price'), row=1, col=1)
         
-        # 繪製 ATR 停損線 (改為螢光橘 #FF5F1F，加寬為 1.5)
         fig.add_trace(go.Scatter(x=p_data.index, y=p_data['ATR_Trailing_Stop'], mode='lines', line=dict(color='#FF5F1F', width=1.5, dash='dot'), name='ATR Stop'), row=1, col=1)
 
         for i in range(5, len(p_data)):
