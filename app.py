@@ -14,7 +14,7 @@ import os
 import streamlit.components.v1 as components
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V17.7.1 (全火力復原版)", layout="wide", page_icon="📁")
+st.set_page_config(page_title="AI 實戰戰情室 V17.8.1 (除蟲版)", layout="wide", page_icon="📁")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -59,8 +59,6 @@ st.markdown("""
     .sig-blue {background-color: #1b3a4a; color: #4a9eff; border: 1px solid #00d4ff; padding: 2px 6px; border-radius: 4px; font-size: 12px;}
     .sig-purple {background-color: #4a1b4a; color: #d8b4fe; border: 1px solid #a855f7; padding: 2px 6px; border-radius: 4px; font-size: 12px;}
     .sig-cyan {background-color: #083344; color: #22d3ee; border: 1px solid #06b6d4; padding: 2px 6px; border-radius: 4px; font-size: 12px;}
-    
-    .header-legend {text-align: right; font-size: 13px; padding-top: 25px; color: #ccc;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -419,7 +417,6 @@ def find_structural_box_bottom(df, current_price):
         return current_price, df.index[0], df.index[-1], False
     
     p_data = df.tail(120).copy()
-    # 修正敏銳度 window=5
     p_data['Min10'] = p_data['Low'].rolling(window=5, center=True, min_periods=1).min()
     swing_lows = p_data[p_data['Low'] == p_data['Min10']]
     valid_lows = swing_lows[swing_lows['Low'] < current_price * 0.98]
@@ -487,7 +484,6 @@ def detect_smart_money_status(df):
     if latest['Close'] < latest['Bollinger_Lower'] and latest['RSI'] < 30: 
         return "⚡ 乖離抄底 (超賣)"
     
-    # 復原 V17.5 版本的 AD_Line 背離吸籌邏輯
     price_now = latest['Close']; price_5d = df['Close'].iloc[-6]
     ad_now = latest['AD_Line']; ad_5d = df['AD_Line'].iloc[-6]
     rsi = latest['RSI']
@@ -559,6 +555,7 @@ def analyze_market_trend(df):
     if isinstance(ma20, pd.Series): ma20 = ma20.iloc[0]
     if isinstance(ma60, pd.Series): ma60 = ma60.iloc[0]
 
+    # [修復] 正確回傳 3 個變數
     if price > ma20 and ma20 > ma60: return "🐂 牛市 (Bull)", "多頭排列", "sig-green"
     elif price < ma20 and ma20 < ma60: return "🐻 熊市 (Bear)", "空頭排列", "sig-red"
     else: return "⚖️ 震盪 (Range)", "區間整理", "sig-orange"
@@ -654,11 +651,12 @@ with st.sidebar:
     is_tw = ".TW" in current_ticker or ".TWO" in current_ticker
 
     active_list_name = None
+    # 預設全部不展開 (expanded=False)
     for wl_name, tickers in st.session_state.watchlists.items():
-        is_expanded = current_ticker in tickers
-        if is_expanded: active_list_name = wl_name
+        if current_ticker in tickers:
+            active_list_name = wl_name
             
-        with st.expander(f"📁 {wl_name} ({len(tickers)}檔)", expanded=is_expanded):
+        with st.expander(f"📁 {wl_name} ({len(tickers)}檔)", expanded=False):
             for t in tickers:
                 is_selected = (t == current_ticker)
                 btn_type = "primary" if is_selected else "secondary"
@@ -667,16 +665,30 @@ with st.sidebar:
                     st.session_state.current_ticker = t
                     st.rerun()
 
+    # --- 完整的排序按鈕模組 ---
     st.markdown("---")
-    c_up, c_down = st.columns(2)
+    st.markdown("<span style='color:gray; font-size:13px;'>排列目前代碼</span>", unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    c3, c4 = st.columns(2)
+    
     if active_list_name:
         lst = st.session_state.watchlists[active_list_name]
         idx = lst.index(current_ticker) if current_ticker in lst else -1
-        if c_up.button("⬆️ 上移目前代碼") and idx > 0:
+        
+        if c1.button("⏫ 置頂") and idx > 0:
+            lst.insert(0, lst.pop(idx))
+            save_watchlists(st.session_state.watchlists); st.rerun()
+            
+        if c2.button("⬆️ 上移") and idx > 0:
             lst[idx], lst[idx-1] = lst[idx-1], lst[idx]
             save_watchlists(st.session_state.watchlists); st.rerun()
-        if c_down.button("⬇️ 下移目前代碼") and 0 <= idx < len(lst) - 1:
+            
+        if c3.button("⬇️ 下移") and 0 <= idx < len(lst) - 1:
             lst[idx], lst[idx+1] = lst[idx+1], lst[idx]
+            save_watchlists(st.session_state.watchlists); st.rerun()
+            
+        if c4.button("⏬ 置底") and 0 <= idx < len(lst) - 1:
+            lst.append(lst.pop(idx))
             save_watchlists(st.session_state.watchlists); st.rerun()
 
     st.markdown("---")
@@ -695,7 +707,11 @@ with st.sidebar:
         if st.button("❌ 刪除目前股票", use_container_width=True) and active_list_name:
             st.session_state.watchlists[active_list_name].remove(current_ticker)
             save_watchlists(st.session_state.watchlists)
-            st.session_state.current_ticker = "^IXIC" 
+            # 防呆：刪除後隨便顯示第一組清單的第一個
+            first_avail = "^IXIC"
+            for wl in st.session_state.watchlists.values():
+                if wl: first_avail = wl[0]; break
+            st.session_state.current_ticker = first_avail 
             st.rerun()
     
     with st.expander("📖 雙防線系統解讀"):
@@ -705,7 +721,7 @@ with st.sidebar:
         🕳️ **破底警告** ➔ 找不到歷史支撐，代表正在殺盤破底，嚴禁接刀！
         """)
 
-st.title(f"📈 {current_ticker} 實戰戰情室 V17.7.1")
+st.title(f"📈 {current_ticker} 實戰戰情室 V17.8.1")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(current_ticker, period=api_p, interval=api_i, progress=False)
@@ -720,7 +736,10 @@ chg = (close_v - prev_v) / prev_v * 100
 clr = "green" if chg >= 0 else "red"
 
 sigs = analyze_strategic_signals(df)
+
+# [修復] 接住 3 個變數
 trend_txt, trend_note, trend_col = analyze_market_trend(df)
+
 rs_txt, rs_col = get_relative_strength(current_ticker, df)
 engine_label, engine_type = get_stock_engine_mode(current_ticker, df)
 macro_txt, macro_note, macro_col, macro_score = get_realtime_macro()
@@ -778,7 +797,7 @@ with r2:
     <div class="ai-box">
         <h5 style="color:white; margin:0;">⚖️ 雙重格局</h5>
         <div style="margin-top:5px;">
-            <div>🏢 個股: <span class="{trend_col}">{trend_txt}</span></div>
+            <div>🏢 個股: <span class="{trend_col}">{trend_txt} ({trend_note})</span></div>
             <div>🌍 宏觀: <span class="{macro_col}">{macro_txt}</span></div>
             <div style="font-size:11px; color:#aaa;">({macro_note})</div>
         </div>
