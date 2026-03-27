@@ -14,7 +14,7 @@ import os
 import streamlit.components.v1 as components
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V17.9 (未來劇本推演版)", layout="wide", page_icon="🔮")
+st.set_page_config(page_title="AI 實戰戰情室 V17.10 (十字準星與劇本進化版)", layout="wide", page_icon="🎯")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -30,12 +30,10 @@ st.markdown("""
     
     .macro-alert {background-color: #3a1b1b; color: #ff6b6b; padding: 10px; border-radius: 5px; border: 1px solid #dc3545; margin-bottom: 10px; font-weight: bold;}
     
-    /* 錨定區塊樣式優化 */
     .anchor-box {background-color: #1b3a4a; color: #00d4ff; padding: 12px; border-radius: 5px; border: 1px solid #00d4ff; margin-bottom: 10px; font-size: 13px; text-align: left;}
     .anchor-title-cn {color: #fff; font-weight: bold; font-size: 14px; margin-bottom: 4px;}
     .anchor-title-en {color: #aaa; font-size: 11px; font-style: italic;}
     
-    /* 財報與引擎資訊樣式 */
     .earnings-tag {background-color: #2c2c2e; padding: 5px 10px; border-radius: 15px; font-size: 13px; margin-top: 10px; border: 1px solid #555; display: inline-block; margin-right: 8px;}
     .engine-tag {background-color: #1e3a8a; color: #38bdf8; padding: 5px 10px; border-radius: 15px; font-size: 13px; margin-top: 10px; border: 1px solid #38bdf8; display: inline-block; font-weight: bold;}
     .earn-beat {color: #4ade80; font-weight: bold;}
@@ -43,7 +41,6 @@ st.markdown("""
     .earn-warn {color: #ffaa00; font-weight: bold;}
     .earn-turn {color: #facc15; font-weight: bold;}
     
-    /* 標籤系統 */
     .tag-sec {background-color: #003366; color: #00ffff; border: 1px solid #00ffff; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; margin-right: 5px;}
     .tag-vip {background-color: #4a1b4a; color: #d8b4fe; border: 1px solid #a855f7; padding: 2px 6px; border-radius: 4px; font-size: 12px; margin-right: 5px;}
     .tag-hard {background-color: #1b3a1b; color: #4ade80; border: 1px solid #28a745; padding: 2px 6px; border-radius: 4px; font-size: 12px; margin-right: 5px;}
@@ -51,7 +48,6 @@ st.markdown("""
     .tag-risk {background-color: #3a1b1b; color: #ff6b6b; border: 1px solid #dc3545; padding: 2px 6px; border-radius: 4px; font-size: 12px; font-weight: bold;}
     .tag-chip {background-color: #555; color: #facc15; border: 1px solid #facc15; padding: 2px 6px; border-radius: 4px; font-size: 12px; font-weight: bold;}
 
-    /* 戰略雷達信號燈 */
     .sig-green {background-color: #1b3a1b; color: #4ade80; border: 1px solid #28a745; padding: 2px 6px; border-radius: 4px; font-size: 12px;}
     .sig-red {background-color: #3a1b1b; color: #ff6b6b; border: 1px solid #dc3545; padding: 2px 6px; border-radius: 4px; font-size: 12px;}
     .sig-gray {background-color: #333; color: #ccc; border: 1px solid #666; padding: 2px 6px; border-radius: 4px; font-size: 12px;}
@@ -78,20 +74,16 @@ def load_watchlists():
         try:
             with open(WATCHLIST_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if isinstance(data, list):
-                    migrated = DEFAULT_WATCHLISTS.copy()
-                    migrated["清單 A"] = data
-                    return migrated
+                if isinstance(data, list): return {"清單 A": data, **{k:v for k,v in DEFAULT_WATCHLISTS.items() if k != "清單 A"}}
                 return data
         except: return DEFAULT_WATCHLISTS
     return DEFAULT_WATCHLISTS
 
 def save_watchlists(watchlists):
     try:
-        with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
-            json.dump(watchlists, f)
+        with open(WATCHLIST_FILE, "w", encoding="utf-8") as f: json.dump(watchlists, f)
         st.session_state.watchlists = watchlists
-    except Exception as e: pass
+    except: pass
 
 def load_anchors():
     if os.path.exists(ANCHOR_FILE):
@@ -133,11 +125,11 @@ def get_valid_anchor(ticker):
     return data
 
 if 'watchlists' not in st.session_state: st.session_state.watchlists = load_watchlists()
+if 'active_list' not in st.session_state: st.session_state.active_list = list(st.session_state.watchlists.keys())[0]
 if 'current_ticker' not in st.session_state:
-    first_ticker = "^IXIC"
-    for wl in st.session_state.watchlists.values():
-        if wl: first_ticker = wl[0]; break
-    st.session_state.current_ticker = first_ticker
+    st.session_state.current_ticker = "^IXIC"
+    for wl_name, wl in st.session_state.watchlists.items():
+        if wl: st.session_state.current_ticker = wl[0]; st.session_state.active_list = wl_name; break
 
 # --- 2. 核心搜尋引擎 ---
 def get_ticker_metadata(ticker):
@@ -178,7 +170,7 @@ def fetch_deep_news(ticker, is_macro=False):
         is_small_cap = ticker.split('.')[0] in ['ONDS', 'RXRX', 'CRCL', 'SOUN', 'PLTR'] 
         
         if is_tw_stock:
-            q_tw = f"{ticker.replace('.TW', '').replace('.TWO', '')}+(重訊+OR+營收+OR+EPS+OR+法說)"
+            q_tw = f"{ticker.replace('.TW', '').replace('.TWO', '')}+(重訊+OR+重大訊息+OR+營收+OR+公告+OR+自結+OR+EPS+OR+配息+OR+法說)"
             try:
                 resp = requests.get(f"https://news.google.com/rss/search?q={q_tw}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", headers=headers, timeout=4)
                 if resp.status_code == 200:
@@ -317,46 +309,42 @@ def find_structural_box_bottom(df, current_price):
     else:
         return p_data['Low'].min(), p_data.index[0], p_data.index[-1], True
 
-# [V17.9] AI 劇本軌跡推演核心演算法
-def generate_projection_points(df, trend_text, current_p, iron_p):
+# [V17.10 升級] AI 劇本推演邏輯進化 (尊重歷史箱底)
+def generate_projection_points(df, trend_text, current_p, iron_p, is_breaking_down):
     last_d = df.index[-1]
     future_dates = []
     d = last_d
-    # 產生未來的 20 個交易日 (跳過週末)
     while len(future_dates) < 20:
         d += pd.Timedelta(days=1)
-        if d.weekday() < 5: 
-            future_dates.append(d)
+        if d.weekday() < 5: future_dates.append(d)
             
-    pts_x = [last_d]
-    pts_y = [current_p]
-    
-    # 尋找近期的壓力區 (20日高點)
+    pts_x = [last_d]; pts_y = [current_p]
     res = df['High'].tail(20).max()
     sup = iron_p if iron_p > 0 else df['Low'].tail(20).min()
     
-    # 防呆：避免空間過窄
     if res <= current_p: res = current_p * 1.05
     if sup >= current_p: sup = current_p * 0.95
     
-    # 依據趨勢畫出預測折線
     if "牛市" in trend_text:
-        # N 字型上攻：先回測稍微跌一點，然後衝破前高
-        pullback = max(sup, current_p * 0.98)
+        # 多頭 N 字：回測支撐，再創新高
         pts_x.extend([future_dates[4], future_dates[14]])
-        pts_y.extend([pullback, res * 1.03])
+        pts_y.extend([max(sup, current_p * 0.98), res * 1.03])
     elif "熊市" in trend_text:
-        # 倒 N 字型空頭：先死貓反彈撞壓力，然後破底
-        bounce = min(res, current_p * 1.03)
-        pts_x.extend([future_dates[4], future_dates[14]])
-        pts_y.extend([bounce, sup * 0.92])
+        if is_breaking_down:
+            # 真・無底洞：死貓反彈後繼續破底
+            pts_x.extend([future_dates[4], future_dates[14]])
+            pts_y.extend([min(res, current_p * 1.03), current_p * 0.92])
+        else:
+            # ⚠️ 採納您的邏輯：有箱底的熊市，尊重支撐，測試鐵板不跌破
+            pts_x.extend([future_dates[4], future_dates[14]])
+            pts_y.extend([min(res, current_p * 1.02), max(sup, current_p * 0.95)])
     else:
-        # 震盪箱型：M 頭或 W 底彈跳
+        # 盤整 M 或 W
         mid = (res + sup) / 2
-        if current_p > mid: # 現在偏高，先往下撞
+        if current_p > mid:
             pts_x.extend([future_dates[5], future_dates[12], future_dates[18]])
             pts_y.extend([sup * 1.02, res * 0.98, sup * 1.05])
-        else:               # 現在偏低，先往上撞
+        else:
             pts_x.extend([future_dates[5], future_dates[12], future_dates[18]])
             pts_y.extend([res * 0.98, sup * 1.02, res * 0.95])
             
@@ -391,11 +379,9 @@ def detect_smart_money_status(df):
     if len(df) < 10: return None
     latest = df.iloc[-1]
     if latest['Close'] < latest['Bollinger_Lower'] and latest['RSI'] < 30: return "⚡ 乖離抄底 (超賣)"
-    
     price_now, price_5d = latest['Close'], df['Close'].iloc[-6]
     ad_now, ad_5d = latest['AD_Line'], df['AD_Line'].iloc[-6]
     rsi = latest['RSI']
-    
     if price_now < price_5d * 0.98 and ad_now > ad_5d and rsi < 50: return "🎯 主力背離吸籌"
     if rsi > 65 and latest['Volume'] > latest['Vol_SMA5'] * 1.3 and (latest['Close'] < latest['Open'] or (latest['High'] - max(latest['Open'], latest['Close']) > abs(latest['Close'] - latest['Open']) * 1.5)):
         return "🔴 主力調節 (爆量滯漲)"
@@ -461,59 +447,63 @@ with st.sidebar:
     st.header("📌 多維度自選股清單")
     
     current_ticker = st.session_state.current_ticker
+    active_list_name = st.session_state.active_list
     is_tw = ".TW" in current_ticker or ".TWO" in current_ticker
 
-    active_list_name = None
     for wl_name, tickers in st.session_state.watchlists.items():
-        if current_ticker in tickers: active_list_name = wl_name
-        with st.expander(f"📁 {wl_name} ({len(tickers)}檔)", expanded=False):
+        is_expanded = (wl_name == active_list_name)
+        with st.expander(f"📁 {wl_name} ({len(tickers)}檔)", expanded=is_expanded):
             for t in tickers:
-                is_selected = (t == current_ticker)
-                if st.button(f"{'👉 ' if is_selected else ''}{t}", key=f"btn_{wl_name}_{t}", type="primary" if is_selected else "secondary", use_container_width=True):
-                    st.session_state.current_ticker = t
-                    st.rerun()
+                is_selected = (t == current_ticker and wl_name == active_list_name)
+                btn_type = "primary" if is_selected else "secondary"
+                icon = "👉 " if is_selected else ""
+                if st.button(f"{icon}{t}", key=f"btn_{wl_name}_{t}", type=btn_type, use_container_width=True):
+                    st.session_state.current_ticker = t; st.session_state.active_list = wl_name; st.rerun()
 
     st.markdown("---")
     st.markdown("<span style='color:gray; font-size:13px;'>排列目前代碼</span>", unsafe_allow_html=True)
     c1, c2 = st.columns(2); c3, c4 = st.columns(2)
-    if active_list_name:
-        lst = st.session_state.watchlists[active_list_name]
-        idx = lst.index(current_ticker) if current_ticker in lst else -1
-        if c1.button("⏫ 置頂") and idx > 0: lst.insert(0, lst.pop(idx)); save_watchlists(st.session_state.watchlists); st.rerun()
-        if c2.button("⬆️ 上移") and idx > 0: lst[idx], lst[idx-1] = lst[idx-1], lst[idx]; save_watchlists(st.session_state.watchlists); st.rerun()
-        if c3.button("⬇️ 下移") and 0 <= idx < len(lst) - 1: lst[idx], lst[idx+1] = lst[idx+1], lst[idx]; save_watchlists(st.session_state.watchlists); st.rerun()
-        if c4.button("⏬ 置底") and 0 <= idx < len(lst) - 1: lst.append(lst.pop(idx)); save_watchlists(st.session_state.watchlists); st.rerun()
+    lst = st.session_state.watchlists[active_list_name]
+    idx = lst.index(current_ticker) if current_ticker in lst else -1
+    
+    if c1.button("⏫ 置頂") and idx > 0: lst.insert(0, lst.pop(idx)); save_watchlists(st.session_state.watchlists); st.rerun()
+    if c2.button("⬆️ 上移") and idx > 0: lst[idx], lst[idx-1] = lst[idx-1], lst[idx]; save_watchlists(st.session_state.watchlists); st.rerun()
+    if c3.button("⬇️ 下移") and 0 <= idx < len(lst) - 1: lst[idx], lst[idx+1] = lst[idx+1], lst[idx]; save_watchlists(st.session_state.watchlists); st.rerun()
+    if c4.button("⏬ 置底") and 0 <= idx < len(lst) - 1: lst.append(lst.pop(idx)); save_watchlists(st.session_state.watchlists); st.rerun()
 
     st.markdown("---")
     time_opt = st.radio("選擇週期", ["當沖 (分時)", "日線 (Daily)", "週線 (Weekly)", "月線 (長線)"], index=1)
     st.markdown("---")
     
     with st.expander("✏️ 編輯清單 (新增/刪除)"):
-        target_list = st.selectbox("要加入哪一個抽屜？", list(st.session_state.watchlists.keys()))
+        target_list = st.selectbox("要加入哪一個抽屜？", list(st.session_state.watchlists.keys()), index=list(st.session_state.watchlists.keys()).index(active_list_name))
         new_t = st.text_input("代號", placeholder="MSTR").upper()
         if st.button("➕ 新增", use_container_width=True) and new_t:
             if new_t not in st.session_state.watchlists[target_list]:
-                st.session_state.watchlists[target_list].append(new_t)
-                st.session_state.current_ticker = new_t 
-                save_watchlists(st.session_state.watchlists); st.rerun()
-        if st.button("❌ 刪除目前股票", use_container_width=True) and active_list_name:
-            st.session_state.watchlists[active_list_name].remove(current_ticker)
-            save_watchlists(st.session_state.watchlists)
-            st.session_state.current_ticker = "^IXIC" 
-            st.rerun()
+                st.session_state.watchlists[target_list].append(new_t); st.session_state.current_ticker = new_t; st.session_state.active_list = target_list; save_watchlists(st.session_state.watchlists); st.rerun()
+        if st.button("❌ 刪除目前股票", use_container_width=True):
+            if current_ticker in st.session_state.watchlists[active_list_name]:
+                st.session_state.watchlists[active_list_name].remove(current_ticker); save_watchlists(st.session_state.watchlists)
+                if st.session_state.watchlists[active_list_name]: st.session_state.current_ticker = st.session_state.watchlists[active_list_name][0]
+                else:
+                    found = False
+                    for w_name, w_list in st.session_state.watchlists.items():
+                        if w_list: st.session_state.current_ticker = w_list[0]; st.session_state.active_list = w_name; found = True; break
+                    if not found: st.session_state.current_ticker = "^IXIC" 
+                st.rerun()
     
     with st.expander("📖 實戰系統解讀"):
         st.markdown("""
         🎯 **波段探底** ➔ 順勢支撐，適合回測接刀。
         🧱 **歷史箱底** ➔ 結構鐵板，大回檔絕佳防線。
-        🔮 **AI推演軌跡** ➔ 根據目前趨勢預判未來 20 天走向。
+        🔮 **AI推演軌跡** ➔ 根據目前趨勢預判未來走向。
         """)
 
-st.title(f"📈 {current_ticker} 實戰戰情室 V17.9")
+st.title(f"📈 {current_ticker} 實戰戰情室 V17.10")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(current_ticker, period=api_p, interval=api_i, progress=False)
-if df.empty: st.error("無數據"); st.stop()
+if df.empty: st.error("無數據，請確認代號或網路"); st.stop()
 if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
 df = df.loc[:, ~df.columns.duplicated()]
 df = calculate_indicators(df)
@@ -530,7 +520,6 @@ engine_label, engine_type = get_stock_engine_mode(current_ticker, df)
 macro_txt, macro_note, macro_col, macro_score = get_realtime_macro()
 t_s, t_l, rating = predict_target_and_rating(df)
 
-# 🎯 雙防線計算
 vp_60 = calculate_volume_profile(df.tail(60), bins=40)
 vol_poc = vp_60.loc[vp_60['Volume'].idxmax(), 'Price'] if not vp_60.empty else close_v
 if engine_type in ["trend", "momentum"]: wave_bottom = f"🎯 波段探底: ${max(latest.get('SMA_60', 0), vol_poc):.2f} (大戶防守/籌碼區)"
@@ -548,7 +537,6 @@ else:
 ern_date, ern_res = get_earnings_status(current_ticker)
 ern_html = f'<div class="earnings-tag">{ern_date} | {ern_res}</div>' if ern_date else ""
 
-# 主面板
 st.markdown(f"""
 <div class="price-card">
     <h1 style="margin:0; font-size: 50px;">${close_v:.2f}</h1>
@@ -577,21 +565,21 @@ if not is_breaking_down and iron_price > 0:
     fig.add_hline(y=iron_price, line_dash="dash", line_color="#20c997", annotation_text="🧱 終極鐵板", annotation_font_color="#20c997", row=1, col=1)
     fig.add_shape(type="rect", x0=box_start, y0=iron_price * 0.95, x1=box_end, y1=iron_price * 1.05, fillcolor="#00d4ff", opacity=0.15, layer="below", line_width=1, line_color="#00d4ff", line_dash="dot", row=1, col=1)
 
-# [V17.9] AI 預測軌跡畫線
-proj_x, proj_y = generate_projection_points(df, trend_txt, close_v, iron_price)
-fig.add_trace(go.Scatter(
-    x=proj_x, y=proj_y, mode='lines+markers',
-    line=dict(color='#eab308', width=3, dash='dash'),
-    marker=dict(size=8, symbol='diamond', color='#eab308'),
-    name='🔮 AI 劇本推演'
-), row=1, col=1)
+# [V17.10 升級] AI 預測軌跡畫線 (加入 is_breaking_down 參數，尊重箱底)
+proj_x, proj_y = generate_projection_points(df, trend_txt, close_v, iron_price, is_breaking_down)
+fig.add_trace(go.Scatter(x=proj_x, y=proj_y, mode='lines+markers', line=dict(color='#eab308', width=3, dash='dash'), marker=dict(size=8, symbol='diamond', color='#eab308'), name='🔮 AI 劇本推演'), row=1, col=1)
+fig.add_annotation(x=proj_x[-1], y=proj_y[-1], text="🔮 劇本推演", showarrow=True, arrowhead=2, ay=-30, ax=0, row=1, col=1, font=dict(color="black", size=10, weight="bold"), bgcolor="#eab308")
 
-fig.add_annotation(
-    x=proj_x[-1], y=proj_y[-1], text="🔮 劇本推演", showarrow=True, arrowhead=2, ay=-30, ax=0, row=1, col=1,
-    font=dict(color="black", size=10, weight="bold"), bgcolor="#eab308"
-)
+# [V17.10 升級] 終極十字準星 (手機救星)
+last_date = p_data.index[-1]
+# 1. 貫穿三層圖表的灰色縱向虛線
+for r in range(1, 4):
+    fig.add_vline(x=last_date, line_dash="dash", line_color="#666666", opacity=0.7, row=r, col=1)
+# 2. 在第一層標註「今日」
+fig.add_annotation(x=last_date, y=p_data['High'].max(), text="🗓️ 今日", showarrow=False, yshift=20, font=dict(color="#aaaaaa", size=11), row=1, col=1)
+# 3. 發光的今日收盤點 (蛇頭)
+fig.add_trace(go.Scatter(x=[last_date], y=[close_v], mode='markers', marker=dict(size=12, color='#00ffff', line=dict(color='white', width=2)), name="今日收盤"), row=1, col=1)
 
-# 恢復所有實戰標籤
 for i in range(5, len(p_data)):
     curr = p_data.iloc[i]; prior = p_data.iloc[i-1]
     if (prior['Close'] < prior['Open']) and (curr['Close'] > curr['Open']) and (curr['Open'] <= prior['Close']) and (curr['Close'] >= prior['Open']):
@@ -632,7 +620,6 @@ fig.add_trace(go.Scatter(x=p_data.index, y=p_data['DMA_AMA'], line=dict(color='#
 fig.update_layout(height=800, template="plotly_dark", xaxis_rangeslider_visible=False, showlegend=False, margin=dict(t=10, b=10, l=10, r=10))
 st.plotly_chart(fig, use_container_width=True)
 
-# 主力資金流與籌碼分佈
 try:
     c1, c2 = st.columns(2)
     mf = ((p_data['Close'] - p_data['Open']) / (p_data['High'] - p_data['Low'])) * p_data['Volume']
@@ -662,9 +649,8 @@ except: pass
 
 st.markdown("---")
 
-# 新聞與 AI 推演面板
 engine_name = "🇹🇼 台股重訊模式" if is_tw else "🇺🇸 美股雙境獵手 (SEC+財聯社)"
-with st.spinner(f"🕵️‍♂️ 啟動{engine_name}：正在掃描並過濾農場新聞..."): items = fetch_deep_news(current_ticker, is_macro=False)
+with st.spinner(f"🕵️‍♂️ 啟動{engine_name}：正在掃描並過濾新聞情報..."): items = fetch_deep_news(current_ticker, is_macro=False)
 
 news_score, total_insider_penalty, valid_count, has_major, processed = 0, 0, 0, False, []
 anchor = get_valid_anchor(current_ticker)
