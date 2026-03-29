@@ -14,7 +14,7 @@ import os
 import streamlit.components.v1 as components
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V17.10 (十字準星與劇本進化版)", layout="wide", page_icon="🎯")
+st.set_page_config(page_title="AI 實戰戰情室 V17.10.1 (極致純淨版)", layout="wide", page_icon="🎯")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -126,6 +126,11 @@ def get_valid_anchor(ticker):
 
 if 'watchlists' not in st.session_state: st.session_state.watchlists = load_watchlists()
 if 'active_list' not in st.session_state: st.session_state.active_list = list(st.session_state.watchlists.keys())[0]
+
+# [V17.10.1 新增] 獨立記憶「使用者手動打開的抽屜」
+if 'user_opened_list' not in st.session_state:
+    st.session_state.user_opened_list = None 
+
 if 'current_ticker' not in st.session_state:
     st.session_state.current_ticker = "^IXIC"
     for wl_name, wl in st.session_state.watchlists.items():
@@ -170,7 +175,7 @@ def fetch_deep_news(ticker, is_macro=False):
         is_small_cap = ticker.split('.')[0] in ['ONDS', 'RXRX', 'CRCL', 'SOUN', 'PLTR'] 
         
         if is_tw_stock:
-            q_tw = f"{ticker.replace('.TW', '').replace('.TWO', '')}+(重訊+OR+重大訊息+OR+營收+OR+公告+OR+自結+OR+EPS+OR+配息+OR+法說)"
+            q_tw = f"{ticker.replace('.TW', '').replace('.TWO', '')}+(重訊+OR+營收+OR+EPS+OR+法說)"
             try:
                 resp = requests.get(f"https://news.google.com/rss/search?q={q_tw}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", headers=headers, timeout=4)
                 if resp.status_code == 200:
@@ -309,7 +314,6 @@ def find_structural_box_bottom(df, current_price):
     else:
         return p_data['Low'].min(), p_data.index[0], p_data.index[-1], True
 
-# [V17.10 升級] AI 劇本推演邏輯進化 (尊重歷史箱底)
 def generate_projection_points(df, trend_text, current_p, iron_p, is_breaking_down):
     last_d = df.index[-1]
     future_dates = []
@@ -326,20 +330,16 @@ def generate_projection_points(df, trend_text, current_p, iron_p, is_breaking_do
     if sup >= current_p: sup = current_p * 0.95
     
     if "牛市" in trend_text:
-        # 多頭 N 字：回測支撐，再創新高
         pts_x.extend([future_dates[4], future_dates[14]])
         pts_y.extend([max(sup, current_p * 0.98), res * 1.03])
     elif "熊市" in trend_text:
         if is_breaking_down:
-            # 真・無底洞：死貓反彈後繼續破底
             pts_x.extend([future_dates[4], future_dates[14]])
             pts_y.extend([min(res, current_p * 1.03), current_p * 0.92])
         else:
-            # ⚠️ 採納您的邏輯：有箱底的熊市，尊重支撐，測試鐵板不跌破
             pts_x.extend([future_dates[4], future_dates[14]])
             pts_y.extend([min(res, current_p * 1.02), max(sup, current_p * 0.95)])
     else:
-        # 盤整 M 或 W
         mid = (res + sup) / 2
         if current_p > mid:
             pts_x.extend([future_dates[5], future_dates[12], future_dates[18]])
@@ -450,15 +450,19 @@ with st.sidebar:
     active_list_name = st.session_state.active_list
     is_tw = ".TW" in current_ticker or ".TWO" in current_ticker
 
+    # [V17.10.1 修復] 預設全數收合，除非使用者明確點擊
     for wl_name, tickers in st.session_state.watchlists.items():
-        is_expanded = (wl_name == active_list_name)
+        is_expanded = (wl_name == st.session_state.user_opened_list)
         with st.expander(f"📁 {wl_name} ({len(tickers)}檔)", expanded=is_expanded):
             for t in tickers:
                 is_selected = (t == current_ticker and wl_name == active_list_name)
                 btn_type = "primary" if is_selected else "secondary"
                 icon = "👉 " if is_selected else ""
                 if st.button(f"{icon}{t}", key=f"btn_{wl_name}_{t}", type=btn_type, use_container_width=True):
-                    st.session_state.current_ticker = t; st.session_state.active_list = wl_name; st.rerun()
+                    st.session_state.current_ticker = t
+                    st.session_state.active_list = wl_name
+                    st.session_state.user_opened_list = wl_name # 鎖定這個抽屜保持開啟
+                    st.rerun()
 
     st.markdown("---")
     st.markdown("<span style='color:gray; font-size:13px;'>排列目前代碼</span>", unsafe_allow_html=True)
@@ -480,7 +484,7 @@ with st.sidebar:
         new_t = st.text_input("代號", placeholder="MSTR").upper()
         if st.button("➕ 新增", use_container_width=True) and new_t:
             if new_t not in st.session_state.watchlists[target_list]:
-                st.session_state.watchlists[target_list].append(new_t); st.session_state.current_ticker = new_t; st.session_state.active_list = target_list; save_watchlists(st.session_state.watchlists); st.rerun()
+                st.session_state.watchlists[target_list].append(new_t); st.session_state.current_ticker = new_t; st.session_state.active_list = target_list; st.session_state.user_opened_list = target_list; save_watchlists(st.session_state.watchlists); st.rerun()
         if st.button("❌ 刪除目前股票", use_container_width=True):
             if current_ticker in st.session_state.watchlists[active_list_name]:
                 st.session_state.watchlists[active_list_name].remove(current_ticker); save_watchlists(st.session_state.watchlists)
@@ -488,7 +492,7 @@ with st.sidebar:
                 else:
                     found = False
                     for w_name, w_list in st.session_state.watchlists.items():
-                        if w_list: st.session_state.current_ticker = w_list[0]; st.session_state.active_list = w_name; found = True; break
+                        if w_list: st.session_state.current_ticker = w_list[0]; st.session_state.active_list = w_name; st.session_state.user_opened_list = w_name; found = True; break
                     if not found: st.session_state.current_ticker = "^IXIC" 
                 st.rerun()
     
@@ -499,7 +503,7 @@ with st.sidebar:
         🔮 **AI推演軌跡** ➔ 根據目前趨勢預判未來走向。
         """)
 
-st.title(f"📈 {current_ticker} 實戰戰情室 V17.10")
+st.title(f"📈 {current_ticker} 實戰戰情室 V17.10.1")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(current_ticker, period=api_p, interval=api_i, progress=False)
@@ -565,19 +569,14 @@ if not is_breaking_down and iron_price > 0:
     fig.add_hline(y=iron_price, line_dash="dash", line_color="#20c997", annotation_text="🧱 終極鐵板", annotation_font_color="#20c997", row=1, col=1)
     fig.add_shape(type="rect", x0=box_start, y0=iron_price * 0.95, x1=box_end, y1=iron_price * 1.05, fillcolor="#00d4ff", opacity=0.15, layer="below", line_width=1, line_color="#00d4ff", line_dash="dot", row=1, col=1)
 
-# [V17.10 升級] AI 預測軌跡畫線 (加入 is_breaking_down 參數，尊重箱底)
 proj_x, proj_y = generate_projection_points(df, trend_txt, close_v, iron_price, is_breaking_down)
 fig.add_trace(go.Scatter(x=proj_x, y=proj_y, mode='lines+markers', line=dict(color='#eab308', width=3, dash='dash'), marker=dict(size=8, symbol='diamond', color='#eab308'), name='🔮 AI 劇本推演'), row=1, col=1)
 fig.add_annotation(x=proj_x[-1], y=proj_y[-1], text="🔮 劇本推演", showarrow=True, arrowhead=2, ay=-30, ax=0, row=1, col=1, font=dict(color="black", size=10, weight="bold"), bgcolor="#eab308")
 
-# [V17.10 升級] 終極十字準星 (手機救星)
+# 終極十字準星
 last_date = p_data.index[-1]
-# 1. 貫穿三層圖表的灰色縱向虛線
-for r in range(1, 4):
-    fig.add_vline(x=last_date, line_dash="dash", line_color="#666666", opacity=0.7, row=r, col=1)
-# 2. 在第一層標註「今日」
+for r in range(1, 4): fig.add_vline(x=last_date, line_dash="dash", line_color="#666666", opacity=0.7, row=r, col=1)
 fig.add_annotation(x=last_date, y=p_data['High'].max(), text="🗓️ 今日", showarrow=False, yshift=20, font=dict(color="#aaaaaa", size=11), row=1, col=1)
-# 3. 發光的今日收盤點 (蛇頭)
 fig.add_trace(go.Scatter(x=[last_date], y=[close_v], mode='markers', marker=dict(size=12, color='#00ffff', line=dict(color='white', width=2)), name="今日收盤"), row=1, col=1)
 
 for i in range(5, len(p_data)):
