@@ -12,7 +12,7 @@ import json
 import os
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V17.12 (劇本追蹤版)", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="AI 實戰戰情室 V17.16 (雙平台完美版)", layout="wide", page_icon="🛡️")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -352,6 +352,12 @@ def get_earnings_status(ticker):
 # --- 6. 主介面 Sidebar ---
 with st.sidebar:
     st.title("🎛️ 控制台")
+    
+    # [V17.16 核心] 新增手機模式實體開關
+    st.header("📱 平台顯示設定")
+    mobile_mode = st.toggle("啟用手機防卡死模式", value=False, help="手機瀏覽網頁時請開啟此選項，鎖定 K 線圖滑動以防卡死。電腦版請保持關閉以獲得完整操作體驗。")
+    st.markdown("---")
+
     st.header("📌 多維度自選股清單")
     cur_t = st.session_state.current_ticker; act_l = st.session_state.active_list
     
@@ -401,7 +407,7 @@ with st.sidebar:
             st.rerun()
 
 # --- 主體資料載入 ---
-st.title(f"📈 {cur_t} 實戰戰情室 V17.12")
+st.title(f"📈 {cur_t} 實戰戰情室 V17.16")
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
 if df.empty: st.error("無數據"); st.stop()
@@ -440,10 +446,10 @@ if cur_t in st.session_state.tracked:
             save_tracked(st.session_state.tracked); st.rerun()
     else:
         st.markdown(f"""<div class="track-active">✅ <b>劇本追蹤中 (Day {days_p})</b> | 初始: {t_data['trend']} | 進場: ${t_data['entry']:.2f} | 防守: ${t_data['defense']:.2f}</div>""", unsafe_allow_html=True)
-        if st.button("💰 結束追蹤 ", use_container_width=True): del st.session_state.tracked[cur_t]; save_tracked(st.session_state.tracked); st.rerun()
+        if st.button("💰 獲利了結 / 結束追蹤", use_container_width=True): del st.session_state.tracked[cur_t]; save_tracked(st.session_state.tracked); st.rerun()
 else:
     st.info(f"AI 判定【當前】技術面趨勢為：**{trend_txt}**。若準備進場，請點擊下方按鈕鎖定未來 20 天劇本。")
-    if st.button("🎯 鎖定劇本 ", use_container_width=True):
+    if st.button("🎯 鎖定劇本 / 模擬買進", use_container_width=True):
         px, py = generate_projection_points(df, trend_txt, close_v, iron_price, is_breaking)
         px_str = [d.strftime("%Y-%m-%d") for d in px]
         def_line = iron_price if iron_price > 0 else close_v * 0.9
@@ -483,25 +489,29 @@ fig.add_trace(go.Candlestick(x=p_data.index, open=p_data['Open'], high=p_data['H
 fig.add_trace(go.Scatter(x=p_data.index, y=p_data['ATR_Trailing_Stop'], mode='lines', line=dict(color='#FF5F1F', width=1.5, dash='dot'), name='ATR 停損'), row=1, col=1)
 
 if not is_breaking and iron_price > 0:
-    fig.add_hline(y=iron_price, line_dash="dash", line_color="#20c997", annotation_text="🧱 鐵板", row=1, col=1)
-    fig.add_shape(type="rect", x0=box_start, y0=iron_price*0.95, x1=box_end, y1=iron_price*1.05, fillcolor="#00d4ff", opacity=0.15, layer="below", line_width=0, row=1, col=1)
+    fig.add_hline(y=iron_price, line_dash="dash", line_color="#20c997", 
+                  annotation_text=f"🧱 鐵板 ${iron_price:.2f}", 
+                  annotation_font_color="#20c997", 
+                  annotation_position="bottom right", 
+                  row=1, col=1)
 
-# [V17.12 核心] 繪製劇本軌跡與殘影，並加上精準價格標籤
+# 雙軌比對：同時顯示殘影(灰)與最新動態預測(黃)
 if cur_t in st.session_state.tracked:
-    # 已追蹤：顯示淺灰色殘影 (Baseline)
     t_data = st.session_state.tracked[cur_t]
     base_x = [datetime.strptime(d, "%Y-%m-%d") for d in t_data['proj_x']]
     base_y = t_data['proj_y']
     fig.add_trace(go.Scatter(x=base_x, y=base_y, mode='lines+markers', line=dict(color='#888888', width=3, dash='dot'), marker=dict(size=8, symbol='circle', color='#888888'), name='👻 初始劇本殘影'), row=1, col=1)
-    for i in range(1, len(base_x)):
-        fig.add_annotation(x=base_x[i], y=base_y[i], text=f"${base_y[i]:.2f}", showarrow=True, arrowhead=0, ay=-20, font=dict(color="#aaaaaa", size=11), bgcolor="rgba(0,0,0,0.6)", row=1, col=1)
+    for i in range(1, len(base_x)): fig.add_annotation(x=base_x[i], y=base_y[i], text=f"${base_y[i]:.2f}", showarrow=True, arrowhead=0, ay=-20, font=dict(color="#aaaaaa", size=11), bgcolor="rgba(0,0,0,0.6)", row=1, col=1)
     fig.add_annotation(x=base_x[-1], y=base_y[-1], text="👻 初始劇本", showarrow=True, arrowhead=2, ay=-40, ax=0, row=1, col=1, font=dict(color="black", size=10, weight="bold"), bgcolor="#888888")
+
+    px, py = generate_projection_points(df, trend_txt, close_v, iron_price, is_breaking)
+    fig.add_trace(go.Scatter(x=px, y=py, mode='lines+markers', line=dict(color='#eab308', width=3, dash='dash'), marker=dict(size=8, symbol='diamond', color='#eab308'), name='🔮 最新動態推演'), row=1, col=1)
+    for i in range(1, len(px)): fig.add_annotation(x=px[i], y=py[i], text=f"${py[i]:.2f}", showarrow=True, arrowhead=0, ay=25, font=dict(color="#eab308", size=11), bgcolor="rgba(0,0,0,0.6)", row=1, col=1)
+    fig.add_annotation(x=px[-1], y=py[-1], text="🔮 最新推演", showarrow=True, arrowhead=2, ay=45, ax=0, row=1, col=1, font=dict(color="black", size=10, weight="bold"), bgcolor="#eab308")
 else:
-    # 未追蹤：顯示動態黃色推演線
     px, py = generate_projection_points(df, trend_txt, close_v, iron_price, is_breaking)
     fig.add_trace(go.Scatter(x=px, y=py, mode='lines+markers', line=dict(color='#eab308', width=3, dash='dash'), marker=dict(size=8, symbol='diamond', color='#eab308'), name='🔮 AI 劇本推演'), row=1, col=1)
-    for i in range(1, len(px)):
-        fig.add_annotation(x=px[i], y=py[i], text=f"${py[i]:.2f}", showarrow=True, arrowhead=0, ay=-20, font=dict(color="#eab308", size=11), bgcolor="rgba(0,0,0,0.6)", row=1, col=1)
+    for i in range(1, len(px)): fig.add_annotation(x=px[i], y=py[i], text=f"${py[i]:.2f}", showarrow=True, arrowhead=0, ay=-20, font=dict(color="#eab308", size=11), bgcolor="rgba(0,0,0,0.6)", row=1, col=1)
     fig.add_annotation(x=px[-1], y=py[-1], text="🔮 劇本推演", showarrow=True, arrowhead=2, ay=-40, ax=0, row=1, col=1, font=dict(color="black", size=10, weight="bold"), bgcolor="#eab308")
 
 # 十字準星
@@ -510,7 +520,7 @@ for r in range(1, 4): fig.add_vline(x=last_d, line_dash="dash", line_color="#666
 fig.add_trace(go.Scatter(x=[last_d], y=[close_v], mode='markers', marker=dict(size=12, color='#00ffff', line=dict(color='white', width=2)), name="今日收盤"), row=1, col=1)
 fig.add_annotation(x=last_d, y=p_data['High'].max(), text="🗓️ 今日", showarrow=False, yshift=20, font=dict(color="#aaa", size=11), row=1, col=1)
 
-# 所有 K 線實戰標籤 (BUY/SELL/達標/吸籌/吞噬/TD9)
+# 所有 K 線實戰標籤
 for i in range(5, len(p_data)):
     curr, prior = p_data.iloc[i], p_data.iloc[i-1]
     if prior['Close'] < prior['Open'] and curr['Close'] > curr['Open'] and curr['Open'] <= prior['Close'] and curr['Close'] >= prior['Open']:
@@ -545,7 +555,9 @@ fig.add_trace(go.Scatter(x=p_data.index, y=p_data['MACD'], line=dict(color='whit
 fig.add_trace(go.Scatter(x=p_data.index, y=p_data['Signal_Line'], line=dict(color='yellow', width=1)), row=2, col=1)
 fig.add_trace(go.Scatter(x=p_data.index, y=p_data['DMA_DDD'], line=dict(color='#d8b4fe', width=1)), row=3, col=1)
 fig.add_trace(go.Scatter(x=p_data.index, y=p_data['DMA_AMA'], line=dict(color='#facc15', width=1)), row=3, col=1)
-fig.update_layout(height=800, template="plotly_dark", xaxis_rangeslider_visible=False, showlegend=False, margin=dict(t=10, b=10, l=10, r=10))
+
+# [V17.16 核心] 根據側邊欄開關決定 dragmode，保護您的手感
+fig.update_layout(dragmode=False if mobile_mode else 'zoom', height=800, template="plotly_dark", xaxis_rangeslider_visible=False, showlegend=False, margin=dict(t=10, b=10, l=10, r=10))
 st.plotly_chart(fig, use_container_width=True)
 
 # 雙籌碼分析圖
@@ -558,7 +570,7 @@ try:
             trend = mf.iloc[-1] - mf.iloc[-5]
             if trend > 0: fig_mf.add_annotation(x=p_data.index[-1], y=mf.iloc[-1], text="🟢 主力吸籌", showarrow=True, arrowhead=1, font=dict(color="#4ade80", size=12), bgcolor="#1b3a1b")
             else: fig_mf.add_annotation(x=p_data.index[-1], y=mf.iloc[-1], text="🔴 主力出貨", showarrow=True, arrowhead=1, font=dict(color="#ff6b6b", size=12), bgcolor="#3a1b1b")
-        fig_mf.update_layout(height=250, template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10), dragmode=False); st.plotly_chart(fig_mf, use_container_width=True, config={'displayModeBar': False})
+        fig_mf.update_layout(dragmode=False if mobile_mode else 'zoom', height=250, template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10)); st.plotly_chart(fig_mf, use_container_width=True, config={'displayModeBar': False})
     with c2:
         st.caption("籌碼分佈 (主力 vs 散戶)")
         inst_mask = (p_data['Close'] > p_data['Open']) & (p_data['Volume'] > p_data['Vol_SMA5'])
@@ -567,7 +579,7 @@ try:
         fig_vp.add_trace(go.Scatter(x=vp_all['Price'], y=vp_all['Volume'], fill='tozeroy', line=dict(color='#ffaa00', width=0), name='整體'))
         fig_vp.add_trace(go.Scatter(x=vp_main['Price'], y=vp_main['Volume'], fill='tozeroy', line=dict(color='#00d4ff', width=2), name='主力'))
         fig_vp.add_vline(x=close_v, line_dash="dash", line_color="white", annotation_text="現價")
-        fig_vp.update_layout(height=250, template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10), showlegend=True, legend=dict(orientation="h", y=1.1), dragmode=False); st.plotly_chart(fig_vp, use_container_width=True, config={'displayModeBar': False})
+        fig_vp.update_layout(dragmode=False if mobile_mode else 'zoom', height=250, template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10), showlegend=True, legend=dict(orientation="h", y=1.1)); st.plotly_chart(fig_vp, use_container_width=True, config={'displayModeBar': False})
 except: pass
 
 st.markdown("---")
