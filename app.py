@@ -12,7 +12,7 @@ import json
 import os
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V17.16 (雙平台完美版)", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="AI 實戰戰情室 V17.27 (上市櫃通殺版)", layout="wide", page_icon="🛡️")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -54,8 +54,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 1. 資料系統 ---
-WATCHLIST_FILE, ANCHOR_FILE, TRACK_FILE = "watchlist.json", "anchors.json", "tracked.json"
-DEFAULT_WATCHLISTS = {"清單 A": ['^IXIC', 'QQQ', 'NVDA', 'TSM'], "清單 B": ['MU', 'AAPL', 'TSLA'], "清單 C": ['0050.TW'], "清單 D": ['ONDS', 'RXRX'], "清單 E": ['CRCL']}
+WATCHLIST_FILE, ANCHOR_FILE, TRACK_FILE, TW_NAMES_FILE = "watchlist.json", "anchors.json", "tracked.json", "tw_names.json"
+DEFAULT_WATCHLISTS = {"清單 A": ['^IXIC', 'QQQ', 'NVDA', 'TSM'], "清單 B": ['MU', 'AAPL', 'TSLA'], "清單 C": ['0050.TW', '6127.TWO'], "清單 D": ['ONDS', 'RXRX'], "清單 E": ['CRCL']}
 
 def json_load(f_name, default):
     if os.path.exists(f_name):
@@ -80,6 +80,71 @@ def save_anchor_data(data): json_save(ANCHOR_FILE, data)
 def load_tracked(): return json_load(TRACK_FILE, {})
 def save_tracked(data): json_save(TRACK_FILE, data); st.session_state.tracked = data
 
+# [V17.27 核心] 上市櫃通殺的無敵官方 API 引擎
+def get_stock_name(ticker):
+    us_map = {'NVDA': '輝達', 'TSLA': '特斯拉', 'AAPL': '蘋果', 'MU': '美光', 'TSM': '台積電'}
+    base = ticker.split('.')[0]
+    
+    if base in us_map and not (".TW" in ticker or ".TWO" in ticker):
+        return us_map[base]
+        
+    if ".TW" in ticker or ".TWO" in ticker:
+        local_map = json_load(TW_NAMES_FILE, {})
+        
+        # 🛡️ 殺毒機制：強制清除任何包含錯誤字眼的快取，確保重新抓取
+        bad_words = ["Yahoo", "股市", "走勢", "無符合", "找不到", "代碼或名稱", "html", "TW"]
+        keys_to_delete = [k for k, v in local_map.items() if any(bad in v for bad in bad_words)]
+        for k in keys_to_delete:
+            del local_map[k]
+            
+        if ticker in local_map: 
+            return local_map[ticker]
+        
+        name = None
+        
+        # 🟢 第一梯隊：官方證交所/櫃買即時盤中 API (無敵穩定，支援 .TW 與 .TWO)
+        prefix = "otc" if ".TWO" in ticker else "tse"
+        try:
+            res = requests.get(f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch={prefix}_{base}.tw", timeout=3)
+            if res.status_code == 200:
+                data = res.json()
+                if "msgArray" in data and len(data["msgArray"]) > 0:
+                    n = data["msgArray"][0].get("n") # 'n' 欄位就是官方中文簡稱
+                    if n and n != "--":
+                        name = n.strip()
+        except: pass
+
+        # 🟡 第二梯隊：鉅亨網 JSON API (極穩定備案)
+        if not name:
+            try:
+                res = requests.get(f"https://ws.api.cnyes.com/ws/api/v1/quote/quotes/TWS:{base}:STOCK", timeout=3)
+                if res.status_code == 200:
+                    data = res.json()
+                    if "data" in data and len(data["data"]) > 0:
+                        n = data["data"][0].get("name")
+                        if n: name = n.strip()
+            except: pass
+
+        # 🟠 第三梯隊：TWSE 靜態 API (限上市 .TW)
+        if not name and ".TWO" not in ticker:
+            try:
+                res = requests.get(f"https://www.twse.com.tw/zh/api/codeQuery?query={base}", timeout=2)
+                if res.status_code == 200:
+                    data = res.json()
+                    if "suggestions" in data and len(data["suggestions"]) > 0:
+                        sug = data["suggestions"][0]
+                        if "無符合" not in sug:
+                            name = sug.replace(base, '').replace('\t', '').strip()
+            except: pass
+            
+        # 最終驗證與寫入記憶體
+        if name and not any(bad in name for bad in bad_words):
+            local_map[ticker] = name
+            json_save(TW_NAMES_FILE, local_map)
+            return name
+
+    return ticker
+
 if 'watchlists' not in st.session_state: st.session_state.watchlists = load_watchlists()
 if 'tracked' not in st.session_state: st.session_state.tracked = load_tracked()
 if 'active_list' not in st.session_state: st.session_state.active_list = list(st.session_state.watchlists.keys())[0]
@@ -92,8 +157,12 @@ if 'current_ticker' not in st.session_state:
 
 # --- 2. 核心搜尋與新聞引擎 ---
 def get_ticker_metadata(ticker):
-    mapping = {'NVDA': {'name': '輝達', 'ceo': ['黃仁勳', 'Jensen'], 'key': ['Nvidia']}, 'TSLA': {'name': '特斯拉', 'ceo': ['馬斯克', 'Elon'], 'key': ['Tesla']}, 'AAPL': {'name': '蘋果', 'ceo': ['庫克', 'Tim'], 'key': ['Apple']}, 'MU': {'name': '美光', 'ceo': ['Sanjay'], 'key': ['Micron']}, 'TSM': {'name': '台積電', 'ceo': ['魏哲家'], 'key': ['TSMC']}}
-    return mapping.get(ticker.split('.')[0], {'name': ticker, 'ceo': [], 'key': [ticker]})
+    name = get_stock_name(ticker)
+    base = ticker.split('.')[0]
+    mapping = {'NVDA': {'ceo': ['黃仁勳', 'Jensen'], 'key': ['Nvidia']}, 'TSLA': {'ceo': ['馬斯克', 'Elon'], 'key': ['Tesla']}, 'AAPL': {'ceo': ['庫克', 'Tim'], 'key': ['Apple']}, 'MU': {'ceo': ['Sanjay'], 'key': ['Micron']}, 'TSM': {'ceo': ['魏哲家'], 'key': ['TSMC']}}
+    meta = mapping.get(base, {'ceo': [], 'key': [base]})
+    meta['name'] = name
+    return meta
 
 def validate_news(title, ticker, info, strict=True):
     t = title.lower(); bt = ticker.split('.')[0].lower(); wl = [bt] + [k.lower() for k in info['key']] + [info['name'].lower()] + [c.lower() for c in info['ceo']]
@@ -111,9 +180,12 @@ def fetch_deep_news(ticker, is_macro=False):
                     d = parse_rss(item, "macro", "Global")
                     if (now - d['dt']).days <= 30: items.append(d)
             return items
+        
         info = get_ticker_metadata(ticker); cn = info['name']; trg = f"{ticker} OR {cn}" if cn else ticker; small = ticker.split('.')[0] in ['ONDS', 'RXRX', 'CRCL', 'SOUN', 'PLTR'] 
+        
         if ".TW" in ticker or ".TWO" in ticker:
-            q = f"{ticker.replace('.TW', '').replace('.TWO', '')}+(重訊+OR+重大訊息+OR+營收+OR+公告+OR+自結+OR+EPS+OR+配息+OR+法說)"
+            base_tk = ticker.split('.')[0]
+            q = f"({base_tk}+OR+{cn})+(重訊+OR+重大訊息+OR+營收+OR+公告+OR+自結+OR+EPS+OR+配息+OR+法說)"
             try:
                 resp = requests.get(f"https://news.google.com/rss/search?q={q}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant", headers=hdrs, timeout=4)
                 if resp.status_code == 200:
@@ -245,18 +317,33 @@ def generate_projection_points(df, trend_text, cur_p, iron_p, is_brk):
     while len(f_d) < 20:
         d += pd.Timedelta(days=1)
         if d.weekday() < 5: f_d.append(d)
+    
     x = [last_d]; y = [cur_p]
-    res = max(df['High'].tail(20).max(), cur_p*1.05); sup = min(iron_p if iron_p>0 else df['Low'].tail(20).min(), cur_p*0.95)
-    if "牛市" in trend_text: x.extend([f_d[4], f_d[14]]); y.extend([max(sup, cur_p*0.98), res*1.03])
+    ma20 = df['SMA_20'].iloc[-1] if not pd.isna(df['SMA_20'].iloc[-1]) else cur_p
+    recent_low_5 = df['Low'].tail(5).min()
+    recent_high_20 = df['High'].tail(20).max()
+    scenario_name = ""
+
+    if "牛市" in trend_text:
+        scenario_name = "🐂 牛市 N 字突破"
+        dip = max(cur_p * 0.96, ma20) if cur_p > ma20 else cur_p * 0.96
+        rally = max(cur_p * 1.05, recent_high_20 * 1.02)
+        x.extend([f_d[4], f_d[14]]); y.extend([dip, rally])
     elif "熊市" in trend_text:
-        x.extend([f_d[4], f_d[14]])
-        y.extend([min(res, cur_p*1.03), cur_p*0.92 if is_brk else max(sup, cur_p*0.95)])
+        if is_brk:
+            scenario_name = "🕳️ 熊市無底洞墜落"
+            bounce = min(cur_p * 1.03, ma20)
+            drop = cur_p * 0.92
+        else:
+            scenario_name = "🐻 熊市死貓反彈 (測壓再測底)"
+            bounce = min(cur_p * 1.06, ma20) if cur_p < ma20 else cur_p * 1.05
+            drop = max(iron_p, cur_p * 0.92, recent_low_5 * 0.98) if iron_p > 0 else cur_p * 0.92
+        x.extend([f_d[4], f_d[14]]); y.extend([bounce, drop])
     else:
-        m = (res+sup)/2
-        x.extend([f_d[5], f_d[12], f_d[18]])
-        if cur_p > m: y.extend([sup*1.02, res*0.98, sup*1.05])
-        else: y.extend([res*0.98, sup*1.02, res*0.95])
-    return x, y
+        scenario_name = "⚖️ 區間震盪收斂"
+        x.extend([f_d[5], f_d[12], f_d[18]]); y.extend([cur_p * 1.04, cur_p * 0.96, cur_p * 1.02])
+        
+    return x, y, scenario_name
 
 def analyze_market_trend(df):
     c, m20, m60 = df['Close'].iloc[-1], df['SMA_20'].iloc[-1], df['SMA_60'].iloc[-1]
@@ -353,7 +440,6 @@ def get_earnings_status(ticker):
 with st.sidebar:
     st.title("🎛️ 控制台")
     
-    # [V17.16 核心] 新增手機模式實體開關
     st.header("📱 平台顯示設定")
     mobile_mode = st.toggle("啟用手機防卡死模式", value=False, help="手機瀏覽網頁時請開啟此選項，鎖定 K 線圖滑動以防卡死。電腦版請保持關閉以獲得完整操作體驗。")
     st.markdown("---")
@@ -368,15 +454,18 @@ with st.sidebar:
                 is_sel = (t == cur_t and wl_name == act_l)
                 btn_t = "primary" if is_sel else "secondary"
                 
-                disp_name = t
+                s_name = get_stock_name(t)
+                disp_base = f"{s_name} ({t})" if s_name != t else t
+                
+                disp_name = disp_base
                 if t in st.session_state.tracked:
                     t_data = st.session_state.tracked[t]
                     d_pass = (datetime.now() - datetime.strptime(t_data['date'], "%Y-%m-%d")).days
                     sym = "📈" if "牛" in t_data['trend'] else "📉" if "熊" in t_data['trend'] else "📦"
-                    disp_name = f"{t} {sym}(D{d_pass})"
+                    disp_name = f"{disp_base} {sym}(D{d_pass})"
                     try:
                         curr_price = yf.download(t, period="1d", progress=False)['Close'].iloc[-1]
-                        if curr_price < t_data['defense']: disp_name = f"{t} 🚨破局"
+                        if curr_price < t_data['defense']: disp_name = f"{disp_base} 🚨破局"
                     except: pass
                 
                 if st.button(f"{'👉 ' if is_sel else ''}{disp_name}", key=f"btn_{wl_name}_{t}", type=btn_t, use_container_width=True):
@@ -397,7 +486,7 @@ with st.sidebar:
     
     with st.expander("✏️ 編輯清單"):
         target_list = st.selectbox("加入抽屜：", list(st.session_state.watchlists.keys()), index=list(st.session_state.watchlists.keys()).index(act_l))
-        new_t = st.text_input("代號", placeholder="MSTR").upper()
+        new_t = st.text_input("代號", placeholder="2330.TW").upper()
         if st.button("➕ 新增", use_container_width=True) and new_t:
             if new_t not in st.session_state.watchlists[target_list]: st.session_state.watchlists[target_list].append(new_t); st.session_state.current_ticker = new_t; st.session_state.active_list = target_list; st.session_state.user_opened_list = target_list; save_watchlists(st.session_state.watchlists); st.rerun()
         if st.button("❌ 刪除股票", use_container_width=True) and cur_t in st.session_state.watchlists[act_l]:
@@ -407,12 +496,20 @@ with st.sidebar:
             st.rerun()
 
 # --- 主體資料載入 ---
-st.title(f"📈 {cur_t} 實戰戰情室 V17.16")
+main_title_name = get_stock_name(cur_t)
+disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
+st.title(f"📈 {disp_main_title} 實戰戰情室 V17.27")
+
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
 if df.empty: st.error("無數據"); st.stop()
 if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
 df = df.loc[:, ~df.columns.duplicated()]
+
+df.index = pd.to_datetime(df.index)
+if df.index.tz is not None:
+    df.index = df.index.tz_localize(None)
+
 df = calculate_indicators(df)
 
 latest = df.iloc[-1]; close_v = float(latest['Close']); chg = (close_v - float(df.iloc[-2]['Close'])) / float(df.iloc[-2]['Close']) * 100
@@ -440,9 +537,9 @@ if cur_t in st.session_state.tracked:
         tc1, tc2 = st.columns(2)
         if tc1.button("🔪 承認失敗 / 停損出局", use_container_width=True): del st.session_state.tracked[cur_t]; save_tracked(st.session_state.tracked); st.rerun()
         if tc2.button("🔄 重新擬定劇本 (重置)", use_container_width=True): 
-            px, py = generate_projection_points(df, trend_txt, close_v, iron_price, is_breaking)
+            px, py, sc_name = generate_projection_points(df, trend_txt, close_v, iron_price, is_breaking)
             px_str = [d.strftime("%Y-%m-%d") for d in px]
-            st.session_state.tracked[cur_t] = {"date": datetime.now().strftime("%Y-%m-%d"), "trend": trend_txt, "entry": close_v, "defense": iron_price, "proj_x": px_str, "proj_y": py}
+            st.session_state.tracked[cur_t] = {"date": datetime.now().strftime("%Y-%m-%d"), "trend": trend_txt, "entry": close_v, "defense": iron_price, "proj_x": px_str, "proj_y": py, "scenario": sc_name}
             save_tracked(st.session_state.tracked); st.rerun()
     else:
         st.markdown(f"""<div class="track-active">✅ <b>劇本追蹤中 (Day {days_p})</b> | 初始: {t_data['trend']} | 進場: ${t_data['entry']:.2f} | 防守: ${t_data['defense']:.2f}</div>""", unsafe_allow_html=True)
@@ -450,10 +547,10 @@ if cur_t in st.session_state.tracked:
 else:
     st.info(f"AI 判定【當前】技術面趨勢為：**{trend_txt}**。若準備進場，請點擊下方按鈕鎖定未來 20 天劇本。")
     if st.button("🎯 鎖定劇本 / 模擬買進", use_container_width=True):
-        px, py = generate_projection_points(df, trend_txt, close_v, iron_price, is_breaking)
+        px, py, sc_name = generate_projection_points(df, trend_txt, close_v, iron_price, is_breaking)
         px_str = [d.strftime("%Y-%m-%d") for d in px]
         def_line = iron_price if iron_price > 0 else close_v * 0.9
-        st.session_state.tracked[cur_t] = {"date": datetime.now().strftime("%Y-%m-%d"), "trend": trend_txt, "entry": close_v, "defense": def_line, "proj_x": px_str, "proj_y": py}
+        st.session_state.tracked[cur_t] = {"date": datetime.now().strftime("%Y-%m-%d"), "trend": trend_txt, "entry": close_v, "defense": def_line, "proj_x": px_str, "proj_y": py, "scenario": sc_name}
         save_tracked(st.session_state.tracked)
         st.rerun()
 
@@ -489,38 +586,33 @@ fig.add_trace(go.Candlestick(x=p_data.index, open=p_data['Open'], high=p_data['H
 fig.add_trace(go.Scatter(x=p_data.index, y=p_data['ATR_Trailing_Stop'], mode='lines', line=dict(color='#FF5F1F', width=1.5, dash='dot'), name='ATR 停損'), row=1, col=1)
 
 if not is_breaking and iron_price > 0:
-    fig.add_hline(y=iron_price, line_dash="dash", line_color="#20c997", 
-                  annotation_text=f"🧱 鐵板 ${iron_price:.2f}", 
-                  annotation_font_color="#20c997", 
-                  annotation_position="bottom right", 
-                  row=1, col=1)
+    fig.add_hline(y=iron_price, line_dash="dash", line_color="#20c997", annotation_text=f"🧱 鐵板 ${iron_price:.2f}", annotation_font_color="#20c997", annotation_position="bottom right", row=1, col=1)
 
-# 雙軌比對：同時顯示殘影(灰)與最新動態預測(黃)
+px, py, sc_name = generate_projection_points(df, trend_txt, close_v, iron_price, is_breaking)
+
 if cur_t in st.session_state.tracked:
     t_data = st.session_state.tracked[cur_t]
     base_x = [datetime.strptime(d, "%Y-%m-%d") for d in t_data['proj_x']]
     base_y = t_data['proj_y']
     fig.add_trace(go.Scatter(x=base_x, y=base_y, mode='lines+markers', line=dict(color='#888888', width=3, dash='dot'), marker=dict(size=8, symbol='circle', color='#888888'), name='👻 初始劇本殘影'), row=1, col=1)
     for i in range(1, len(base_x)): fig.add_annotation(x=base_x[i], y=base_y[i], text=f"${base_y[i]:.2f}", showarrow=True, arrowhead=0, ay=-20, font=dict(color="#aaaaaa", size=11), bgcolor="rgba(0,0,0,0.6)", row=1, col=1)
-    fig.add_annotation(x=base_x[-1], y=base_y[-1], text="👻 初始劇本", showarrow=True, arrowhead=2, ay=-40, ax=0, row=1, col=1, font=dict(color="black", size=10, weight="bold"), bgcolor="#888888")
+    
+    sc_label_text = t_data.get('scenario', sc_name)
+    fig.add_annotation(x=0.01, y=0.98, xref="paper", yref="paper", text=f"🎯 追蹤中：{sc_label_text}", showarrow=False, font=dict(color="white", size=14, weight="bold"), bgcolor="rgba(0, 0, 0, 0.6)", bordercolor="#059669", borderwidth=1, borderpad=6)
 
-    px, py = generate_projection_points(df, trend_txt, close_v, iron_price, is_breaking)
     fig.add_trace(go.Scatter(x=px, y=py, mode='lines+markers', line=dict(color='#eab308', width=3, dash='dash'), marker=dict(size=8, symbol='diamond', color='#eab308'), name='🔮 最新動態推演'), row=1, col=1)
     for i in range(1, len(px)): fig.add_annotation(x=px[i], y=py[i], text=f"${py[i]:.2f}", showarrow=True, arrowhead=0, ay=25, font=dict(color="#eab308", size=11), bgcolor="rgba(0,0,0,0.6)", row=1, col=1)
-    fig.add_annotation(x=px[-1], y=py[-1], text="🔮 最新推演", showarrow=True, arrowhead=2, ay=45, ax=0, row=1, col=1, font=dict(color="black", size=10, weight="bold"), bgcolor="#eab308")
 else:
-    px, py = generate_projection_points(df, trend_txt, close_v, iron_price, is_breaking)
     fig.add_trace(go.Scatter(x=px, y=py, mode='lines+markers', line=dict(color='#eab308', width=3, dash='dash'), marker=dict(size=8, symbol='diamond', color='#eab308'), name='🔮 AI 劇本推演'), row=1, col=1)
     for i in range(1, len(px)): fig.add_annotation(x=px[i], y=py[i], text=f"${py[i]:.2f}", showarrow=True, arrowhead=0, ay=-20, font=dict(color="#eab308", size=11), bgcolor="rgba(0,0,0,0.6)", row=1, col=1)
-    fig.add_annotation(x=px[-1], y=py[-1], text="🔮 劇本推演", showarrow=True, arrowhead=2, ay=-40, ax=0, row=1, col=1, font=dict(color="black", size=10, weight="bold"), bgcolor="#eab308")
+    
+    fig.add_annotation(x=0.01, y=0.98, xref="paper", yref="paper", text=f"🔮 目前 AI 推演：{sc_name}", showarrow=False, font=dict(color="white", size=14, weight="bold"), bgcolor="rgba(0, 0, 0, 0.6)", bordercolor="#eab308", borderwidth=1, borderpad=6)
 
-# 十字準星
 last_d = p_data.index[-1]
 for r in range(1, 4): fig.add_vline(x=last_d, line_dash="dash", line_color="#666", opacity=0.7, row=r, col=1)
 fig.add_trace(go.Scatter(x=[last_d], y=[close_v], mode='markers', marker=dict(size=12, color='#00ffff', line=dict(color='white', width=2)), name="今日收盤"), row=1, col=1)
 fig.add_annotation(x=last_d, y=p_data['High'].max(), text="🗓️ 今日", showarrow=False, yshift=20, font=dict(color="#aaa", size=11), row=1, col=1)
 
-# 所有 K 線實戰標籤
 for i in range(5, len(p_data)):
     curr, prior = p_data.iloc[i], p_data.iloc[i-1]
     if prior['Close'] < prior['Open'] and curr['Close'] > curr['Open'] and curr['Open'] <= prior['Close'] and curr['Close'] >= prior['Open']:
@@ -528,7 +620,7 @@ for i in range(5, len(p_data)):
     if not np.isnan(curr.get('TD_Buy_9', np.nan)): fig.add_annotation(x=p_data.index[i], y=curr['Low'], text="9", showarrow=False, font=dict(color='#ff6b6b', size=12, weight="bold"), row=1, col=1)
     if not np.isnan(curr.get('TD_Sell_9', np.nan)): fig.add_annotation(x=p_data.index[i], y=curr['High'], text="9", showarrow=False, font=dict(color='#4a9eff', size=12, weight="bold"), row=1, col=1)
     
-    status = detect_smart_money_status(df.iloc[:i+1])
+    status = detect_smart_money_status(p_data.iloc[:i+1])
     if status:
         if "吸籌" in status: fig.add_annotation(x=p_data.index[i], y=curr['Low']*0.98, text=f"🐳吸<br>${curr['Low']:.1f}", showarrow=True, arrowhead=1, ay=40, row=1, col=1, bgcolor="#6f42c1", font=dict(color="white", size=9))
         elif "抄底" in status: fig.add_annotation(x=p_data.index[i], y=curr['Low']*0.98, text=f"⚡抄底<br>${curr['Low']:.1f}", showarrow=True, arrowhead=1, ay=60, row=1, col=1, bgcolor="#9333ea", font=dict(color="white", size=10, weight="bold"))
@@ -556,7 +648,6 @@ fig.add_trace(go.Scatter(x=p_data.index, y=p_data['Signal_Line'], line=dict(colo
 fig.add_trace(go.Scatter(x=p_data.index, y=p_data['DMA_DDD'], line=dict(color='#d8b4fe', width=1)), row=3, col=1)
 fig.add_trace(go.Scatter(x=p_data.index, y=p_data['DMA_AMA'], line=dict(color='#facc15', width=1)), row=3, col=1)
 
-# [V17.16 核心] 根據側邊欄開關決定 dragmode，保護您的手感
 fig.update_layout(dragmode=False if mobile_mode else 'zoom', height=800, template="plotly_dark", xaxis_rangeslider_visible=False, showlegend=False, margin=dict(t=10, b=10, l=10, r=10))
 st.plotly_chart(fig, use_container_width=True)
 
