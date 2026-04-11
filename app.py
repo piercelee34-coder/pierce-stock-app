@@ -12,7 +12,7 @@ import json
 import os
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V17.46 (全景價格通道版)", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="AI 實戰戰情室 V17.48 (極限壓縮 N 字版)", layout="wide", page_icon="🛡️")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -299,7 +299,7 @@ def find_structural_box_bottom(df, current_price):
         return v.iloc[-1]['Low'], p.index[max(0, idx-15)], p.index[min(len(p)-1, idx+15)], False
     return p['Low'].min(), p.index[0], p.index[-1], True
 
-# [V17.46 核心] 接收兩個參數：前高支撐 與 前高壓力，打造完整價格通道
+# [V17.48 核心] 加入 N字形爆發劇本的推演引擎
 def generate_projection_points(df, trend_text, cur_p, iron_p, is_brk, ph_support, ph_resist):
     last_d = df.index[-1]; f_d = []
     d = last_d
@@ -314,55 +314,77 @@ def generate_projection_points(df, trend_text, cur_p, iron_p, is_brk, ph_support
     recent_high_20 = df['High'].tail(20).max()
     is_relief_rally = (rsi < 60 and trend_text == "🐻 熊市") or (rsi > 70) 
 
-    # 將 None 轉換為極值以便於計算
     support_level = ph_support if ph_support is not None else iron_p
     resist_level = ph_resist if ph_resist is not None else float('inf')
 
+    # 極限壓縮判斷 (小於 5%)
+    range_percent = 100.0
+    is_squeezed = False
+    if resist_level != float('inf') and support_level > 0:
+        range_percent = (resist_level - support_level) / cur_p * 100
+        if range_percent < 5.0:
+            is_squeezed = True
+
     scenario_name = ""
 
-    if "牛市" in trend_text:
-        scenario_name = "🐂 牛市 N 字突破 (支撐不破)"
-        # 回測絕對不破下方最近的前高支撐
-        dip = max(cur_p * 0.96, ma20, support_level)
-        # 上攻挑戰上方壓力 (若無壓力則挑戰近期新高)
-        rally = min(cur_p * 1.05, resist_level * 0.99) if resist_level != float('inf') else max(cur_p * 1.05, recent_high_20 * 1.02)
-        x.extend([f_d[4], f_d[14]]); y.extend([dip, rally])
-        
-    elif "熊市" in trend_text:
-        if is_brk:
-            scenario_name = "🕳️ 熊市無底洞墜落"
-            bounce = min(cur_p * 1.03, ma20, resist_level)
-            drop = cur_p * 0.92
-            x.extend([f_d[4], f_d[14]]); y.extend([bounce, drop])
-        elif is_relief_rally:
-            days_to_peak = (9 - td_sell_cur) if (0 < td_sell_cur < 9) else 3
-            days_to_peak = max(1, days_to_peak)
-            scenario_name = f"🐻 熊市打底：TD({td_sell_cur}➔9)動能延續 ➔ 遇壓測底" if (0 < td_sell_cur < 9) else "🐻 熊市打底：均線遇壓 ➔ 二次測底 (W底)"
-            
-            exhaustion_p = min(max(cur_p * 1.01, ma20), resist_level * 0.99)
-            w_dip = max(iron_p, iron_p * 1.015, support_level, cur_p * 0.93) if iron_p > 0 else cur_p * 0.9
-            breakout_p = max(exhaustion_p * 1.05, recent_high_20 * 1.02, cur_p * 1.1)
-            
-            x.extend([f_d[days_to_peak], f_d[days_to_peak + 5], f_d[days_to_peak + 15]])
-            y.extend([exhaustion_p, w_dip, breakout_p])
+    if is_squeezed:
+        # [爆發劇本] 區間極度壓縮，即將表態 (N字型噴發 / 倒N型崩盤)
+        if cur_p > ma20 or "牛市" in trend_text:
+            scenario_name = f"🚀 極限收斂 ({range_percent:.1f}%) ➔ 突破回測 (N字噴發)"
+            up_1 = max(cur_p * 1.03, resist_level * 1.025)   # 衝破壓力
+            dip = max(cur_p * 1.01, resist_level)            # 回踩壓力變支撐
+            up_2 = max(up_1 * 1.05, recent_high_20 * 1.03)   # 再次發動創高
+            x.extend([f_d[4], f_d[9], f_d[18]]); y.extend([up_1, dip, up_2])
         else:
-            scenario_name = "🐻 熊市下降通道"
-            bounce = min(cur_p * 1.06, ma20, resist_level)
-            drop = max(iron_p, cur_p * 0.9)
-            x.extend([f_d[4], f_d[14]]); y.extend([bounce, drop])
+            scenario_name = f"💥 極限收斂 ({range_percent:.1f}%) ➔ 跌破反抽 (倒N崩盤)"
+            down_1 = min(cur_p * 0.97, support_level * 0.975) # 跌破支撐
+            bounce = min(cur_p * 0.99, support_level)         # 反抽支撐變壓力
+            down_2 = max(iron_p, down_1 * 0.92)               # 崩盤尋底
+            x.extend([f_d[4], f_d[9], f_d[18]]); y.extend([down_1, bounce, down_2])
+
     else:
-        if ph_support and cur_p > ph_support:
-            scenario_name = "⚖️ 區間突破 ➔ 回測前高支撐"
-            up_1 = min(cur_p * 1.04, resist_level * 0.99)
-            dip = max(cur_p * 0.96, support_level) # 精準踩在前高支撐上
-            up_2 = max(up_1, dip * 1.05)
-            x.extend([f_d[5], f_d[12], f_d[18]]); y.extend([up_1, dip, up_2])
+        # 正常震盪或通道推演
+        if "牛市" in trend_text:
+            scenario_name = "🐂 牛市 N 字突破 (支撐不破)"
+            dip = max(cur_p * 0.96, ma20, support_level)
+            rally = min(cur_p * 1.05, resist_level * 0.99) if resist_level != float('inf') else max(cur_p * 1.05, recent_high_20 * 1.02)
+            x.extend([f_d[4], f_d[14]]); y.extend([dip, rally])
+            
+        elif "熊市" in trend_text:
+            if is_brk:
+                scenario_name = "🕳️ 熊市無底洞墜落"
+                bounce = min(cur_p * 1.03, ma20, resist_level)
+                drop = cur_p * 0.92
+                x.extend([f_d[4], f_d[14]]); y.extend([bounce, drop])
+            elif is_relief_rally:
+                days_to_peak = (9 - td_sell_cur) if (0 < td_sell_cur < 9) else 3
+                days_to_peak = max(1, days_to_peak)
+                scenario_name = f"🐻 熊市打底：TD({td_sell_cur}➔9)動能延續 ➔ 遇壓測底" if (0 < td_sell_cur < 9) else "🐻 熊市打底：均線遇壓 ➔ 二次測底 (W底)"
+                
+                exhaustion_p = min(max(cur_p * 1.01, ma20), resist_level * 0.99 if resist_level != float('inf') else float('inf'))
+                w_dip = max(iron_p, iron_p * 1.015, support_level, cur_p * 0.93) if iron_p > 0 else cur_p * 0.9
+                breakout_p = max(exhaustion_p * 1.05, recent_high_20 * 1.02, cur_p * 1.1)
+                
+                x.extend([f_d[days_to_peak], f_d[days_to_peak + 5], f_d[days_to_peak + 15]])
+                y.extend([exhaustion_p, w_dip, breakout_p])
+            else:
+                scenario_name = "🐻 熊市下降通道"
+                bounce = min(cur_p * 1.06, ma20, resist_level)
+                drop = max(iron_p, cur_p * 0.9)
+                x.extend([f_d[4], f_d[14]]); y.extend([bounce, drop])
         else:
-            scenario_name = "⚖️ 區間震盪 ➔ 挑戰前高壓力"
-            up_1 = min(cur_p * 1.04, resist_level * 0.99) # 撞擊前高壓力
-            dip = max(cur_p * 0.96, iron_p, support_level)
-            up_2 = resist_level * 1.01 if resist_level != float('inf') else cur_p * 1.05
-            x.extend([f_d[5], f_d[12], f_d[18]]); y.extend([up_1, dip, up_2])
+            if ph_support and cur_p > ph_support:
+                scenario_name = "⚖️ 區間突破 ➔ 回測前高支撐"
+                up_1 = min(cur_p * 1.04, resist_level * 0.99 if resist_level != float('inf') else float('inf'))
+                dip = max(cur_p * 0.96, support_level) 
+                up_2 = max(up_1, dip * 1.05)
+                x.extend([f_d[5], f_d[12], f_d[18]]); y.extend([up_1, dip, up_2])
+            else:
+                scenario_name = "⚖️ 區間震盪 ➔ 挑戰前高壓力"
+                up_1 = min(cur_p * 1.04, resist_level * 0.99 if resist_level != float('inf') else float('inf')) 
+                dip = max(cur_p * 0.96, iron_p, support_level)
+                up_2 = resist_level * 1.01 if resist_level != float('inf') else cur_p * 1.05
+                x.extend([f_d[5], f_d[12], f_d[18]]); y.extend([up_1, dip, up_2])
             
     return x, y, scenario_name
 
@@ -406,7 +428,8 @@ def detect_smart_money_status(df):
     if rsi < 30 and latest['Volume'] > latest['Vol_SMA5']: return "⚡ 恐慌殺盤"
     return None
 
-def get_tactical_advice(df, cur_p, t_s, iron_p):
+# [V17.48 核心] 戰術盒加入紫色暴風預警
+def get_tactical_advice(df, cur_p, t_s, iron_p, ph_support, ph_resist):
     if len(df) < 10: return "⌛ 數據不足", "等待更多 K 線資料寫入...", "#9ca3af"
     latest = df.iloc[-1]
     td_b = latest.get('TD_Buy_Seq', 0)
@@ -414,18 +437,30 @@ def get_tactical_advice(df, cur_p, t_s, iron_p):
     ma20 = latest.get('SMA_20', cur_p)
     rsi = latest.get('RSI', 50)
     
+    s_level = ph_support if ph_support is not None else iron_p
+    r_level = ph_resist if ph_resist is not None else float('inf')
+    
+    # 🌪️ 1. 極限收斂預警 (最高優先級)
+    if r_level != float('inf') and s_level > 0 and ((r_level - s_level) / cur_p * 100) < 5.0:
+        return "🌪️ 即將引爆預警 (極限收斂)", f"支撐(${s_level:.2f})與壓力(${r_level:.2f})空間已被極度壓縮至 5% 內，猶如壓緊的彈簧！隨時面臨【暴力表態】，請密切關注突破方向，順勢操作！", "#d946ef" # 紫紅色
+    
+    # 🔴 2. 歡樂派對結束
     if td_s >= 8 or rsi > 75:
         return "⚠️ 多頭力竭預警 (嚴禁追高)", f"上漲動能已達極限 (目前 TD {int(td_s)} 或是 RSI過熱)。隨時面臨獲利了結賣壓，強烈建議【嚴禁追高】，持有多單者請準備【分批出場】！", "#ef4444"
     
+    # 🟢 3. 歡樂帶
     if 1 <= td_s <= 7 and cur_p > ma20:
         return "🚀 主升歡樂帶 (抱緊處理)", f"目前上漲動能強勁 (TD {int(td_s)})，且穩居月線之上。正處於上升通道，請【沿著均線續抱】，享受獲利，不輕易下車！", "#22c55e"
 
+    # 🟡 4. 殺盤結束
     if td_b >= 8 or rsi < 30:
         return "💎 空頭力竭 (準備破底翻)", f"殺盤動能即將耗盡 (目前 TD 下跌 {int(td_b)} 或是 RSI超賣)，股價已進入絕佳的潛在支撐區。請密切關注反轉向上的【右側買點】！", "#facc15"
         
+    # 🟠 5. 恐慌殺盤
     if 1 <= td_b <= 7 and cur_p < ma20:
         return "🔪 恐慌殺盤中 (嚴禁接刀)", f"目前處於主跌段 (TD 下跌 {int(td_b)})，賣壓極度沉重。在底部紅字 8 或 9 出現之前，請綁好雙手【絕對不要進場買進】！", "#f97316"
         
+    # ⚪ Fallback
     if cur_p > ma20:
         return "📈 多頭延續 (沿均線續抱)", "目前股價穩居月線 (MA20) 之上，多頭格局不變。建議沿均線續抱。", "#22c55e"
     else:
@@ -508,7 +543,7 @@ with st.sidebar:
 # --- 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V17.46")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V17.48")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -540,8 +575,23 @@ vp_60 = calculate_volume_profile(df.tail(60), bins=40)
 vol_poc = vp_60.loc[vp_60['Volume'].idxmax(), 'Price'] if not vp_60.empty else close_v
 iron_price, box_start, box_end, is_breaking = find_structural_box_bottom(df, close_v)
 
+# --- 繪圖區資料庫整理 (提前提取高低點以供戰術盒使用) ---
+p_data = df.tail(120) if "日" in time_opt else df.tail(60)
+
+abs_high = p_data['High'].max()
+local_maxes = p_data['High'][(p_data['High'] == p_data['High'].rolling(9, center=True).max())].dropna()
+filtered_maxes = local_maxes[local_maxes < abs_high]
+
+resist_line = None
+support_line = None
+if not filtered_maxes.empty:
+    above_current = filtered_maxes[filtered_maxes > close_v]
+    if not above_current.empty: resist_line = above_current.iloc[-1]
+    below_current = filtered_maxes[filtered_maxes < close_v]
+    if not below_current.empty: support_line = below_current.iloc[-1]
+
 # --- 戰術建議盒 ---
-tac_title, tac_body, tac_color = get_tactical_advice(df, close_v, t_s, iron_price)
+tac_title, tac_body, tac_color = get_tactical_advice(df, close_v, t_s, iron_price, support_line, resist_line)
 st.markdown(f"""
 <div class="tactical-box" style="border-left-color: {tac_color};">
     <div class="tactical-title">🚩 戰術建議： <span style="color:{tac_color}; margin-left: 8px;">{tac_title}</span></div>
@@ -567,7 +617,6 @@ with r3: st.markdown(f'<div class="ai-box" style="border: 1px solid #00d4ff;"><h
 # ==========================================
 # 繪圖區 (嚴格圖層 Z-Index 管理)
 # ==========================================
-p_data = df.tail(120) if "日" in time_opt else df.tail(60)
 fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_width=[0.2, 0.2, 0.6])
 
 # [第 1 層] 繪製基礎 K 線與 ATR 停損線
@@ -618,28 +667,7 @@ for i in range(5, len(p_data)):
     if (curr['High'] >= t_s or curr['RSI'] > 75) and not (prior['High'] >= t_s or prior['RSI'] > 75):
         fig.add_annotation(x=p_data.index[i], y=curr['High'], text=f"💰達標<br>${curr['Close']:.1f}" if curr['High'] >= t_s else f"🔥過熱<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ax=0, ay=-45, row=1, col=1, bgcolor="rgba(255, 193, 7, 0.8)" if curr['High'] >= t_s else "rgba(255, 69, 0, 0.8)", font=dict(color="black" if curr['High'] >= t_s else "white", size=9))
 
-# [V17.46 核心升級] 雙軌雷達：同時抓出上方壓力與下方支撐
-abs_high = p_data['High'].max()
-local_maxes = p_data['High'][(p_data['High'] == p_data['High'].rolling(9, center=True).max())].dropna()
-
-# 過濾掉絕對高點
-filtered_maxes = local_maxes[local_maxes < abs_high]
-
-resist_line = None
-support_line = None
-
-if not filtered_maxes.empty:
-    # 找尋大於現價的最近一個前高 (天花板/壓力)
-    above_current = filtered_maxes[filtered_maxes > close_v]
-    if not above_current.empty:
-        resist_line = above_current.iloc[-1]
-
-    # 找尋小於現價的最近一個前高 (地板/支撐)
-    below_current = filtered_maxes[filtered_maxes < close_v]
-    if not below_current.empty:
-        support_line = below_current.iloc[-1]
-
-# [第 4 層] 繪製預測折線 (餵入雙軌支撐壓力)
+# [第 4 層] 繪製預測折線 (帶入收斂爆發判定與 N字型軌跡)
 px, py, sc_name = generate_projection_points(df, trend_txt, close_v, iron_price, is_breaking, support_line, resist_line)
 fig.add_trace(go.Scatter(x=px, y=py, mode='lines+markers', line=dict(color='#eab308', width=3, dash='dash'), marker=dict(size=8, symbol='diamond', color='#eab308'), name='🔮 AI 劇本推演'), row=1, col=1)
 for i in range(1, len(px)): fig.add_annotation(x=px[i], y=py[i], text=f"${py[i]:.2f}", showarrow=True, arrowhead=0, ay=-20, font=dict(color="#eab308", size=11), bgcolor="rgba(0,0,0,0.6)", row=1, col=1)
@@ -647,22 +675,18 @@ for i in range(1, len(px)): fig.add_annotation(x=px[i], y=py[i], text=f"${py[i]:
 # [第 5 層 - 終極霸體] 全景價格通道與 UI 標題
 fig.add_hline(y=abs_high, line_dash="dot", line_color="#ef4444", annotation_text=f"🔴 波段最高<br>${abs_high:.2f}", annotation_font_color="#ef4444", annotation_position="top right", annotation_align="right", opacity=1.0, layer="above", row=1, col=1)
 
-# 繪製天花板 (前高壓力)
 if resist_line:
     fig.add_hline(y=resist_line, line_dash="dot", line_color="#f97316", annotation_text=f"🟠 前高壓力<br>${resist_line:.2f}", annotation_font_color="#f97316", annotation_position="top right", annotation_align="right", opacity=1.0, layer="above", row=1, col=1)
 
-# 繪製地板 (前高支撐)
 if support_line:
     fig.add_hline(y=support_line, line_dash="dot", line_color="#3b82f6", annotation_text=f"🔵 前高支撐<br>${support_line:.2f}", annotation_font_color="#3b82f6", annotation_position="bottom right", annotation_align="right", opacity=1.0, layer="above", row=1, col=1)
 
 if not is_breaking and iron_price > 0:
     fig.add_hline(y=iron_price, line_dash="dash", line_color="#20c997", annotation_text=f"🧱 鐵板 ${iron_price:.2f}", annotation_font_color="#20c997", annotation_position="bottom right", opacity=1.0, layer="above", row=1, col=1)
 
-# 絕對座標標題
 fig.add_annotation(x=0.01, y=0.98, xref="paper", yref="paper", text=f"🔮 目前 AI 推演：{sc_name}", showarrow=False, font=dict(color="white", size=14, weight="bold"), bgcolor="rgba(0, 0, 0, 0.9)", bordercolor="#eab308", borderwidth=1, borderpad=6, xanchor="left", yanchor="top")
 fig.add_annotation(x=0.5, y=0.98, xref="paper", yref="paper", text=f"🛡️ 籌碼攻防帶 (突破: ${zone_top:.2f} | 跌破: ${zone_bottom:.2f})", showarrow=False, font=dict(color="#d8b4fe", size=12, weight="bold"), bgcolor="rgba(10, 10, 10, 0.9)", borderpad=4, xanchor="center", yanchor="top")
 
-# 今日收盤點
 fig.add_trace(go.Scatter(x=[last_d], y=[close_v], mode='markers', marker=dict(size=12, color='#00ffff', line=dict(color='white', width=2)), name="今日收盤"), row=1, col=1)
 
 # --- 副圖 MACD ---
