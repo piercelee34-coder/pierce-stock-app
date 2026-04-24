@@ -12,7 +12,7 @@ import json
 import os
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V17.62 (完美除錯版)", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="AI 實戰戰情室 V17.65 (專屬清單版)", layout="wide", page_icon="🛡️")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -38,37 +38,23 @@ st.markdown("""
     .sig-purple {background-color: #4a1b4a; color: #d8b4fe; border: 1px solid #a855f7; padding: 3px 8px; border-radius: 6px; font-size: 13px; display: inline-block; line-height: 1.4;}
     .sig-cyan {background-color: #083344; color: #22d3ee; border: 1px solid #06b6d4; padding: 3px 8px; border-radius: 6px; font-size: 13px; display: inline-block; line-height: 1.4;}
     
-    .tactical-box {
-        background-color: #1a1a1c;
-        padding: 18px 24px;
-        border-radius: 8px;
-        margin-bottom: 20px;
-        border-left: 8px solid; 
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-    }
-    .tactical-title {
-        font-size: 22px;
-        font-weight: bold;
-        color: #ffffff;
-        margin-bottom: 12px;
-        display: flex;
-        align-items: center;
-    }
-    .tactical-body {
-        font-size: 15px;
-        color: #e5e7eb;
-        line-height: 1.6;
-        background-color: #262730;
-        padding: 14px;
-        border-radius: 6px;
-        border: 1px solid #374151;
-    }
+    .tactical-box {background-color: #1a1a1c; padding: 18px 24px; border-radius: 8px; margin-bottom: 20px; border-left: 8px solid; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);}
+    .tactical-title {font-size: 22px; font-weight: bold; color: #ffffff; margin-bottom: 12px; display: flex; align-items: center;}
+    .tactical-body {font-size: 15px; color: #e5e7eb; line-height: 1.6; background-color: #262730; padding: 14px; border-radius: 6px; border: 1px solid #374151;}
 </style>
 """, unsafe_allow_html=True)
 
 # --- 1. 資料系統 ---
 WATCHLIST_FILE, ANCHOR_FILE, TW_NAMES_FILE = "watchlist.json", "anchors.json", "tw_names.json"
-DEFAULT_WATCHLISTS = {"清單 A": ['^IXIC', 'QQQ', 'NVDA', 'TSM'], "清單 B": ['MU', 'AAPL', 'TSLA'], "清單 C": ['0050.TW', '6127.TWO']}
+
+# [V17.65] 預設清單更新，加入清單 E 與您的專屬股票
+DEFAULT_WATCHLISTS = {
+    "清單 A": ['^IXIC', 'QQQ', 'NVDA', 'TSM'], 
+    "清單 B": ['MU', 'AAPL', 'TSLA'], 
+    "清單 C": ['0050.TW', '6127.TWO'],
+    "清單 D": ['ONDS', 'RXRX', 'CRCL'],
+    "清單 E": ['00878.TW', '2324.TW', '8215.TW', '00403A.TW', '4958.TW', '2344.TW', '2327.TW', '1815.TWO', '5347.TWO']
+}
 
 def json_load(f_name, default):
     if os.path.exists(f_name):
@@ -87,48 +73,67 @@ def save_watchlists(data): json_save(WATCHLIST_FILE, data); st.session_state.wat
 def load_anchors(): return json_load(ANCHOR_FILE, {})
 def save_anchor_data(data): json_save(ANCHOR_FILE, data)
 
+# [V17.64 延續] 終極台股正名引擎 (自動清除英文快取)
 def get_stock_name(ticker):
     us_map = {'NVDA': '輝達', 'TSLA': '特斯拉', 'AAPL': '蘋果', 'MU': '美光', 'TSM': '台積電', 'GOOGL': '谷歌'}
     base = ticker.split('.')[0]
     if base in us_map and not (".TW" in ticker or ".TWO" in ticker): return us_map[base]
+    
     if ".TW" in ticker or ".TWO" in ticker:
         local_map = json_load(TW_NAMES_FILE, {})
-        bad_words = ["Yahoo", "股市", "走勢", "無符合", "找不到", "代碼或名稱", "html", "TW"]
-        keys_to_delete = [k for k, v in local_map.items() if any(bad in v for bad in bad_words)]
-        for k in keys_to_delete: del local_map[k]
+        bad_words = ["Yahoo", "股市", "走勢", "無符合", "找不到", "代碼或名稱", "html", "TW", "TWO", "INC", "CORP", "LTD", "COMPANY"]
+        
+        # 🧹 自動淨化協議：清除包含壞字，或是「完全沒有中文且長度大於6」的錯誤快取
+        keys_to_delete = [k for k, v in local_map.items() if any(bad in v.upper() for bad in bad_words) or (not re.search(r'[\u4e00-\u9fff]', v) and len(v) > 6)]
+        for k in keys_to_delete: 
+            del local_map[k]
+        
         if ticker in local_map: return local_map[ticker]
+        
         name = None
-        prefix = "otc" if ".TWO" in ticker else "tse"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        
+        # 1. 證交所 API (最準確的中文名，上市櫃代碼皆可查)
         try:
-            res = requests.get(f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch={prefix}_{base}.tw", timeout=3)
+            res = requests.get(f"https://www.twse.com.tw/zh/api/codeQuery?query={base}", headers=headers, timeout=3)
             if res.status_code == 200:
                 data = res.json()
-                if "msgArray" in data and len(data["msgArray"]) > 0:
-                    n = data["msgArray"][0].get("n")
-                    if n and n != "--": name = n.strip()
+                if "suggestions" in data and len(data["suggestions"]) > 0:
+                    sug = data["suggestions"][0]
+                    if "無符合" not in sug:
+                        n = sug.replace(base, '').replace('\t', '').strip()
+                        if re.search(r'[\u4e00-\u9fff]', n): # 嚴格檢查：必須包含中文字
+                            name = n
         except: pass
+
+        # 2. 鉅亨網 API (備用)
         if not name:
             try:
-                res = requests.get(f"https://ws.api.cnyes.com/ws/api/v1/quote/quotes/TWS:{base}:STOCK", timeout=3)
+                cnyes_prefix = "OTC" if ".TWO" in ticker else "TWS"
+                res = requests.get(f"https://ws.api.cnyes.com/ws/api/v1/quote/quotes/{cnyes_prefix}:{base}:STOCK", headers=headers, timeout=3)
                 if res.status_code == 200:
                     data = res.json()
                     if "data" in data and len(data["data"]) > 0:
                         n = data["data"][0].get("name")
-                        if n: name = n.strip()
+                        if n and re.search(r'[\u4e00-\u9fff]', n): name = n.strip()
             except: pass
-        if not name and ".TWO" not in ticker:
+
+        # 3. Yahoo Search API (最後備用)
+        if not name:
             try:
-                res = requests.get(f"https://www.twse.com.tw/zh/api/codeQuery?query={base}", timeout=2)
+                res = requests.get(f"https://query2.finance.yahoo.com/v1/finance/search?q={ticker}", headers=headers, timeout=3)
                 if res.status_code == 200:
-                    data = res.json()
-                    if "suggestions" in data and len(data["suggestions"]) > 0:
-                        sug = data["suggestions"][0]
-                        if "無符合" not in sug: name = sug.replace(base, '').replace('\t', '').strip()
+                    quotes = res.json().get('quotes', [])
+                    if quotes:
+                        n = quotes[0].get('shortname') or quotes[0].get('longname')
+                        if n and not any(bad in n.upper() for bad in bad_words): name = n.strip()
             except: pass
-        if name and not any(bad in name for bad in bad_words):
+
+        if name and not any(bad in name.upper() for bad in bad_words):
             local_map[ticker] = name
             json_save(TW_NAMES_FILE, local_map)
             return name
+            
     return ticker
 
 if 'watchlists' not in st.session_state: st.session_state.watchlists = load_watchlists()
@@ -341,11 +346,11 @@ def predict_target_and_rating(df):
 
 def format_volume(num): return f"{num/1e9:.2f}B" if num >= 1e9 else f"{num/1e6:.2f}M" if num >= 1e6 else f"{num}"
 
-# [V17.62 重寫] 財報日期引擎 (防禦 YFinance API 異動)
+# 財報引擎
 @st.cache_data(ttl=300)
 def get_earnings_status(ticker):
     ignore_list = ["0050", "0056", "00878", "QQQ", "SPY", "DIA", "IWM", "^TWII", "^IXIC"]
-    if any(x in ticker for x in ignore_list): return "", ""
+    if any(x in ticker for x in ignore_list) or "00403A" in ticker: return "", ""
     
     next_date = "N/A"
     last_result = "⚪ 無前季數據"
@@ -353,24 +358,17 @@ def get_earnings_status(ticker):
     try:
         t = yf.Ticker(ticker)
         hist = None
-        
-        # 1. 嘗試多種方式獲取財報 DataFrame
-        try:
-            hist = t.get_earnings_dates(limit=12)
+        try: hist = t.get_earnings_dates(limit=12)
         except:
             try: hist = t.earnings_dates
             except: pass
             
-        # 2. 如果成功抓到 DataFrame，解析未來與過去的日期
         if hist is not None and not hist.empty:
             now_dt = pd.Timestamp.now(tz=hist.index.tz) if hist.index.tz else pd.Timestamp.now()
-            
-            # 解析下次財報日 (未來日期中最近的一天)
             future_dates = hist[hist.index > now_dt]
             if not future_dates.empty:
                 next_date = future_dates.index.min().strftime('%Y-%m-%d')
                 
-            # 解析上次財報結果 (Reported EPS 不為空的最近一筆)
             try:
                 past_dates = hist[hist['Reported EPS'].notna()]
                 if not past_dates.empty:
@@ -388,7 +386,6 @@ def get_earnings_status(ticker):
                         last_result = f'<span class="earn-beat">🟢 優於預期 (+{sur:.1f}%)</span>' if sur > 0 else f'<span class="earn-miss">🔴 遜於預期 ({sur:.1f}%)</span>'
             except: pass
         
-        # 3. 如果 DataFrame 沒抓到下次日期，嘗試舊的 calendar 方法
         if next_date == "N/A":
             try:
                 cal = t.calendar
@@ -448,7 +445,7 @@ with st.sidebar:
 # --- 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V17.62")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V17.65")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -499,10 +496,9 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# [V17.62修正] 綜合戰略排版、劇本推演整合與上色
+# 一體化四大戰情方塊佈局 (1.3 : 1 : 1 : 1)
 # ==========================================
 ern_date, ern_res = get_earnings_status(cur_t)
-
 px, py, sc_name = generate_projection_points(df, trend_txt, close_v, iron_price, is_breaking, support_line, resist_line)
 sc_color_class = get_compre_color_class(sc_name)
 
@@ -518,9 +514,17 @@ with c1:
     </div>
     ''', unsafe_allow_html=True)
 
-# [V17.62 修復排版] 單行封裝 HTML，杜絕 Streamlit Markdown 的縮排 Bug
 with c2:
-    st.markdown(f'<div class="ai-box" style="display:flex; flex-direction:column; justify-content:center;"><h5 style="color:white; margin:0; margin-bottom:12px;">📡 綜合戰略</h5><div><span class="{sigs["Summary_Color"]}" style="font-size:14px; font-weight:bold; padding:4px 10px; display:inline-block; line-height:1.4; border-radius:6px; margin-bottom:8px;">{sigs["Summary"]}</span></div><div style="margin-top:4px; padding-top:8px; border-top:1px dashed #555;"><span style="color:#aaa; font-size:12px;">🔮 未來推演:</span><br><span class="{sc_color_class}" style="font-size:14px; font-weight:bold; line-height:1.3; border:0; background:transparent;">{sc_name}</span></div></div>', unsafe_allow_html=True)
+    st.markdown(f'''
+    <div class="ai-box" style="display:flex; flex-direction:column; justify-content:center;">
+        <h5 style="color:white; margin:0; margin-bottom:12px;">📡 綜合戰略</h5>
+        <div><span class="{sigs["Summary_Color"]}" style="font-size:14px; font-weight:bold; padding:4px 10px; display:inline-block; line-height:1.4; border-radius:6px; margin-bottom:8px;">{sigs["Summary"]}</span></div>
+        <div style="margin-top: 4px; padding-top: 8px; border-top: 1px dashed #555;">
+            <span style="color:#aaa; font-size:12px;">🔮 未來推演:</span><br>
+            <span class="{sc_color_class}" style="font-size:14px; font-weight:bold; line-height:1.3; border:0; background:transparent;">{sc_name}</span>
+        </div>
+    </div>
+    ''', unsafe_allow_html=True)
 
 with c3:
     st.markdown(f'''
@@ -580,7 +584,6 @@ for i in range(5, len(p_data)):
     if macd_sell: fig.add_annotation(x=p_data.index[i], y=curr['High'], text=f"SELL<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ax=0, ay=-25, row=1, col=1, bgcolor="rgba(220, 53, 69, 0.8)", font=dict(color="white", size=9))
     if (curr['High'] >= t_s or curr['RSI'] > 75) and not (prior['High'] >= t_s or prior['RSI'] > 75): fig.add_annotation(x=p_data.index[i], y=curr['High'], text=f"💰達標<br>${curr['Close']:.1f}" if curr['High'] >= t_s else f"🔥過熱<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ax=0, ay=-45, row=1, col=1, bgcolor="rgba(255, 193, 7, 0.8)" if curr['High'] >= t_s else "rgba(255, 69, 0, 0.8)", font=dict(color="black" if curr['High'] >= t_s else "white", size=9))
 
-    # [V17.61 核心] 極簡「支撐」標籤 (與吞噬一樣大小)
     is_near_support = False
     if support_line and abs(curr['Low'] - support_line) / support_line < 0.015: is_near_support = True
     if iron_price > 0 and abs(curr['Low'] - iron_price) / iron_price < 0.015: is_near_support = True
@@ -595,7 +598,6 @@ for i in range(5, len(p_data)):
     if is_near_support and vol_surge and strong_reversal:
         fig.add_annotation(x=p_data.index[i], y=curr['Low'], text="支撐", showarrow=True, arrowhead=1, ax=0, ay=30, row=1, col=1, font=dict(color="#00ffff", size=9, weight="bold"))
 
-# 畫出 AI 預測線 (細虛線 width=1)
 fig.add_trace(go.Scatter(x=px, y=py, mode='lines+markers', line=dict(color='#eab308', width=1, dash='dash'), marker=dict(size=8, symbol='diamond', color='#eab308'), name='🔮 AI 劇本推演'), row=1, col=1)
 for i in range(1, len(px)): fig.add_annotation(x=px[i], y=py[i], text=f"${py[i]:.2f}", showarrow=True, arrowhead=0, ay=-20, font=dict(color="#eab308", size=11), bgcolor="rgba(0,0,0,0.6)", row=1, col=1)
 
@@ -605,8 +607,6 @@ if support_line: fig.add_hline(y=support_line, line_dash="dot", line_color="#3b8
 if not is_breaking and iron_price > 0: fig.add_hline(y=iron_price, line_dash="dash", line_color="#20c997", annotation_text=f"🧱 鐵板 ${iron_price:.2f}", annotation_font_color="#20c997", annotation_position="bottom right", opacity=1.0, layer="above", row=1, col=1)
 
 fig.add_annotation(x=0.5, y=0.98, xref="paper", yref="paper", text=f"🛡️ 籌碼攻防帶 (突破: ${zone_top:.2f} | 跌破: ${zone_bottom:.2f})", showarrow=False, font=dict(color="#d8b4fe", size=12, weight="bold"), bgcolor="rgba(10, 10, 10, 0.9)", borderpad=4, xanchor="center", yanchor="top")
-
-# [V17.61 修正] 弱化今日收盤圓點 (縮小到6+淡藍 rgba(100, 149, 237, 0.6))
 fig.add_trace(go.Scatter(x=[last_d], y=[close_v], mode='markers', marker=dict(size=6, color='rgba(100, 149, 237, 0.6)', line=dict(color='rgba(255, 255, 255, 0.5)', width=1)), name="今日收盤"), row=1, col=1)
 
 # 副圖
