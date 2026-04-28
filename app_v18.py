@@ -11,7 +11,7 @@ import os
 import re
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V18.02 (動態雷達版)", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V18.03 (相容性修復版)", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -132,8 +132,11 @@ if 'current_ticker' not in st.session_state:
 
 # --- 2. 總經指標 API 引擎 ---
 def get_aaii_data(): return 51.5, 25.1, 23.4
+
+# [V18.03 修復] 改用原生 datetime 計算 52 週，徹底避免長短腳陣列崩潰
 def get_naaim_data():
-    dates = pd.date_range(end=datetime.now(), periods=52, freq='W')
+    now = datetime.now()
+    dates = [now - timedelta(weeks=51-i) for i in range(52)]
     values = np.random.randint(40, 100, size=52)
     return pd.DataFrame({'Date': dates, 'Exposure': values})
 
@@ -443,7 +446,6 @@ def get_earnings_status(ticker):
         return f"📅 財報: {next_date}", last_result
     except: return "📅 財報: N/A", "⚪ 無數據"
 
-# --- [V18.02] 邏輯拆解：分開處理 TD 與 RSI 警報 ---
 def get_tactical_advice(df, cur_p, t_s, iron_p, ph_support, ph_resist, bias_ma5, bias_limit, engine_type):
     if len(df) < 10: return "⌛ 數據不足", "等待更多 K 線資料寫入...", "#9ca3af"
     latest = df.iloc[-1]
@@ -455,7 +457,6 @@ def get_tactical_advice(df, cur_p, t_s, iron_p, ph_support, ph_resist, bias_ma5,
     b_upper = latest.get('Bollinger_Upper', float('inf'))
     b_lower = latest.get('Bollinger_Lower', 0)
     
-    # 雙重鎖定極限
     if cur_p > b_upper and bias_ma5 >= bias_limit:
         return "🚨 雙重鎖定 (極限逃頂)", f"【強烈警告】股價已飛出布林上軌，且 MA5 正乖離達 {bias_ma5:.1f}% (超過該股性極限 {bias_limit}%)！橡皮筋瀕臨斷裂，主力倒貨風險極高，請立即【逢高收網、入袋為安】！", "#ef4444"
     if cur_p < b_lower and bias_ma5 <= -bias_limit:
@@ -466,7 +467,6 @@ def get_tactical_advice(df, cur_p, t_s, iron_p, ph_support, ph_resist, bias_ma5,
     
     if r_level != float('inf') and s_level > 0 and ((r_level - s_level) / cur_p * 100) < 5.0: return "🌪️ 即將引爆預警 (極限收斂)", f"支撐(${s_level:.2f})與壓力(${r_level:.2f})空間已被極度壓縮至 5% 內，猶如壓緊的彈簧！隨時面臨【暴力表態】，請密切關注突破方向，順勢操作！", "#d946ef" 
     
-    # [V18.02 邏輯拆解] 獨立判斷 TD 與 RSI (並引入動態 RSI 門檻)
     if td_s >= 8: 
         return "⚠️ 動能倒數 (留意轉折)", f"上漲動能已達極限 (目前已亮出 TD {int(td_s)})。即將面臨時間轉折賣壓，強烈建議【嚴禁追高】，持有多單者請準備【分批出場】！", "#ef4444"
     
@@ -537,7 +537,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V18.02")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V18.03")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -582,7 +582,6 @@ cur_sma5 = latest.get('SMA_5', close_v)
 bias_ma5 = ((close_v - cur_sma5) / cur_sma5) * 100 if cur_sma5 else 0
 bias_limit = 5.0 if engine_type == "trend" else 10.0 if engine_type == "momentum" else 20.0
 
-# 傳入 engine_type 讓 AI 判斷是否為動能股
 tac_title, tac_body, tac_color = get_tactical_advice(df, close_v, t_s, iron_price, support_line, resist_line, bias_ma5, bias_limit, engine_type)
 st.markdown(f'<div class="tactical-box" style="border-left-color: {tac_color};"><div class="tactical-title">🚩 戰術建議： <span style="color:{tac_color}; margin-left: 8px;">{tac_title}</span></div><div class="tactical-body">💡 <b>行動指南：</b> {tac_body}</div></div>', unsafe_allow_html=True)
 
