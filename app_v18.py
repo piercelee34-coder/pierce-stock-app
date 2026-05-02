@@ -11,7 +11,7 @@ import os
 import re
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V22", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -178,26 +178,486 @@ if 'current_ticker' not in st.session_state:
             break
 
 # --- 2. 總經指標 API 引擎 ---
-# [修復 #5] 標示為示範數據，不誤導使用者
-# [修復 #5] 加上 @st.cache_data，避免每次 rerun 都重新計算
-@st.cache_data(ttl=86400)
-def get_aaii_data():
-    # ⚠️ 示範數據，非即時 API
-    return 51.5, 25.1, 23.4
+# =============================================================
+# [v25 重構] NAAIM / AAII 真實資料抓取（含限流與快取）
+# 設計原則：
+#   1. NAAIM 每週四發布、AAII 每週四發布
+#   2. 當日嘗試 2~5 次（每 30 分一次），抓到後快取整週
+#   3. 抓不到 → 退回最後一次成功的快取，再退回示範資料
+#   4. 主源 macromicro，後備 NAAIM 官方 XLSX
+# =============================================================
+import time as _time
+
+_SENT_CACHE_DIR = ".sentiment_cache"
+_NAAIM_CACHE_FILE = os.path.join(_SENT_CACHE_DIR, "naaim.json")
+_AAII_CACHE_FILE = os.path.join(_SENT_CACHE_DIR, "aaii.json")
+_ATTEMPT_LOG_FILE = os.path.join(_SENT_CACHE_DIR, "attempts.json")
+_MAX_ATTEMPTS_PER_DAY = 5
+_MIN_ATTEMPT_GAP_MIN = 30
+_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 
 
-# [修復 #4 v2] 保留 seed=42 基礎曲線，每分鐘疊加 ±3 的微浮動，保留動態感又不亂跳
-@st.cache_data(ttl=60)
+def _ensure_sent_cache_dir():
+    if not os.path.exists(_SENT_CACHE_DIR):
+        try:
+            os.makedirs(_SENT_CACHE_DIR, exist_ok=True)
+        except Exception:
+            pass
+
+
+def _sent_load(path, default):
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return default
+
+
+def _sent_save(path, data):
+    _ensure_sent_cache_dir()
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, default=str)
+    except Exception:
+        pass
+
+
+def _can_fetch(source_key: str) -> bool:
+    log = _sent_load(_ATTEMPT_LOG_FILE, {})
+    today = datetime.now().strftime("%Y-%m-%d")
+    today_log = log.get(today, {}).get(source_key, {"count": 0, "last_ts": 0, "has_success": False})
+    if today_log.get("has_success", False):
+        return False
+    if today_log.get("count", 0) >= _MAX_ATTEMPTS_PER_DAY:
+        return False
+    last_ts = today_log.get("last_ts", 0)
+    if last_ts and (_time.time() - last_ts) < _MIN_ATTEMPT_GAP_MIN * 60:
+        return False
+    return True
+
+
+def _log_fetch(source_key: str, success: bool):
+    log = _sent_load(_ATTEMPT_LOG_FILE, {})
+    today = datetime.now().strftime("%Y-%m-%d")
+    if today not in log:
+        log[today] = {}
+    if source_key not in log[today]:
+        log[today][source_key] = {"count": 0, "last_ts": 0, "has_success": False}
+    log[today][source_key]["count"] += 1
+    log[today][source_key]["last_ts"] = _time.time()
+    if success:
+        log[today][source_key]["has_success"] = True
+    cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+    log = {k: v for k, v in log.items() if k >= cutoff}
+    _sent_save(_ATTEMPT_LOG_FILE, log)
+
+
+def _fetch_naaim_macromicro():
+    try:
+        url = "https://www.macromicro.me/charts/data/46198"
+        headers = {
+            "User-Agent": _UA,
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Referer": "https://www.macromicro.me/charts/46198/naaim-exposure-index",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        r = requests.get(url, headers=headers, timeout=8)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        series = None
+        if isinstance(data, dict):
+            if "data" in data and isinstance(data["data"], dict):
+                for k, v in data["data"].items():
+                    if isinstance(v, dict) and "series" in v:
+                        series = v["series"]
+                        break
+            elif "series" in data:
+                series = data["series"]
+        if not series:
+            return None
+        out = []
+        for item in series:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                ts, val = item[0], item[1]
+                try:
+                    if ts > 1e10:
+                        dt = datetime.fromtimestamp(ts / 1000)
+                    else:
+                        dt = datetime.fromtimestamp(ts)
+                    out.append({"date": dt.strftime("%Y-%m-%d"), "value": float(val)})
+                except Exception:
+                    continue
+        return out if len(out) >= 4 else None
+    except Exception:
+        return None
+
+
+def _fetch_naaim_official():
+    try:
+        url = "https://naaim.org/wp-content/uploads/2014/03/NAAIM-Exposure-Index-Data.xlsx"
+        r = requests.get(url, headers={"User-Agent": _UA}, timeout=10)
+        if r.status_code != 200:
+            return None
+        try:
+            import io as _io
+            df_x = pd.read_excel(_io.BytesIO(r.content))
+        except Exception:
+            return None
+        date_col, val_col = None, None
+        for c in df_x.columns:
+            cl = str(c).lower()
+            if "date" in cl and date_col is None:
+                date_col = c
+            elif ("naaim" in cl or "exposure" in cl or "mean" in cl or "average" in cl) and val_col is None:
+                val_col = c
+        if not date_col or not val_col:
+            return None
+        df_x = df_x[[date_col, val_col]].dropna()
+        df_x.columns = ["date", "value"]
+        df_x["date"] = pd.to_datetime(df_x["date"], errors="coerce")
+        df_x = df_x.dropna(subset=["date"]).sort_values("date").tail(60)
+        out = [{"date": rr["date"].strftime("%Y-%m-%d"), "value": float(rr["value"])}
+               for _, rr in df_x.iterrows()]
+        return out if len(out) >= 4 else None
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=1800)  # 30 分鐘記憶體 cache,真正限流靠下面 disk 機制
 def get_naaim_data():
+    """
+    回傳 (DataFrame[Date, Exposure], status_str)
+    status_str: "real" / "cached" / "demo"
+    """
+    cache = _sent_load(_NAAIM_CACHE_FILE, None)
+
+    # 1. 檔案 cache 有資料且 <6 天 → 直接用
+    if cache:
+        try:
+            last_dt = datetime.strptime(cache.get("last_update", ""), "%Y-%m-%d %H:%M:%S")
+            if (datetime.now() - last_dt).days < 6:
+                df = pd.DataFrame(cache["data"])
+                df["Date"] = pd.to_datetime(df["date"])
+                df["Exposure"] = pd.to_numeric(df["value"], errors="coerce")
+                return df[["Date", "Exposure"]].dropna(), "cached"
+        except Exception:
+            pass
+
+    # 2. 嘗試抓取（限流）
+    data = None
+    if _can_fetch("naaim"):
+        data = _fetch_naaim_macromicro()
+        if not data:
+            data = _fetch_naaim_official()
+        _log_fetch("naaim", success=(data is not None))
+
+    if data:
+        _sent_save(_NAAIM_CACHE_FILE, {
+            "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "data": data,
+        })
+        df = pd.DataFrame(data)
+        df["Date"] = pd.to_datetime(df["date"])
+        df["Exposure"] = pd.to_numeric(df["value"], errors="coerce")
+        return df[["Date", "Exposure"]].dropna(), "real"
+
+    # 3. 退回 cache（即便過期也用）
+    if cache:
+        df = pd.DataFrame(cache.get("data", []))
+        if not df.empty:
+            df["Date"] = pd.to_datetime(df["date"])
+            df["Exposure"] = pd.to_numeric(df["value"], errors="coerce")
+            return df[["Date", "Exposure"]].dropna(), "cached"
+
+    # 4. 完全沒資料 → 示範
     now = datetime.now()
     dates = [now - timedelta(weeks=51 - i) for i in range(52)]
-    base_rng = np.random.default_rng(seed=42)          # 固定底稿
-    base_values = base_rng.integers(40, 100, size=52).astype(float)
-    minute_seed = int(now.strftime("%Y%m%d%H%M"))       # 每分鐘換一次微幅浮動
-    float_rng = np.random.default_rng(seed=minute_seed)
-    values = base_values + float_rng.uniform(-3.0, 3.0, size=52)
-    values = np.clip(values, 20, 110).round(1)
-    return pd.DataFrame({'Date': dates, 'Exposure': values})
+    rng = np.random.default_rng(seed=42)
+    values = np.clip(rng.integers(40, 100, size=52).astype(float), 20, 110).round(1)
+    return pd.DataFrame({"Date": dates, "Exposure": values}), "demo"
+
+
+def _fetch_aaii_macromicro():
+    try:
+        url = "https://www.macromicro.me/charts/data/20828"
+        headers = {
+            "User-Agent": _UA,
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Referer": "https://www.macromicro.me/charts/20828/us-aaii-sentimentsurvey",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        r = requests.get(url, headers=headers, timeout=8)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        series_dict = {}
+        if isinstance(data, dict) and "data" in data and isinstance(data["data"], dict):
+            for k, v in data["data"].items():
+                if isinstance(v, dict) and "series" in v:
+                    name = str(v.get("name", k)).lower()
+                    series_dict[name] = v["series"]
+
+        def _pick_latest(keys):
+            for kw in keys:
+                for name, s in series_dict.items():
+                    if kw in name and s:
+                        try:
+                            return float(s[-1][1])
+                        except Exception:
+                            continue
+            return None
+
+        bull = _pick_latest(["bull", "看多"])
+        neu = _pick_latest(["neutral", "中立"])
+        bear = _pick_latest(["bear", "看空"])
+        if bull is not None and bear is not None:
+            if neu is None:
+                neu = max(0, 100 - bull - bear)
+            return (round(bull, 1), round(neu, 1), round(bear, 1))
+        return None
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=1800)
+def get_aaii_data():
+    """
+    回傳 ((bull, neu, bear), status_str)
+    """
+    cache = _sent_load(_AAII_CACHE_FILE, None)
+    if cache:
+        try:
+            last_dt = datetime.strptime(cache.get("last_update", ""), "%Y-%m-%d %H:%M:%S")
+            if (datetime.now() - last_dt).days < 6:
+                d = cache.get("data", {})
+                return (d.get("bull", 0), d.get("neu", 0), d.get("bear", 0)), "cached"
+        except Exception:
+            pass
+
+    result = None
+    if _can_fetch("aaii"):
+        result = _fetch_aaii_macromicro()
+        _log_fetch("aaii", success=(result is not None))
+
+    if result:
+        bull, neu, bear = result
+        _sent_save(_AAII_CACHE_FILE, {
+            "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "data": {"bull": bull, "neu": neu, "bear": bear},
+        })
+        return (bull, neu, bear), "real"
+
+    if cache:
+        d = cache.get("data", {})
+        return (d.get("bull", 0), d.get("neu", 0), d.get("bear", 0)), "cached"
+
+    return (51.5, 25.1, 23.4), "demo"
+
+
+# =============================================================
+# [v25 新增] 大盤崩跌警示模組
+# =============================================================
+_INDEX_TICKERS = {
+    "^IXIC", "^GSPC", "^DJI", "^SOX", "^TWII", "^TW50",
+    "QQQ", "SPY", "DIA", "IWM",
+}
+
+
+def is_index_or_etf(ticker: str) -> bool:
+    """判定是否為大盤類標的（指數 / ETF）。"""
+    if not ticker:
+        return False
+    if ticker.startswith("^"):
+        return True
+    base = ticker.upper()
+    if base in _INDEX_TICKERS:
+        return True
+    etf_keywords = ["QQQ", "SPY", "DIA", "IWM", "VOO", "VTI",
+                    "00878", "0050", "0056", "00713", "00919", "00929", "00940", "00713"]
+    return any(k in base for k in etf_keywords)
+
+
+def detect_market_crash_signals(df, naaim_value=None, naaim_prev_max=None,
+                                 aaii_bull=None, aaii_bear=None):
+    """
+    偵測大盤崩跌前兆（多維度加權打分）。
+    
+    分數規則（總分越高 = 風險越高）：
+      1. 趨勢崩壞（跌破季線 + 月線死叉）：+2
+      2. RSI 高位轉折（前 5 日過熱 → 急墜）：+2
+      3. MACD 高位死叉（零軸上方死叉）：+1
+      4. 爆量黑 K（量增 1.5x + 跌 2%）：+2
+      5. 上漲乏力（連 3 紅但量縮）：+1
+      6. 布林反轉下殺：+2
+      7. ATR 飆升（波動 1.5x）：+1
+      8. 跌破 120 日新低：+3
+      9. NAAIM 從高點回落：+2
+     10. AAII 散戶極度樂觀：+1
+    
+    等級：
+      0-2：⚪ 安全
+      3-4：🟡 注意
+      5-7：🟠 警戒
+      8+ ：🔴 崩跌警報
+    """
+    result = {
+        "score": 0, "level": "safe",
+        "level_label": "⚪ 大盤穩健", "level_color": "#22c55e",
+        "signals": [], "summary": "目前大盤未出現崩跌前兆，可正常操作。",
+    }
+    if df is None or len(df) < 60:
+        result["summary"] = "資料不足，無法判定大盤狀態。"
+        return result
+
+    latest = df.iloc[-1]
+    prev = df.iloc[-2]
+    score = 0
+    sigs = []
+
+    # 1. 趨勢崩壞
+    try:
+        ma20 = latest.get("SMA_20", np.nan)
+        ma60 = latest.get("SMA_60", np.nan)
+        ma20_p = prev.get("SMA_20", np.nan)
+        ma60_p = prev.get("SMA_60", np.nan)
+        if (not pd.isna(ma60) and latest["Close"] < ma60 and
+                not pd.isna(ma20) and ma20 < ma60):
+            score += 2
+            sigs.append("⚠️ 趨勢崩壞（跌破季線 + 月線死叉季線）")
+        elif (not pd.isna(ma20) and not pd.isna(ma20_p) and
+              not pd.isna(ma60) and not pd.isna(ma60_p) and
+              ma20 < ma60 and ma20_p >= ma60_p):
+            score += 1
+            sigs.append("⚠️ 月線剛死叉季線（趨勢轉空）")
+    except Exception:
+        pass
+
+    # 2. RSI 高位轉折
+    try:
+        rsi_now = latest.get("RSI", 50)
+        rsi_max5 = df["RSI"].iloc[-6:-1].max() if len(df) >= 6 else 50
+        if not pd.isna(rsi_max5) and rsi_max5 > 75 and rsi_now < 50:
+            score += 2
+            sigs.append(f"⚠️ RSI 高位轉折（5日內過熱 {rsi_max5:.0f} → 急墜 {rsi_now:.0f}）")
+        elif rsi_now > 75:
+            score += 1
+            sigs.append(f"⚠️ RSI 過熱 ({rsi_now:.0f})")
+    except Exception:
+        pass
+
+    # 3. MACD 高位死叉
+    try:
+        macd, sig_l = latest.get("MACD", 0), latest.get("Signal_Line", 0)
+        macd_p, sig_p = prev.get("MACD", 0), prev.get("Signal_Line", 0)
+        if macd_p >= sig_p and macd < sig_l and macd > 0:
+            score += 1
+            sigs.append("⚠️ MACD 零軸上方死叉")
+    except Exception:
+        pass
+
+    # 4. 爆量黑 K
+    try:
+        vol_5ma = latest.get("Vol_SMA5", latest["Volume"])
+        if (latest["Volume"] > vol_5ma * 1.5 and
+                latest["Close"] < latest["Open"] and
+                latest["Open"] != 0 and
+                (latest["Close"] - latest["Open"]) / latest["Open"] < -0.02):
+            score += 2
+            chg = (latest["Close"] - latest["Open"]) / latest["Open"] * 100
+            sigs.append(f"🔴 爆量黑 K（量 {latest['Volume']/vol_5ma:.1f}x，跌 {chg:.1f}%）")
+    except Exception:
+        pass
+
+    # 5. 上漲乏力
+    try:
+        if len(df) >= 4:
+            last3 = df.iloc[-3:]
+            all_red = (last3["Close"] > last3["Open"]).all()
+            vol_dec = (last3["Volume"].iloc[0] > last3["Volume"].iloc[1] >
+                       last3["Volume"].iloc[2])
+            if all_red and vol_dec:
+                score += 1
+                sigs.append("⚠️ 上漲乏力（連 3 紅但量逐步萎縮）")
+    except Exception:
+        pass
+
+    # 6. 布林反轉下殺
+    try:
+        last3 = df.iloc[-4:-1]
+        bb_upper = last3["Bollinger_Upper"]
+        touched = ((last3["High"] >= bb_upper * 0.99) & bb_upper.notna()).any()
+        ma20 = latest.get("SMA_20", latest["Close"])
+        if touched and not pd.isna(ma20) and latest["Close"] < ma20:
+            score += 2
+            sigs.append("🔴 布林反轉下殺（觸上軌後 3 日內跌破月線）")
+    except Exception:
+        pass
+
+    # 7. ATR 飆升
+    try:
+        atr_now = latest.get("ATR", np.nan)
+        atr_avg14 = df["ATR"].iloc[-15:-1].mean() if len(df) >= 15 else atr_now
+        if not pd.isna(atr_now) and not pd.isna(atr_avg14) and atr_avg14 > 0:
+            if atr_now > atr_avg14 * 1.5:
+                score += 1
+                sigs.append(f"⚠️ ATR 飆升（波動放大 {atr_now/atr_avg14:.1f}x）")
+    except Exception:
+        pass
+
+    # 8. 跌破 120 日新低
+    try:
+        if len(df) >= 120:
+            low_120 = df["Low"].iloc[-120:].min()
+            if latest["Close"] < low_120 * 1.01:
+                score += 3
+                sigs.append("🚨 跌破 120 日新低（大級別支撐失守）")
+    except Exception:
+        pass
+
+    # 9. NAAIM 高點回落
+    if naaim_value is not None and naaim_prev_max is not None:
+        if naaim_prev_max > 90 and naaim_value < 60:
+            score += 2
+            sigs.append(f"⚠️ 大戶減倉（NAAIM 從 {naaim_prev_max:.0f} 回落到 {naaim_value:.0f}）")
+        elif naaim_value > 95:
+            score += 1
+            sigs.append(f"⚠️ NAAIM 過熱 ({naaim_value:.0f})")
+
+    # 10. AAII 散戶極度樂觀
+    if aaii_bull is not None and aaii_bear is not None:
+        if aaii_bull > 50 and aaii_bear < 25:
+            score += 1
+            sigs.append(f"⚠️ AAII 散戶極度樂觀（多 {aaii_bull:.0f}% / 空 {aaii_bear:.0f}%）")
+
+    # 等級判定
+    if score >= 8:
+        result.update({
+            "level": "danger",
+            "level_label": "🔴 大盤崩跌警報",
+            "level_color": "#dc2626",
+            "summary": f"觸發 {len(sigs)} 個訊號（總分 {score}），強烈建議【立即減碼避險】。",
+        })
+    elif score >= 5:
+        result.update({
+            "level": "warn",
+            "level_label": "🟠 大盤警戒",
+            "level_color": "#f97316",
+            "summary": f"觸發 {len(sigs)} 個風險訊號（總分 {score}），建議【降低槓桿、分批出場】。",
+        })
+    elif score >= 3:
+        result.update({
+            "level": "watch",
+            "level_label": "🟡 大盤注意",
+            "level_color": "#facc15",
+            "summary": f"出現 {len(sigs)} 個值得注意的訊號（總分 {score}），尚未崩跌但需提高警覺。",
+        })
+
+    result["score"] = score
+    result["signals"] = sigs
+    return result
 
 
 # [修復 #1 & #2] 移除重複定義，統一放在頂層並加上 @st.cache_data
@@ -851,7 +1311,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V18.04")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -917,6 +1377,62 @@ st.markdown(
     f'<div class="tactical-body">💡 <b>行動指南：</b> {tac_body}</div></div>',
     unsafe_allow_html=True
 )
+
+# ==========================================
+# [v25 新增] 大盤崩跌警示欄位（只對指數/ETF顯示）
+# ==========================================
+if is_index_or_etf(cur_t):
+    # 抓取 NAAIM / AAII 作為輔助訊號
+    _naaim_v, _naaim_max4w, _aaii_b, _aaii_br = None, None, None, None
+    try:
+        _naaim_df, _ns = get_naaim_data()
+        if not _naaim_df.empty and _ns != "demo":
+            _naaim_v = float(_naaim_df["Exposure"].iloc[-1])
+            _naaim_max4w = float(_naaim_df["Exposure"].iloc[-5:-1].max()) if len(_naaim_df) >= 5 else None
+    except Exception:
+        pass
+    try:
+        (_b, _n, _br), _as = get_aaii_data()
+        if _as != "demo":
+            _aaii_b, _aaii_br = float(_b), float(_br)
+    except Exception:
+        pass
+
+    crash = detect_market_crash_signals(
+        df,
+        naaim_value=_naaim_v, naaim_prev_max=_naaim_max4w,
+        aaii_bull=_aaii_b, aaii_bear=_aaii_br
+    )
+
+    # 只在 score >= 3 顯示完整警示框；否則顯示精簡綠燈
+    if crash["score"] >= 3:
+        sig_html = "".join(
+            f'<li style="margin-bottom:4px;">{s}</li>' for s in crash["signals"]
+        )
+        st.markdown(
+            f'<div style="background:#1a1a1c; padding:18px 24px; border-radius:8px; '
+            f'margin-bottom:20px; border-left:8px solid {crash["level_color"]}; '
+            f'box-shadow:0 4px 6px rgba(0,0,0,0.3);">'
+            f'<div style="font-size:20px; font-weight:bold; color:#fff; margin-bottom:10px;">'
+            f'🚨 大盤崩跌警示 '
+            f'<span style="color:{crash["level_color"]}; margin-left:10px;">{crash["level_label"]}</span>'
+            f'<span style="font-size:13px; color:#aaa; font-weight:normal; margin-left:10px;">'
+            f'(風險分數：{crash["score"]} / 17)</span></div>'
+            f'<div style="background:#262730; padding:14px; border-radius:6px; '
+            f'border:1px solid {crash["level_color"]}; color:#e5e7eb; font-size:14px;">'
+            f'<b style="color:{crash["level_color"]};">📋 行動指南：</b> {crash["summary"]}'
+            f'<ul style="margin-top:10px; margin-bottom:0; padding-left:20px; color:#ddd; font-size:13px;">'
+            f'{sig_html}</ul></div></div>',
+            unsafe_allow_html=True
+        )
+    else:
+        st.markdown(
+            f'<div style="background:#1a2a1a; padding:10px 18px; border-radius:6px; '
+            f'margin-bottom:15px; border-left:5px solid #22c55e; font-size:13px; color:#aaffaa;">'
+            f'🛡️ <b>大盤崩跌警示：</b>{crash["level_label"]}（風險分數：{crash["score"]} / 17）。'
+            f'{crash["summary"]}</div>',
+            unsafe_allow_html=True
+        )
 
 # ==========================================
 # 一體化四大戰情方塊佈局
@@ -1164,6 +1680,50 @@ fig.add_trace(go.Scatter(x=p_data.index, y=p_data['MACD'], line=dict(color='whit
 fig.add_trace(go.Scatter(x=p_data.index, y=p_data['Signal_Line'], line=dict(color='yellow', width=1)), row=2, col=1)
 
 # --- [v20] 起漲確認邏輯 ---
+# =============================================================
+# [v26 規則總覽] 起漲點 ⭐ 給星規則（依股票分類自動適用差異化條件）
+# -------------------------------------------------------------
+# 四類股票特性與規則對應：
+#   (a) 權值股／指數類（NVDA, TSM, AAPL, AMZN, GOOG, QQQ, META, MSFT）
+#       特徵：趨勢綿長、波動溫和。MACD 多在零軸附近寬區震盪。
+#       主要起漲：正值區域金叉、死叉超賣後深度翻身。
+#       誤判：META/MSFT 紅圈是死貓彈，需 rsi_already_recovering 過濾。
+#
+#   (b) 大型科技／週期股（AMD, TSLA, MU, INTC）
+#       特徵：週期性強，下殺幅度深。
+#       主要起漲：死叉 + 負值金叉 + RSI 曾深度超賣。
+#       注意：不能全擋死叉，會把真正底部反轉一起濾掉。
+#
+#   (c) 成長／中型股（PLTR, CRCL, SOFI, ASX）
+#       特徵：高波動，RSI 容易短暫跌破 25 但 MACD 動能極弱。
+#       主要過濾：macd_significant 動能門檻擋掉微小金叉。
+#
+#   (d) 妖股／高波動（RXRX, SNDK, COIN, BE）
+#       特徵：MACD 在零軸附近快速震盪、金叉訊號密集。
+#       主要過濾：差異化叢集窗口（正值區3根、其他7根）。
+#       BE/COIN/SNDK 的綠圈：正值區域金叉直接給星。
+#
+# 條件與股票類別對照表：
+#   (1) 正值區域金叉 (DIF>0, DEA>0)        → 4 類都直接給星（趨勢健康）
+#   (2) 零軸突破 (非死叉, 從負穿正)         → 4 類都直接給星（動能確立）
+#   (3) 死叉 + 負值金叉                     → 需 RSI 曾深度超賣 + 已在回升
+#   (4) MACD 動能極弱 (|DIF|<股價×0.1%)    → 死叉期間封鎖（針對成長/妖股）
+#   (5) 防叢集（前 N 根已給星）             → 正值區 3 根、其他 7 根
+#
+# [v26 新增] 超賣門檻差異化：
+#   - trend / momentum 股（NVDA, GOOG, TSLA 等）→ RSI < 35
+#     理由：大型權值股波動溫和，死叉期間 RSI 鮮少跌破 25；
+#           若維持 25 門檻，底部反轉訊號會被大量過濾，
+#           導致 DMA 上穿有形態但 MACD 面板無星號的視覺落差。
+#   - reversal / 妖股類 → 維持 RSI < 25（避免假訊號過多）
+#
+# 衝突解決：
+#   - 衝突 1：正值區多次金叉 vs 防叢集 → 用差異化窗口
+#   - 衝突 2：MSFT/META 死貓彈 vs 深度超賣例外 → 加 rsi_already_recovering
+#   - 衝突 3：PLTR 微小金叉 vs RSI 偶發超賣 → 加 macd_significant
+#   - 衝突 4 [v26]：trend/momentum 門檻放寬 vs 死貓彈風險
+#     → 仍需 rsi_already_recovering（RSI 比 5 根前高）雙重確認
+# =============================================================
 # 先取出主圖已判定的起漲點日期集合（MA 黃金交叉版）
 main_launch_dates = set(p_data[launch_pts].index) if 'launch_pts' in dir() else set()
 
@@ -1196,24 +1756,46 @@ for date in p_data[macd_gold].index:
         and ma20_val > ma60
     )
 
-    # [v22] 死叉保護：負值金叉一律封鎖；零軸突破需 RSI 20根內曾低於 25
+    # [v26] 共用計算
+    # 超賣門檻差異化：trend/momentum 股（NVDA/GOOG/TSLA等）波動溫和，
+    # RSI 不易跌破 25，故放寬至 35；妖股/高波動維持嚴格 25。
+    rsi_w20 = p_data.iloc[max(0, idx_pos - 20): idx_pos + 1]['RSI']
+    _oversold_threshold = 35 if engine_type in ("trend", "momentum") else 25
+    is_deeply_oversold = rsi_w20.min() < _oversold_threshold
+
+    # [v24] RSI 金叉時需已在回升（比5根前高），避免死貓彈途中給星
+    prior5 = p_data.iloc[max(0, idx_pos - 5)]
+    rsi_already_recovering = curr['RSI'] > prior5['RSI']
+
+    # [v24] MACD 動能門檻：DIF 絕對值需 > 股價 × 0.1%，過濾高波動股的微小假金叉
+    macd_significant = abs(curr['MACD']) > curr['Close'] * 0.001
+
+    # [v24] 正值區域金叉：DIF > 0 且 DEA > 0（兩線均在零軸以上，趨勢健康）
+    positive_zone_cross = (
+        curr['MACD'] > 0 and
+        not pd.isna(curr.get('Signal_Line', float('nan'))) and
+        curr['Signal_Line'] > 0
+    )
+
+    # ── 死叉期間保護 ──────────────────────────────────────────
     if death_cross_active:
-        if not zero_cross:
-            # MACD 兩線均為負值的金叉 → 死貓彈，直接封鎖
+        if not macd_significant:
+            # DIF動能太弱，不論任何條件都不給星
             normal_macd_x.append(date)
             normal_macd_y.append(curr['MACD'])
             continue
-        else:
-            # 零軸突破但仍在死叉 → 需 RSI 深度超賣
-            rsi_w20 = p_data.iloc[max(0, idx_pos - 20): idx_pos + 1]['RSI']
-            if rsi_w20.min() >= 25:
-                normal_macd_x.append(date)
-                normal_macd_y.append(curr['MACD'])
-                continue
 
-    # [v22] 防叢集：擴大至 7 根（避免連續假訊號）
+        # 死叉期間（含負值金叉 & 零軸突破）：需深度超賣 + RSI已在回升
+        if not (is_deeply_oversold and rsi_already_recovering):
+            normal_macd_x.append(date)
+            normal_macd_y.append(curr['MACD'])
+            continue
+
+    # ── 防叢集 ────────────────────────────────────────────────
+    # 正值區域金叉（健康趨勢）→ 防叢集 3 根；其他 → 7 根
+    cluster_window = 3 if positive_zone_cross else 7
     has_nearby_star = any(
-        0 < idx_pos - p_data.index.get_loc(sd) <= 7
+        0 < idx_pos - p_data.index.get_loc(sd) <= cluster_window
         for sd in already_starred
         if sd in p_data.index
     )
@@ -1222,10 +1804,14 @@ for date in p_data[macd_gold].index:
         normal_macd_y.append(curr['MACD'])
         continue
 
-    # [v22] 非死叉期間零軸突破 → 直接給星（動能確立，不卡 RSI）
+    # ── 給星條件 ──────────────────────────────────────────────
+    # A. 正值區域金叉（非死叉）→ 直接給星（趨勢健康，不需 RSI 超賣）
+    # B. 零軸突破（非死叉）→ 直接給星
+    # C. 其他條件（近MA60 / MACD仍負 / RSI回暖）→ 傳統條件
     uptrend_zero_breakout = (not death_cross_active) and zero_cross
+    strong_positive = (not death_cross_active) and positive_zone_cross
 
-    if uptrend_zero_breakout or (rsi_recovering and (near_ma60 or deep_reversal or zero_cross)):
+    if strong_positive or uptrend_zero_breakout or (rsi_recovering and (near_ma60 or deep_reversal or zero_cross)):
         star_macd_x.append(date)
         star_macd_y.append(curr['MACD'])
         already_starred.add(date)
@@ -1430,29 +2016,67 @@ if is_tw:
     st.markdown('</div>', unsafe_allow_html=True)
 
 else:
-    st.header("🏛️ 美股專屬：總經情緒雙核觀測站 (⚠️ 示範數據)")
+    naaim_df, naaim_status = get_naaim_data()
+    (aaii_bull, aaii_neu, aaii_bear), aaii_status = get_aaii_data()
+
+    # 動態顯示資料來源狀態
+    status_map = {
+        "real":   ("🟢 即時抓取", "#22c55e"),
+        "cached": ("🟡 快取資料", "#facc15"),
+        "demo":   ("⚠️ 示範數據", "#ef4444"),
+    }
+    naaim_label, naaim_color = status_map.get(naaim_status, status_map["demo"])
+    aaii_label, aaii_color = status_map.get(aaii_status, status_map["demo"])
+
+    if naaim_status == "demo" or aaii_status == "demo":
+        st.header("🏛️ 美股專屬：總經情緒雙核觀測站")
+        st.caption("ℹ️ 部分指標為示範數據（網站抓取失敗時自動退回，每日嘗試最多 5 次後使用快取）")
+    else:
+        st.header("🏛️ 美股專屬：總經情緒雙核觀測站")
+
     bc1, bc2 = st.columns([0.6, 0.4])
-    naaim_df = get_naaim_data()
-    aaii_bull, aaii_neu, aaii_bear = get_aaii_data()
 
     with bc1:
-        st.markdown('<div class="ai-box" style="text-align:left;"><h4 style="color:white; margin:0; margin-bottom:10px;">📈 NAAIM 主動經理人曝險指數 (⚠️ 示範)</h4>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="ai-box" style="text-align:left;">'
+            f'<h4 style="color:white; margin:0; margin-bottom:10px;">'
+            f'📈 NAAIM 主動經理人曝險指數 '
+            f'<span style="font-size:11px; padding:2px 8px; border-radius:4px; '
+            f'background:{naaim_color}22; color:{naaim_color}; border:1px solid {naaim_color}; '
+            f'margin-left:8px;">{naaim_label}</span></h4>',
+            unsafe_allow_html=True
+        )
         fig_naaim = go.Figure()
         fig_naaim.add_trace(go.Scatter(
             x=naaim_df['Date'], y=naaim_df['Exposure'],
             fill='tozeroy', mode='lines+markers',
             line=dict(color='#38bdf8', width=2), marker=dict(size=6, color='#38bdf8')
         ))
-        fig_naaim.add_hline(y=100, line_dash="dash", line_color="#ef4444", annotation_text="過熱區 (大戶滿倉)", annotation_position="top left", annotation_font_color="#ef4444")
-        fig_naaim.add_hline(y=40, line_dash="dash", line_color="#22c55e", annotation_text="恐慌區 (大戶減倉)", annotation_position="bottom left", annotation_font_color="#22c55e")
-        fig_naaim.update_layout(height=320, template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10), yaxis=dict(range=[20, 110]), xaxis=dict(rangeslider=dict(visible=True, thickness=0.1)))
+        fig_naaim.add_hline(y=100, line_dash="dash", line_color="#ef4444",
+                            annotation_text="過熱區 (大戶滿倉)", annotation_position="top left",
+                            annotation_font_color="#ef4444")
+        fig_naaim.add_hline(y=40, line_dash="dash", line_color="#22c55e",
+                            annotation_text="恐慌區 (大戶減倉)", annotation_position="bottom left",
+                            annotation_font_color="#22c55e")
+        fig_naaim.update_layout(height=320, template="plotly_dark",
+                                margin=dict(t=10, b=10, l=10, r=10),
+                                yaxis=dict(range=[20, 110]),
+                                xaxis=dict(rangeslider=dict(visible=True, thickness=0.1)))
         st.plotly_chart(fig_naaim, use_container_width=True, config={'displayModeBar': False})
+        if naaim_status == "real":
+            latest_val = naaim_df['Exposure'].iloc[-1] if not naaim_df.empty else None
+            if latest_val is not None:
+                st.caption(f"💡 最新值：{latest_val:.1f}（{naaim_df['Date'].iloc[-1].strftime('%Y-%m-%d')}）。資料源：MacroMicro / NAAIM 官網。")
         st.markdown('</div>', unsafe_allow_html=True)
 
     with bc2:
         aaii_html = (
             f'<div class="ai-box" style="text-align:left; height:100%;">'
-            f'<h4 style="color:white; margin:0; margin-bottom:15px;">🧠 AAII 散戶情緒調查 (⚠️ 示範)</h4>'
+            f'<h4 style="color:white; margin:0; margin-bottom:15px;">'
+            f'🧠 AAII 散戶情緒調查 '
+            f'<span style="font-size:11px; padding:2px 8px; border-radius:4px; '
+            f'background:{aaii_color}22; color:{aaii_color}; border:1px solid {aaii_color};'
+            f'margin-left:8px;">{aaii_label}</span></h4>'
             f'<p style="color:#aaa; font-size:13px; margin-bottom:10px;">代表美國散戶對未來六個月的股市看法。通常作為反指標使用。</p>'
             f'<div style="margin-bottom: 20px;"><div style="display:flex; justify-content:space-between; margin-bottom:4px;"><span style="color:#4ade80; font-weight:bold;">看多 (Bullish)</span><span style="color:#4ade80; font-weight:bold;">{aaii_bull}%</span></div><div class="aaii-bar-container"><div class="aaii-bar-bull" style="width: {aaii_bull}%;"></div></div></div>'
             f'<div style="margin-bottom: 20px;"><div style="display:flex; justify-content:space-between; margin-bottom:4px;"><span style="color:#aaa; font-weight:bold;">中立 (Neutral)</span><span style="color:#aaa; font-weight:bold;">{aaii_neu}%</span></div><div class="aaii-bar-container"><div class="aaii-bar-neu" style="width: {aaii_neu}%;"></div></div></div>'
