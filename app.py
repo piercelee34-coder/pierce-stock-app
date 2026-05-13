@@ -11,8 +11,22 @@ import re
 import json
 import os
 
+# [V17.66] 美股情緒雙核引擎
+try:
+    from sentiment_engine import render_us_sentiment_dashboard
+    _SENTIMENT_AVAILABLE = True
+except ImportError:
+    _SENTIMENT_AVAILABLE = False
+
+# [V17.67] 台股空頭危機距離指數引擎
+try:
+    from tw_sentiment_engine import render_tw_crisis_dashboard
+    _TW_SENTIMENT_AVAILABLE = True
+except ImportError:
+    _TW_SENTIMENT_AVAILABLE = False
+
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V17.65 (專屬清單版)", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="AI 實戰戰情室 V17.67 (雙市場情緒版)", layout="wide", page_icon="🛡️")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -445,7 +459,7 @@ with st.sidebar:
 # --- 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V17.65")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V17.67")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -494,6 +508,21 @@ st.markdown(f"""
     <div class="tactical-body">💡 <b>行動指南：</b> {tac_body}</div>
 </div>
 """, unsafe_allow_html=True)
+
+# [V17.66] 美股情緒雙核儀表板（僅美股顯示）
+_is_us_stock = not (".TW" in cur_t or ".TWO" in cur_t)
+if _is_us_stock and _SENTIMENT_AVAILABLE:
+    try:
+        render_us_sentiment_dashboard()
+    except Exception as _e:
+        st.caption(f"⚠️ 美股情緒儀表板載入失敗：{_e}")
+
+# [V17.67] 台股空頭危機距離指數儀表板（僅台股顯示）
+if (not _is_us_stock) and _TW_SENTIMENT_AVAILABLE:
+    try:
+        render_tw_crisis_dashboard()
+    except Exception as _e:
+        st.caption(f"⚠️ 台股危機指數儀表板載入失敗：{_e}")
 
 # ==========================================
 # 一體化四大戰情方塊佈局 (1.3 : 1 : 1 : 1)

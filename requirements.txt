@@ -4,3 +4,7 @@ pandas
 numpy
 plotly
 streamlit-local-storage
+openpyxl
+xlrd
+lxml
+requests
