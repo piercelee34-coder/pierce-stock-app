@@ -10,6 +10,13 @@ import json
 import os
 import re
 
+# 空頭距離指數引擎（新增）
+try:
+    import crisis_engine
+    _CRISIS_AVAILABLE = True
+except ImportError:
+    _CRISIS_AVAILABLE = False
+
 # --- 0. 系統設定 ---
 st.set_page_config(page_title="AI 實戰戰情室 V26", layout="wide", page_icon="🚨")
 
@@ -56,9 +63,23 @@ DEFAULT_WATCHLISTS = {
 }
 
 # [修復 #3 v2] 拿掉 hardcoded fallback；抓不到環境變數時回空字串並印警告
-FINMIND_TOKEN = os.environ.get("FINMIND_TOKEN", "")
+def _get_secret(name, default=""):
+    """同時支援 Streamlit secrets 與環境變數，皆無則回 default"""
+    try:
+        if hasattr(st, "secrets") and name in st.secrets:
+            return str(st.secrets[name]).strip()
+    except Exception:
+        pass
+    return os.environ.get(name, default).strip()
+
+FINMIND_TOKEN = _get_secret("FINMIND_TOKEN", "")
 if not FINMIND_TOKEN:
-    print("⚠️  警告：未設定 FINMIND_TOKEN 環境變數，台股籌碼功能將無法使用。")
+    print("⚠️  警告：未設定 FINMIND_TOKEN，台股籌碼功能將無法使用。")
+
+# 新增：FRED API key（空頭距離指數 — 殖利率倒掛、HY 信用利差需要）
+FRED_KEY = _get_secret("FRED_API_KEY", "")
+if not FRED_KEY:
+    print("⚠️  警告：未設定 FRED_API_KEY，空頭距離指數的殖利率/信用利差將無法使用。")
 
 def json_load(f_name, default):
     if os.path.exists(f_name):
@@ -1896,6 +1917,176 @@ try:
         st.plotly_chart(fig_vp, use_container_width=True, config={'displayModeBar': False})
 except Exception:
     pass
+
+# ==========================================
+# 🚨 空頭距離指數（US + TW 雙核）
+# ==========================================
+if _CRISIS_AVAILABLE:
+    st.markdown("---")
+    st.header("🚨 空頭距離指數 (Crisis Distance Index)")
+    st.caption(
+        "整合 13 個資料源 → 兩個指數，告訴你距離空頭崩盤多遠。"
+        "85+ 強制清倉 / 75-85 高度危險 / 60-75 警戒 / 40-60 中性 / 20-40 機會 / 0-20 極度恐慌"
+    )
+
+    @st.cache_data(ttl=3600, show_spinner="抓取空頭距離指數資料...")
+    def _cached_crisis(fred_key, finmind_token):
+        return crisis_engine.get_crisis_indices(fred_key, finmind_token)
+
+    try:
+        crisis = _cached_crisis(FRED_KEY, FINMIND_TOKEN)
+    except Exception as e:
+        st.error(f"空頭距離指數計算失敗：{e}")
+        crisis = None
+
+    if crisis:
+        # ─── 兩個大數字並排 ───
+        col_us, col_tw = st.columns(2)
+
+        def _render_market_card(col, market_data, market_label, flag):
+            score = market_data["score"]
+            level_text, level_color = market_data["level"]
+            with col:
+                if score is None:
+                    st.markdown(
+                        f'<div style="background:#1a1a1c;padding:18px;border-radius:10px;'
+                        f'border:1px solid #333;text-align:center;">'
+                        f'<div style="color:#aaa;font-size:14px;">{flag} {market_label}</div>'
+                        f'<div style="color:#666;font-size:36px;margin:10px 0;">N/A</div>'
+                        f'<div style="color:#888;font-size:13px;">{market_data.get("reason","資料不足")}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                    return
+
+                st.markdown(
+                    f'<div style="background:linear-gradient(135deg,#1a1a1c 0%,#2a1a2c 100%);'
+                    f'padding:20px;border-radius:10px;border:2px solid {level_color};'
+                    f'text-align:center;">'
+                    f'<div style="color:#aaa;font-size:14px;margin-bottom:8px;">{flag} {market_label}</div>'
+                    f'<div style="color:{level_color};font-size:56px;font-weight:bold;line-height:1.1;">'
+                    f'{score:.1f}'
+                    f'<span style="font-size:20px;color:#888;">/100</span>'
+                    f'</div>'
+                    f'<div style="background:{level_color}22;color:{level_color};'
+                    f'border:1px solid {level_color};padding:6px 14px;border-radius:20px;'
+                    f'display:inline-block;margin-top:10px;font-weight:bold;">'
+                    f'{level_text}'
+                    f'</div>'
+                    f'<div style="color:#666;font-size:11px;margin-top:8px;">'
+                    f'更新於 {market_data.get("latest_date","—")}'
+                    f'</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+        _render_market_card(col_us, crisis["us"], "美股空頭距離", "🇺🇸")
+        _render_market_card(col_tw, crisis["tw"], "台股空頭距離", "🇹🇼")
+
+        # ─── 子指標分解 ───
+        st.markdown("<div style='margin-top:20px;'></div>", unsafe_allow_html=True)
+        bd_us, bd_tw = st.columns(2)
+
+        def _render_components(col, components, market_name):
+            with col:
+                st.markdown(f"**{market_name} 子指標分解**")
+                if not components:
+                    st.caption("（無資料）")
+                    return
+                for c in components:
+                    name = c["name"]
+                    score = c["score"]
+                    weight = c["weight"] * 100
+                    if score is None:
+                        st.markdown(
+                            f'<div style="display:flex;justify-content:space-between;'
+                            f'padding:6px 10px;margin-bottom:4px;background:#262730;'
+                            f'border-radius:4px;color:#666;">'
+                            f'<span>{name} <small>({weight:.0f}%)</small></span>'
+                            f'<span>N/A</span></div>',
+                            unsafe_allow_html=True,
+                        )
+                        continue
+                    # 色帶
+                    if score >= 75:   bar_color = "#dc2626"
+                    elif score >= 60: bar_color = "#f97316"
+                    elif score >= 40: bar_color = "#facc15"
+                    elif score >= 20: bar_color = "#84cc16"
+                    else:             bar_color = "#22c55e"
+                    bar_width = max(2, min(100, score))
+                    st.markdown(
+                        f'<div style="margin-bottom:6px;">'
+                        f'<div style="display:flex;justify-content:space-between;'
+                        f'font-size:13px;margin-bottom:2px;">'
+                        f'<span style="color:#ddd;">{name} '
+                        f'<small style="color:#888;">({weight:.0f}%)</small></span>'
+                        f'<span style="color:{bar_color};font-weight:bold;">{score:.1f}</span>'
+                        f'</div>'
+                        f'<div style="background:#262730;height:8px;border-radius:4px;'
+                        f'overflow:hidden;">'
+                        f'<div style="width:{bar_width}%;height:100%;background:{bar_color};">'
+                        f'</div></div></div>',
+                        unsafe_allow_html=True,
+                    )
+
+        _render_components(bd_us, crisis["us"]["components"], "🇺🇸 美股")
+        _render_components(bd_tw, crisis["tw"]["components"], "🇹🇼 台股")
+
+        # ─── 歷史走勢圖 ───
+        st.markdown("<div style='margin-top:20px;'></div>", unsafe_allow_html=True)
+        with st.expander("📈 近 90 日指數歷史走勢", expanded=False):
+            fig_crisis = make_subplots(specs=[[{"secondary_y": False}]])
+            us_hist = crisis["us"].get("history")
+            tw_hist = crisis["tw"].get("history")
+            if us_hist is not None and not us_hist.empty:
+                fig_crisis.add_trace(go.Scatter(
+                    x=us_hist["Date"], y=us_hist["Composite"],
+                    name="🇺🇸 美股", line=dict(color="#38bdf8", width=2),
+                    hovertemplate="%{x|%Y-%m-%d}<br>美股指數: %{y:.1f}<extra></extra>",
+                ))
+            if tw_hist is not None and not tw_hist.empty:
+                fig_crisis.add_trace(go.Scatter(
+                    x=tw_hist["Date"], y=tw_hist["Composite"],
+                    name="🇹🇼 台股", line=dict(color="#facc15", width=2),
+                    hovertemplate="%{x|%Y-%m-%d}<br>台股指數: %{y:.1f}<extra></extra>",
+                ))
+            # 加門檻線
+            for thr, label, color in [(85, "強制清倉", "#dc2626"),
+                                        (75, "高度危險", "#f97316"),
+                                        (60, "警戒區", "#facc15"),
+                                        (40, "中性", "#9ca3af")]:
+                fig_crisis.add_hline(y=thr, line=dict(color=color, width=1, dash="dot"),
+                                      annotation_text=label,
+                                      annotation_position="right",
+                                      annotation_font=dict(size=10, color=color))
+            fig_crisis.update_layout(
+                height=380, template="plotly_dark",
+                margin=dict(t=20, b=30, l=40, r=80),
+                yaxis=dict(range=[0, 100], title="危機指數"),
+                hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            )
+            st.plotly_chart(fig_crisis, use_container_width=True,
+                             config={"displayModeBar": False})
+
+        # ─── 資料源狀態 ───
+        with st.expander("🔌 資料源狀態", expanded=False):
+            ds = crisis.get("data_status", {})
+            ok_count = sum(1 for v in ds.values() if v)
+            total = len(ds)
+            st.caption(f"目前 {ok_count}/{total} 個資料源可用")
+            cols = st.columns(4)
+            for i, (name, ok) in enumerate(ds.items()):
+                with cols[i % 4]:
+                    icon = "✅" if ok else "❌"
+                    color = "#22c55e" if ok else "#ef4444"
+                    st.markdown(
+                        f'<div style="padding:6px 10px;margin-bottom:4px;'
+                        f'background:#262730;border-radius:4px;border-left:3px solid {color};">'
+                        f'{icon} <span style="color:#ddd;font-size:13px;">{name}</span>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
 
 # ==========================================
 # 籌碼全面指揮中心
