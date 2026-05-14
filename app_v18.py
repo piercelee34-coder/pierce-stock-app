@@ -58,8 +58,11 @@ st.markdown("""
 # --- 1. 資料系統 ---
 WATCHLIST_FILE, ANCHOR_FILE, TW_NAMES_FILE = "watchlist.json", "anchors.json", "tw_names.json"
 DEFAULT_WATCHLISTS = {
-    "美股": ['^IXIC', 'QQQ', 'NVDA', 'TSM'],
-    "台股": ['00878.TW', '2324.TW', '8215.TW', '00403A.TW', '4958.TW', '2344.TW', '2327.TW', '1815.TWO', '5347.TWO']
+    "🇺🇸 美持股": ['^NDX', 'NVDA', 'TSM', 'AAPL', 'PLTR'],
+    "🔭 美觀察": ['AMD', 'TSLA', 'GOOG', 'META', 'AMZN'],
+    "🔭 觀察股2": ['COIN', 'SOFI', 'NKE', 'NFLX'],
+    "🇹🇼 台持股": ['2330.TW', '0050.TW', '00878.TW'],
+    "🔭 台觀察": ['8150.TW', '5534.TW', '3535.TW', '6830.TW'],
 }
 
 # [修復 #3 v2] 拿掉 hardcoded fallback；抓不到環境變數時回空字串並印警告
@@ -1274,60 +1277,147 @@ with st.sidebar:
     st.markdown("---")
 
     st.header("📌 多維度自選股清單")
-    cur_t = st.session_state.get('current_ticker', "^IXIC")
+    cur_t = st.session_state.get('current_ticker', "^NDX")
     act_l = st.session_state.get('active_list')
+    wls = st.session_state['watchlists']
 
-    for wl_name, tickers in st.session_state['watchlists'].items():
+    # ── 清單標籤列 ──────────────────────────────────────
+    for wl_name, tickers in wls.items():
         is_exp = (wl_name == st.session_state.get('user_opened_list'))
-        with st.expander(f"📁 {wl_name} ({len(tickers)}檔)", expanded=is_exp):
+        with st.expander(f"{wl_name} ({len(tickers)})", expanded=is_exp):
             for t in tickers:
                 is_sel = (t == cur_t and wl_name == act_l)
-                btn_t = "primary" if is_sel else "secondary"
                 s_name = get_stock_name(t)
-                disp_base = f"{s_name} ({t})" if s_name != t else t
-                if st.button(f"{'👉 ' if is_sel else ''}{disp_base}", key=f"btn_{wl_name}_{t}", type=btn_t, use_container_width=True):
+                disp = f"{s_name} ({t})" if s_name != t else t
+                if st.button(
+                    f"{'▶ ' if is_sel else ''}{disp}",
+                    key=f"btn_{wl_name}_{t}",
+                    type="primary" if is_sel else "secondary",
+                    use_container_width=True,
+                ):
                     st.session_state['current_ticker'] = t
                     st.session_state['active_list'] = wl_name
                     st.session_state['user_opened_list'] = wl_name
                     st.rerun()
 
     st.markdown("---")
-    st.markdown("<span style='color:gray; font-size:13px;'>排列目前代碼</span>", unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
-    c3, c4 = st.columns(2)
-    lst = st.session_state['watchlists'][act_l]
+    # ── 排列按鈕 ────────────────────────────────────────
+    st.markdown("<span style='color:gray; font-size:12px;'>📦 排列目前代碼</span>",
+                unsafe_allow_html=True)
+    c1, c2, c3, c4 = st.columns(4)
+    lst = wls.get(act_l, [])
     idx = lst.index(cur_t) if cur_t in lst else -1
-    if c1.button("⏫ 置頂") and idx > 0:
-        lst.insert(0, lst.pop(idx)); save_watchlists(st.session_state['watchlists']); st.rerun()
-    if c2.button("⬆️ 上移") and idx > 0:
-        lst[idx], lst[idx - 1] = lst[idx - 1], lst[idx]; save_watchlists(st.session_state['watchlists']); st.rerun()
-    if c3.button("⬇️ 下移") and 0 <= idx < len(lst) - 1:
-        lst[idx], lst[idx + 1] = lst[idx + 1], lst[idx]; save_watchlists(st.session_state['watchlists']); st.rerun()
-    if c4.button("⏬ 置底") and 0 <= idx < len(lst) - 1:
-        lst.append(lst.pop(idx)); save_watchlists(st.session_state['watchlists']); st.rerun()
+    if c1.button("⏫", help="置頂") and idx > 0:
+        lst.insert(0, lst.pop(idx)); save_watchlists(wls); st.rerun()
+    if c2.button("⬆️", help="上移") and idx > 0:
+        lst[idx], lst[idx-1] = lst[idx-1], lst[idx]; save_watchlists(wls); st.rerun()
+    if c3.button("⬇️", help="下移") and 0 <= idx < len(lst)-1:
+        lst[idx], lst[idx+1] = lst[idx+1], lst[idx]; save_watchlists(wls); st.rerun()
+    if c4.button("⏬", help="置底") and 0 <= idx < len(lst)-1:
+        lst.append(lst.pop(idx)); save_watchlists(wls); st.rerun()
 
     st.markdown("---")
     time_opt = st.radio("選擇週期", ["當沖 (分時)", "日線 (Daily)", "週線 (Weekly)"], index=1)
 
+    # ── 編輯清單（展開） ────────────────────────────────
     with st.expander("✏️ 編輯清單"):
-        target_list = st.selectbox("加入抽屜：", list(st.session_state['watchlists'].keys()), index=list(st.session_state['watchlists'].keys()).index(act_l))
-        new_t = st.text_input("代號", placeholder="2330.TW").upper()
+        st.markdown("**➕ 新增單一股票**")
+        col_inp, col_tgt = st.columns([1, 1])
+        new_t = col_inp.text_input("代號", placeholder="2330.TW",
+                                    label_visibility="collapsed").upper().strip()
+        target_list = col_tgt.selectbox(
+            "加入清單", list(wls.keys()),
+            index=list(wls.keys()).index(act_l) if act_l in wls else 0,
+            label_visibility="collapsed",
+        )
         if st.button("➕ 新增", use_container_width=True) and new_t:
-            if new_t not in st.session_state['watchlists'][target_list]:
-                st.session_state['watchlists'][target_list].append(new_t)
+            if new_t not in wls[target_list]:
+                wls[target_list].append(new_t)
                 st.session_state['current_ticker'] = new_t
                 st.session_state['active_list'] = target_list
                 st.session_state['user_opened_list'] = target_list
-                save_watchlists(st.session_state['watchlists'])
+                save_watchlists(wls)
                 st.rerun()
-        if st.button("❌ 刪除股票", use_container_width=True) and cur_t in st.session_state['watchlists'][act_l]:
-            st.session_state['watchlists'][act_l].remove(cur_t)
-            save_watchlists(st.session_state['watchlists'])
-            if st.session_state['watchlists'][act_l]:
-                st.session_state['current_ticker'] = st.session_state['watchlists'][act_l][0]
-            else:
-                st.session_state['current_ticker'] = "^IXIC"
+
+        st.markdown("---")
+        st.markdown("**📋 批量匯入（換行或逗號分隔）**")
+        bulk_raw = st.text_area(
+            "批量貼上代號", placeholder="NVDA\nAMD\nTSLA\n或 NVDA, AMD, TSLA",
+            height=80, label_visibility="collapsed",
+        )
+        bulk_target = st.selectbox(
+            "匯入到", list(wls.keys()),
+            index=list(wls.keys()).index(act_l) if act_l in wls else 0,
+            key="bulk_target",
+        )
+        if st.button("📥 批量匯入", use_container_width=True) and bulk_raw.strip():
+            raw_tickers = [
+                t.strip().upper()
+                for t in bulk_raw.replace(",", "\n").splitlines()
+                if t.strip()
+            ]
+            added = []
+            for t in raw_tickers:
+                if t and t not in wls[bulk_target]:
+                    wls[bulk_target].append(t)
+                    added.append(t)
+            if added:
+                save_watchlists(wls)
+                st.session_state['active_list'] = bulk_target
+                st.session_state['user_opened_list'] = bulk_target
+                st.success(f"已匯入 {len(added)} 檔：{', '.join(added[:5])}{'...' if len(added)>5 else ''}")
+                st.rerun()
+
+        st.markdown("---")
+        st.markdown(f"**🔀 移動「{cur_t}」到其他清單**")
+        move_target = st.selectbox(
+            "移到", [k for k in wls.keys() if k != act_l],
+            key="move_target",
+        )
+        col_mv1, col_mv2 = st.columns(2)
+        if col_mv1.button("✂️ 移動", use_container_width=True) and cur_t in lst:
+            lst.remove(cur_t)
+            if cur_t not in wls[move_target]:
+                wls[move_target].append(cur_t)
+            save_watchlists(wls)
+            st.session_state['active_list'] = move_target
+            st.session_state['user_opened_list'] = move_target
             st.rerun()
+        if col_mv2.button("📋 複製", use_container_width=True):
+            if cur_t not in wls[move_target]:
+                wls[move_target].append(cur_t)
+                save_watchlists(wls)
+                st.success(f"已複製到 {move_target}")
+                st.rerun()
+
+        st.markdown("---")
+        st.markdown("**🗑️ 刪除 / 重命名**")
+        if st.button("❌ 從清單移除目前股票", use_container_width=True) and cur_t in lst:
+            lst.remove(cur_t)
+            save_watchlists(wls)
+            st.session_state['current_ticker'] = lst[0] if lst else "^NDX"
+            st.rerun()
+
+        st.markdown("---")
+        st.markdown("**🏷️ 重命名清單**")
+        rename_src = st.selectbox("選擇清單", list(wls.keys()), key="rename_src")
+        new_name = st.text_input("新名稱", placeholder="例如：🇺🇸 美持股",
+                                  key="rename_name")
+        if st.button("✏️ 確認重命名", use_container_width=True) and new_name.strip():
+            new_name = new_name.strip()
+            if new_name not in wls:
+                # 保留順序的重命名
+                new_wls = {}
+                for k, v in wls.items():
+                    new_wls[new_name if k == rename_src else k] = v
+                st.session_state['watchlists'] = new_wls
+                if act_l == rename_src:
+                    st.session_state['active_list'] = new_name
+                    st.session_state['user_opened_list'] = new_name
+                save_watchlists(new_wls)
+                st.rerun()
+            else:
+                st.warning("名稱已存在")
 
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
@@ -1923,7 +2013,19 @@ except Exception:
 # ==========================================
 if _CRISIS_AVAILABLE:
     st.markdown("---")
-    st.header("🚨 空頭距離指數 (Crisis Distance Index)")
+    crisis_hdr_col1, crisis_hdr_col2 = st.columns([5, 1])
+    crisis_hdr_col1.header("🚨 空頭距離指數 (Crisis Distance Index)")
+    if crisis_hdr_col2.button("🔄 強制刷新", key="crisis_force_refresh",
+                                help="清除所有快取，從網路重新抓取最新資料（約 1-2 分鐘）"):
+        # 三層清除：1) Streamlit cache_data 2) crisis_engine 檔案快取 3) rerun
+        st.cache_data.clear()
+        import shutil
+        try:
+            shutil.rmtree(".crisis_cache", ignore_errors=True)
+        except Exception:
+            pass
+        st.success("✅ 已清除所有快取，重新抓取中...")
+        st.rerun()
     st.caption(
         "整合 13 個資料源 → 兩個指數，告訴你距離空頭崩盤多遠。"
         "85+ 強制清倉 / 75-85 高度危險 / 60-75 警戒 / 40-60 中性 / 20-40 機會 / 0-20 極度恐慌"
@@ -2070,11 +2172,66 @@ if _CRISIS_AVAILABLE:
                              config={"displayModeBar": False})
 
         # ─── 資料源狀態 ───
-        with st.expander("🔌 資料源狀態", expanded=False):
+        with st.expander("🔌 資料源狀態（可單獨刷新失敗源）", expanded=False):
             ds = crisis.get("data_status", {})
             ok_count = sum(1 for v in ds.values() if v)
             total = len(ds)
-            st.caption(f"目前 {ok_count}/{total} 個資料源可用")
+            failed_count = total - ok_count
+
+            # 三個動作按鈕
+            sc1, sc2, sc3 = st.columns([2, 1, 1])
+            sc1.caption(f"目前 {ok_count}/{total} 個資料源可用")
+            if sc2.button("🔁 重抓失敗源", help="只清除失敗源的快取，重新抓取",
+                            disabled=(failed_count == 0)):
+                # 從 crisis_engine 的快取目錄刪掉失敗源
+                import shutil, os as _os
+                # 名稱對應到 crisis_engine 的 cache key
+                name_to_key = {
+                    "SPX": "yf_idx_GSPC", "台灣加權": "yf_idx_TWII",
+                    "VIX": "yf_idx_VIX", "VIX3M": "yf_idx_VIX3M",
+                    "TSM": "yf_TSM", "2330.TW": "yf_2330.TW",
+                    "TWD匯率": "yf_TWD_X",
+                    "殖利率倒掛": "fred_T10Y2Y",
+                    "HY信用利差": "fred_BAMLH0A0HYM2",
+                    "NAAIM": "naaim", "AAII": "aaii",
+                    "台股融資": "finmind_total_margin",
+                    "2330 PER": "finmind_per_2330",
+                }
+                for name, ok in ds.items():
+                    if not ok and name in name_to_key:
+                        cache_file = f".crisis_cache/{name_to_key[name]}.json"
+                        try:
+                            if _os.path.exists(cache_file):
+                                _os.remove(cache_file)
+                        except Exception:
+                            pass
+                st.cache_data.clear()
+                st.success(f"已清除 {failed_count} 個失敗源的快取，重抓中...")
+                st.rerun()
+            if sc3.button("💥 全部重抓", help="清除所有快取（含成功的），完整重抓"):
+                import shutil
+                st.cache_data.clear()
+                try:
+                    shutil.rmtree(".crisis_cache", ignore_errors=True)
+                except Exception:
+                    pass
+                st.rerun()
+
+            # 顯示快取時間資訊
+            import os as _os
+            cache_dir = ".crisis_cache"
+            if _os.path.isdir(cache_dir):
+                try:
+                    mtimes = [_os.path.getmtime(_os.path.join(cache_dir, f))
+                                for f in _os.listdir(cache_dir)
+                                if f.endswith(".json")]
+                    if mtimes:
+                        oldest = datetime.fromtimestamp(min(mtimes)).strftime("%m-%d %H:%M")
+                        newest = datetime.fromtimestamp(max(mtimes)).strftime("%m-%d %H:%M")
+                        st.caption(f"📁 快取時間範圍：{oldest} ~ {newest}")
+                except Exception:
+                    pass
+
             cols = st.columns(4)
             for i, (name, ok) in enumerate(ds.items()):
                 with cols[i % 4]:
@@ -2087,6 +2244,93 @@ if _CRISIS_AVAILABLE:
                         f'</div>',
                         unsafe_allow_html=True,
                     )
+
+# ==========================================
+# 🚀 火箭類股探測器
+# ==========================================
+try:
+    import rocket_screener as _rocket
+    _ROCKET_AVAILABLE = True
+except ImportError:
+    _ROCKET_AVAILABLE = False
+
+if _ROCKET_AVAILABLE:
+    st.markdown("---")
+    st.header("🚀 火箭類股探測器")
+    st.caption("掃描 30+ 美股主題 + 25+ 台股主題，找出本週 / 本月最強的類股板塊")
+
+    rkt_col1, rkt_col2, rkt_col3 = st.columns([1, 1, 1])
+    rkt_market = rkt_col1.radio("市場", ["🇺🇸 美股", "🇹🇼 台股"],
+                                 horizontal=True, label_visibility="collapsed")
+    rkt_period = rkt_col2.radio("週期", ["1w 本週", "1m 本月", "3m 本季"],
+                                 horizontal=True, label_visibility="collapsed")
+    rkt_force = rkt_col3.button("🔄 強制刷新", help="清除快取重新掃描（約1-2分鐘）")
+
+    market_key = "us" if "美" in rkt_market else "tw"
+    period_key = rkt_period.split()[0]
+
+    @st.cache_data(ttl=14400, show_spinner="🔍 正在掃描類股漲幅（首次約1-2分鐘）...")
+    def _cached_rocket(market, period):
+        return _rocket.get_top_themes(market=market, top_n=5, period=period)
+
+    if rkt_force:
+        st.cache_data.clear()
+
+    try:
+        rocket_data = _cached_rocket(market_key, period_key)
+    except Exception as e:
+        st.error(f"掃描失敗：{e}")
+        rocket_data = []
+
+    if rocket_data:
+        period_label = {"1w": "本週", "1m": "本月", "3m": "本季"}.get(period_key, "")
+        st.markdown(f"#### 🏆 {period_label}漲幅 TOP {len(rocket_data)} 主題")
+
+        for rank, item in enumerate(rocket_data, 1):
+            avg = item["avg_ret"]
+            med = item["median_ret"]
+            hot = item["hot_count"]
+            total = item["total_count"]
+            tops = item["top_stocks"]
+
+            # 顏色依漲幅
+            if avg >= 10:  bar_c = "#dc2626"
+            elif avg >= 5: bar_c = "#f97316"
+            elif avg >= 2: bar_c = "#facc15"
+            elif avg >= 0: bar_c = "#4ade80"
+            else:          bar_c = "#9ca3af"
+
+            medal = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"][rank-1]
+
+            # 代表股票 HTML
+            top_html = " ".join(
+                f'<span style="background:#2a2a2c;padding:2px 7px;border-radius:4px;'
+                f'font-size:12px;color:{"#4ade80" if r>0 else "#ff6b6b"};">'
+                f'{t} {r:+.1f}%</span>'
+                for t, r in tops
+            )
+
+            st.markdown(
+                f'<div style="background:#1a1a1c;border:1px solid #2a2a2c;border-left:4px solid {bar_c};'
+                f'border-radius:8px;padding:14px 18px;margin-bottom:10px;">'
+                f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+                f'<span style="font-size:17px;font-weight:bold;">{medal} {item["theme"]}</span>'
+                f'<span style="color:{bar_c};font-size:22px;font-weight:bold;">{avg:+.1f}%</span>'
+                f'</div>'
+                f'<div style="color:#888;font-size:12px;margin:4px 0 8px;">'
+                f'中位數 {med:+.1f}% ｜ {hot}/{total} 檔上漲'
+                f'</div>'
+                f'<div>{top_html}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        # 更新時間
+        if rocket_data:
+            upd = rocket_data[0].get("updated_at", "")
+            st.caption(f"⏱ 資料時間：{upd}（快取 4 小時）｜ 點「強制刷新」可立即更新")
+    else:
+        st.info("正在準備資料，請稍候或點「強制刷新」")
 
 # ==========================================
 # 籌碼全面指揮中心
