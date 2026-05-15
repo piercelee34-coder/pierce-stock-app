@@ -2186,27 +2186,15 @@ except Exception:
 # ==========================================
 if _CRISIS_AVAILABLE:
     st.markdown("---")
-    crisis_hdr_col1, crisis_hdr_col2 = st.columns([5, 1])
-    crisis_hdr_col1.header("🚨 空頭距離指數 (Crisis Distance Index)")
-    if crisis_hdr_col2.button("🔄 強制刷新", key="crisis_force_refresh",
-                                help="清除所有快取，從網路重新抓取最新資料（約 1-2 分鐘）"):
-        # 三層清除：1) Streamlit cache_data 2) crisis_engine 檔案快取 3) rerun
-        st.cache_data.clear()
-        import shutil
-        try:
-            shutil.rmtree(".crisis_cache", ignore_errors=True)
-        except Exception:
-            pass
-        st.success("✅ 已清除所有快取，重新抓取中...")
-        st.rerun()
+    st.header("🚨 空頭距離指數 (Crisis Distance Index)")
     st.caption(
-        "整合 13 個資料源 → 兩個指數，告訴你距離空頭崩盤多遠。"
+        "整合 13 個資料源 → 兩個指數，告訴你距離空頭崩盤多遠。每 6 小時自動更新。"
         "**↑ 越高越接近頂部 ｜ ↓ 越低越接近底部（反向買進機會）**　　"
         "85+ 強制清倉（系統性風險） / 75-85 高度危險 / 60-75 警戒 / "
         "40-60 中性 / 20-40 機會浮現 / **0-20 極度恐慌（逆勢買進）**"
     )
 
-    @st.cache_data(ttl=3600, show_spinner="抓取空頭距離指數資料...")
+    @st.cache_data(ttl=21600, show_spinner="抓取空頭距離指數資料...")
     def _cached_crisis(fred_key, finmind_token):
         return crisis_engine.get_crisis_indices(fred_key, finmind_token)
 
@@ -2425,23 +2413,13 @@ if _CRISIS_AVAILABLE:
 # ==========================================
 if _INSIDER_AVAILABLE:
     st.markdown("---")
-    ins_col1, ins_col2 = st.columns([5, 1])
-    ins_col1.header("🕵️ 內部人賣壓指數 (SEC Form 4)")
-    if ins_col2.button("🔄 強制刷新", key="insider_force_refresh",
-                        help="清除快取重新掃描 S&P 100 內部人交易（約 2-3 分鐘）"):
-        st.cache_data.clear()
-        import shutil as _sh
-        try:
-            _sh.rmtree(".insider_cache", ignore_errors=True)
-        except Exception:
-            pass
-        st.rerun()
+    st.header("🕵️ 內部人賣壓指數 (SEC Form 4)")
     st.caption(
         "追蹤 S&P 100 大型權值股近 30 日的 CEO/CFO/Director 開放市場交易。"
-        "賣壓比例（賣出金額 ÷ 總交易金額）越高表示內部人越看空。"
+        "賣壓比例（賣出金額 ÷ 總交易金額）越高表示內部人越看空。每 6 小時自動更新。"
     )
 
-    @st.cache_data(ttl=86400, show_spinner="🕵️ 正在抓取 SEC Form 4（首次約 2-3 分鐘）...")
+    @st.cache_data(ttl=21600, show_spinner="🕵️ 正在抓取 SEC Form 4（首次約 2-3 分鐘）...")
     def _cached_insider():
         return insider_sentiment.get_insider_pressure_index()
 
@@ -2575,6 +2553,136 @@ if _INSIDER_AVAILABLE:
 
     elif insider:
         st.warning(f"📊 內部人資料暫時無法取得：{insider.get('reason', '未知原因')}")
+
+# ==========================================
+# 💼 資金面綜合風險指數（結合空頭距離 + 內部人賣壓）
+# ==========================================
+if _CRISIS_AVAILABLE and _INSIDER_AVAILABLE:
+    # 兩個來源都要有資料才計算
+    try:
+        _us_score = crisis["us"].get("score") if crisis else None
+        _tw_score = crisis["tw"].get("score") if crisis else None
+        _ins_score = insider.get("score") if insider and insider.get("data_status") else None
+    except Exception:
+        _us_score = _tw_score = _ins_score = None
+
+    if _us_score is not None and _ins_score is not None:
+        st.markdown("---")
+        st.header("💼 資金面綜合風險指數")
+        st.caption(
+            "結合 **空頭距離（60%）+ 內部人賣壓（40%）** 給出單一綜合風險分數。"
+            "**離場比例** = 建議從股市撤出的部位百分比。"
+        )
+
+        # 計算綜合風險
+        combined_us = round(0.6 * _us_score + 0.4 * _ins_score, 1)
+        # TW 沒有 SEC Form 4，只用空頭距離 + 美股共振（已內含）
+        combined_tw = round(_tw_score, 1) if _tw_score is not None else None
+
+        # 建議離場比例：分數越高離場越多
+        def _exit_pct(score):
+            if score is None:
+                return None
+            if score >= 85:   return 100   # 強制清倉
+            elif score >= 75: return 70    # 高度危險
+            elif score >= 60: return 40    # 警戒區
+            elif score >= 40: return 15    # 中性
+            elif score >= 20: return 5     # 機會浮現
+            else:             return 0     # 極度恐慌 → 不離場（反向買進）
+
+        def _level_color(score):
+            if score is None: return ("❓ N/A", "#666")
+            if score >= 85:   return ("🔴 強制清倉", "#dc2626")
+            elif score >= 75: return ("🟠 高度危險", "#f97316")
+            elif score >= 60: return ("🟡 警戒區", "#facc15")
+            elif score >= 40: return ("⚖️ 中性區", "#9ca3af")
+            elif score >= 20: return ("🟢 機會浮現", "#84cc16")
+            else:             return ("💚 極度恐慌（逆勢買進）", "#22c55e")
+
+        c_us, c_tw = st.columns(2)
+
+        def _render_combined(col, score, market_label, flag, has_insider=True):
+            with col:
+                if score is None:
+                    st.info("資料不足")
+                    return
+                exit_pct = _exit_pct(score)
+                level_text, level_color = _level_color(score)
+                stay_pct = 100 - exit_pct
+                # 不離場（極度恐慌）特例
+                buy_hint = " （考慮逢低加碼）" if score < 20 else ""
+
+                st.markdown(
+                    f'<div style="background:linear-gradient(135deg,#1a1a1c 0%,#1c2a2c 100%);'
+                    f'padding:22px;border-radius:12px;border:2px solid {level_color};">'
+                    f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+                    f'<span style="color:#ddd;font-size:15px;font-weight:bold;">'
+                    f'{flag} {market_label}</span>'
+                    f'<span style="color:#888;font-size:11px;">'
+                    f'{"空頭+內部人" if has_insider else "僅空頭距離"}</span>'
+                    f'</div>'
+                    # 大數字
+                    f'<div style="text-align:center;margin:10px 0 6px;">'
+                    f'<span style="color:{level_color};font-size:54px;font-weight:bold;line-height:1;">'
+                    f'{score:.1f}'
+                    f'</span><span style="color:#888;font-size:18px;">/100</span>'
+                    f'</div>'
+                    f'<div style="text-align:center;margin-bottom:14px;">'
+                    f'<span style="background:{level_color}22;color:{level_color};'
+                    f'border:1px solid {level_color};padding:4px 12px;border-radius:16px;'
+                    f'font-weight:bold;font-size:13px;">{level_text}</span>'
+                    f'</div>'
+                    # 離場/留場比例
+                    f'<div style="background:#111;padding:12px;border-radius:8px;">'
+                    f'<div style="display:flex;justify-content:space-between;font-size:13px;'
+                    f'margin-bottom:6px;">'
+                    f'<span style="color:#ef4444;">📤 建議離場 {exit_pct}%{buy_hint}</span>'
+                    f'<span style="color:#22c55e;">📥 維持持倉 {stay_pct}%</span>'
+                    f'</div>'
+                    f'<div style="display:flex;height:10px;border-radius:5px;overflow:hidden;'
+                    f'background:#262730;">'
+                    f'<div style="width:{exit_pct}%;background:#ef4444;"></div>'
+                    f'<div style="width:{stay_pct}%;background:#22c55e;"></div>'
+                    f'</div>'
+                    f'</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+        _render_combined(c_us, combined_us, "美股綜合風險", "🇺🇸", has_insider=True)
+        _render_combined(c_tw, combined_tw, "台股綜合風險", "🇹🇼", has_insider=False)
+
+        with st.expander("💡 綜合風險指數怎麼算？", expanded=False):
+            st.markdown(f"""
+            #### 計算公式
+            
+            **美股**：`綜合風險 = 0.6 × 空頭距離 + 0.4 × 內部人賣壓`
+            
+            目前：`0.6 × {_us_score:.1f} + 0.4 × {_ins_score:.1f} = {combined_us:.1f}`
+            
+            **台股**：直接用空頭距離分數（台股無 SEC Form 4 資料）
+            
+            目前：`{_tw_score:.1f}` 
+            
+            #### 離場比例對應表
+            
+            | 風險分數 | 建議離場 | 含義 |
+            |---|---|---|
+            | 0-20 | **0%**（反向買進）| 極度恐慌、撿便宜 |
+            | 20-40 | 5% | 機會浮現、保守進場 |
+            | 40-60 | 15% | 中性、維持配置 |
+            | 60-75 | 40% | 警戒、減碼一部分 |
+            | 75-85 | 70% | 高度危險、大幅減碼 |
+            | 85+ | 100% | 強制清倉、系統性風險 |
+            
+            #### 為什麼這樣配權重？
+            
+            - **空頭距離 60%**：整合 13 個資料源，覆蓋面廣（總經 + 情緒 + 技術）
+            - **內部人賣壓 40%**：只有 1 個指標但**領先性強**（內部人 2 個工作天內必須申報，2-4 週領先性）
+            
+            兩者**互補**：空頭距離看「市場現在多熱」，內部人賣壓看「最了解公司的人現在在做什麼」。
+            """)
+
 
 # ==========================================
 # 🤫 悄悄吸籌探測器（找尚未大漲但有徵兆的股票）
