@@ -4,6 +4,7 @@ pandas
 numpy
 plotly
 streamlit-local-storage
+streamlit-sortables
 openpyxl
 xlrd
 lxml

@@ -17,6 +17,13 @@ try:
 except ImportError:
     _CRISIS_AVAILABLE = False
 
+# SEC Form 4 內部人賣壓引擎（新增）
+try:
+    import insider_sentiment
+    _INSIDER_AVAILABLE = True
+except ImportError:
+    _INSIDER_AVAILABLE = False
+
 # --- 0. 系統設定 ---
 st.set_page_config(page_title="AI 實戰戰情室 V26", layout="wide", page_icon="🚨")
 
@@ -1281,40 +1288,206 @@ with st.sidebar:
     act_l = st.session_state.get('active_list')
     wls = st.session_state['watchlists']
 
-    # ── 清單標籤列 ──────────────────────────────────────
-    for wl_name, tickers in wls.items():
-        is_exp = (wl_name == st.session_state.get('user_opened_list'))
-        with st.expander(f"{wl_name} ({len(tickers)})", expanded=is_exp):
-            for t in tickers:
-                is_sel = (t == cur_t and wl_name == act_l)
-                s_name = get_stock_name(t)
-                disp = f"{s_name} ({t})" if s_name != t else t
-                if st.button(
-                    f"{'▶ ' if is_sel else ''}{disp}",
-                    key=f"btn_{wl_name}_{t}",
-                    type="primary" if is_sel else "secondary",
-                    use_container_width=True,
-                ):
-                    st.session_state['current_ticker'] = t
-                    st.session_state['active_list'] = wl_name
-                    st.session_state['user_opened_list'] = wl_name
+    # ── 多選模式 toggle ─────────────────────────────────
+    multi_mode = st.toggle(
+        "☑️ 多選編輯模式",
+        value=st.session_state.get('multi_mode', False),
+        key='multi_mode_toggle',
+        help="開啟後可勾選多檔股票，批次移動、複製、刪除或排序",
+    )
+    st.session_state['multi_mode'] = multi_mode
+
+    # 初始化選取集合
+    if 'selected_stocks' not in st.session_state:
+        st.session_state['selected_stocks'] = set()  # {(wl_name, ticker)}
+
+    # ── 多選模式 UI ─────────────────────────────────────
+    if multi_mode:
+        st.caption("💡 勾選股票 → 下方選擇批次動作")
+        # 列出所有清單與股票（含 checkbox）
+        for wl_name, tickers in wls.items():
+            with st.expander(
+                f"{wl_name} ({len(tickers)})",
+                expanded=(wl_name == st.session_state.get('user_opened_list')),
+            ):
+                # 全選/取消全選 按鈕（小巧）
+                sel_col1, sel_col2 = st.columns(2)
+                if sel_col1.button(f"☑️ 全選", key=f"sel_all_{wl_name}",
+                                     use_container_width=True):
+                    for t in tickers:
+                        st.session_state['selected_stocks'].add((wl_name, t))
+                    st.rerun()
+                if sel_col2.button(f"☐ 全消", key=f"sel_none_{wl_name}",
+                                     use_container_width=True):
+                    for t in tickers:
+                        st.session_state['selected_stocks'].discard((wl_name, t))
+                    st.rerun()
+                # 每檔股票的 checkbox
+                for t in tickers:
+                    key = (wl_name, t)
+                    s_name = get_stock_name(t)
+                    disp = f"{s_name} ({t})" if s_name != t else t
+                    is_checked = key in st.session_state['selected_stocks']
+                    new_val = st.checkbox(disp, value=is_checked,
+                                            key=f"cb_{wl_name}_{t}")
+                    if new_val and not is_checked:
+                        st.session_state['selected_stocks'].add(key)
+                    elif not new_val and is_checked:
+                        st.session_state['selected_stocks'].discard(key)
+
+        # ── 批次動作面板 ────────────────────────────────
+        st.markdown("---")
+        sel_count = len(st.session_state['selected_stocks'])
+        if sel_count == 0:
+            st.info("👆 請先勾選股票")
+        else:
+            st.markdown(f"**已選 {sel_count} 檔**")
+
+            # 批次移動 / 複製
+            target_list = st.selectbox(
+                "📦 目標清單",
+                list(wls.keys()),
+                key="batch_target_list",
+            )
+            bc1, bc2 = st.columns(2)
+            if bc1.button(f"✂️ 移動到「{target_list}」", use_container_width=True):
+                moved = 0
+                for (src_wl, t) in list(st.session_state['selected_stocks']):
+                    if src_wl != target_list and t in wls.get(src_wl, []):
+                        wls[src_wl].remove(t)
+                        if t not in wls[target_list]:
+                            wls[target_list].append(t)
+                        moved += 1
+                if moved:
+                    save_watchlists(wls)
+                    st.session_state['selected_stocks'].clear()
+                    st.success(f"✅ 移動 {moved} 檔到「{target_list}」")
+                    st.rerun()
+            if bc2.button(f"📋 複製到「{target_list}」", use_container_width=True):
+                copied = 0
+                for (src_wl, t) in st.session_state['selected_stocks']:
+                    if t not in wls.get(target_list, []):
+                        wls[target_list].append(t)
+                        copied += 1
+                if copied:
+                    save_watchlists(wls)
+                    st.success(f"✅ 複製 {copied} 檔到「{target_list}」")
                     st.rerun()
 
+            st.markdown("---")
+            # 批次排序（同清單內）
+            st.markdown("**📦 批次排序（同清單內）**")
+            sc1, sc2, sc3, sc4 = st.columns(4)
+            def _batch_reorder(direction):
+                """direction: top/up/down/bottom"""
+                changed = False
+                # 依清單分組
+                from collections import defaultdict
+                by_list = defaultdict(list)
+                for (wl, t) in st.session_state['selected_stocks']:
+                    by_list[wl].append(t)
+                for wl, ts in by_list.items():
+                    lst = wls.get(wl, [])
+                    # 取得這些選中股票在清單中的索引（保持原順序）
+                    idx_list = sorted([lst.index(t) for t in ts if t in lst])
+                    if not idx_list:
+                        continue
+                    # 取出選中的股票（保持原順序），其餘照舊
+                    selected_in_order = [lst[i] for i in idx_list]
+                    others = [t for i, t in enumerate(lst) if i not in idx_list]
+                    if direction == "top":
+                        new_lst = selected_in_order + others
+                    elif direction == "bottom":
+                        new_lst = others + selected_in_order
+                    elif direction == "up":
+                        # 每個選中的整體上移一格（保持相對順序）
+                        new_lst = lst[:]
+                        first_idx = idx_list[0]
+                        if first_idx > 0:
+                            # 上面那檔下移到選中段之後
+                            above = new_lst[first_idx - 1]
+                            del new_lst[first_idx - 1]
+                            insert_pos = first_idx - 1 + len(idx_list)
+                            new_lst.insert(insert_pos, above)
+                    elif direction == "down":
+                        new_lst = lst[:]
+                        last_idx = idx_list[-1]
+                        if last_idx < len(new_lst) - 1:
+                            below = new_lst[last_idx + 1]
+                            del new_lst[last_idx + 1]
+                            new_lst.insert(idx_list[0], below)
+                    else:
+                        continue
+                    wls[wl] = new_lst
+                    changed = True
+                return changed
+
+            if sc1.button("⏫ 置頂", use_container_width=True):
+                if _batch_reorder("top"):
+                    save_watchlists(wls); st.rerun()
+            if sc2.button("⬆️ 上移", use_container_width=True):
+                if _batch_reorder("up"):
+                    save_watchlists(wls); st.rerun()
+            if sc3.button("⬇️ 下移", use_container_width=True):
+                if _batch_reorder("down"):
+                    save_watchlists(wls); st.rerun()
+            if sc4.button("⏬ 置底", use_container_width=True):
+                if _batch_reorder("bottom"):
+                    save_watchlists(wls); st.rerun()
+
+            st.markdown("---")
+            # 危險區
+            if st.button(f"🗑️ 批次刪除 {sel_count} 檔",
+                          type="primary", use_container_width=True):
+                for (wl, t) in list(st.session_state['selected_stocks']):
+                    if t in wls.get(wl, []):
+                        wls[wl].remove(t)
+                save_watchlists(wls)
+                # 如果目前看的股票被刪了，切換
+                if (act_l, cur_t) in st.session_state['selected_stocks']:
+                    if wls.get(act_l):
+                        st.session_state['current_ticker'] = wls[act_l][0]
+                    else:
+                        st.session_state['current_ticker'] = "^NDX"
+                st.session_state['selected_stocks'].clear()
+                st.rerun()
+
+    else:
+        # ── 點按模式（既有 UI） ─────────────────────────
+        for wl_name, tickers in wls.items():
+            is_exp = (wl_name == st.session_state.get('user_opened_list'))
+            with st.expander(f"{wl_name} ({len(tickers)})", expanded=is_exp):
+                for t in tickers:
+                    is_sel = (t == cur_t and wl_name == act_l)
+                    s_name = get_stock_name(t)
+                    disp = f"{s_name} ({t})" if s_name != t else t
+                    if st.button(
+                        f"{'▶ ' if is_sel else ''}{disp}",
+                        key=f"btn_{wl_name}_{t}",
+                        type="primary" if is_sel else "secondary",
+                        use_container_width=True,
+                    ):
+                        st.session_state['current_ticker'] = t
+                        st.session_state['active_list'] = wl_name
+                        st.session_state['user_opened_list'] = wl_name
+                        st.rerun()
+
     st.markdown("---")
-    # ── 排列按鈕 ────────────────────────────────────────
-    st.markdown("<span style='color:gray; font-size:12px;'>📦 排列目前代碼</span>",
-                unsafe_allow_html=True)
-    c1, c2, c3, c4 = st.columns(4)
-    lst = wls.get(act_l, [])
-    idx = lst.index(cur_t) if cur_t in lst else -1
-    if c1.button("⏫", help="置頂") and idx > 0:
-        lst.insert(0, lst.pop(idx)); save_watchlists(wls); st.rerun()
-    if c2.button("⬆️", help="上移") and idx > 0:
-        lst[idx], lst[idx-1] = lst[idx-1], lst[idx]; save_watchlists(wls); st.rerun()
-    if c3.button("⬇️", help="下移") and 0 <= idx < len(lst)-1:
-        lst[idx], lst[idx+1] = lst[idx+1], lst[idx]; save_watchlists(wls); st.rerun()
-    if c4.button("⏬", help="置底") and 0 <= idx < len(lst)-1:
-        lst.append(lst.pop(idx)); save_watchlists(wls); st.rerun()
+    # ── 排列按鈕（單一股票，非多選模式時可用） ──────
+    if not multi_mode:
+        st.markdown("<span style='color:gray; font-size:12px;'>📦 排列目前代碼</span>",
+                    unsafe_allow_html=True)
+        c1, c2, c3, c4 = st.columns(4)
+        lst = wls.get(act_l, [])
+        idx = lst.index(cur_t) if cur_t in lst else -1
+        if c1.button("⏫", help="置頂") and idx > 0:
+            lst.insert(0, lst.pop(idx)); save_watchlists(wls); st.rerun()
+        if c2.button("⬆️", help="上移") and idx > 0:
+            lst[idx], lst[idx-1] = lst[idx-1], lst[idx]; save_watchlists(wls); st.rerun()
+        if c3.button("⬇️", help="下移") and 0 <= idx < len(lst)-1:
+            lst[idx], lst[idx+1] = lst[idx+1], lst[idx]; save_watchlists(wls); st.rerun()
+        if c4.button("⏬", help="置底") and 0 <= idx < len(lst)-1:
+            lst.append(lst.pop(idx)); save_watchlists(wls); st.rerun()
 
     st.markdown("---")
     time_opt = st.radio("選擇週期", ["當沖 (分時)", "日線 (Daily)", "週線 (Weekly)"], index=1)
@@ -2028,7 +2201,9 @@ if _CRISIS_AVAILABLE:
         st.rerun()
     st.caption(
         "整合 13 個資料源 → 兩個指數，告訴你距離空頭崩盤多遠。"
-        "85+ 強制清倉 / 75-85 高度危險 / 60-75 警戒 / 40-60 中性 / 20-40 機會 / 0-20 極度恐慌"
+        "**↑ 越高越接近頂部 ｜ ↓ 越低越接近底部（反向買進機會）**　　"
+        "85+ 強制清倉（系統性風險） / 75-85 高度危險 / 60-75 警戒 / "
+        "40-60 中性 / 20-40 機會浮現 / **0-20 極度恐慌（逆勢買進）**"
     )
 
     @st.cache_data(ttl=3600, show_spinner="抓取空頭距離指數資料...")
@@ -2246,7 +2421,316 @@ if _CRISIS_AVAILABLE:
                     )
 
 # ==========================================
-# 🚀 火箭類股探測器
+# 🕵️ SEC Form 4 內部人賣壓
+# ==========================================
+if _INSIDER_AVAILABLE:
+    st.markdown("---")
+    ins_col1, ins_col2 = st.columns([5, 1])
+    ins_col1.header("🕵️ 內部人賣壓指數 (SEC Form 4)")
+    if ins_col2.button("🔄 強制刷新", key="insider_force_refresh",
+                        help="清除快取重新掃描 S&P 100 內部人交易（約 2-3 分鐘）"):
+        st.cache_data.clear()
+        import shutil as _sh
+        try:
+            _sh.rmtree(".insider_cache", ignore_errors=True)
+        except Exception:
+            pass
+        st.rerun()
+    st.caption(
+        "追蹤 S&P 100 大型權值股近 30 日的 CEO/CFO/Director 開放市場交易。"
+        "賣壓比例（賣出金額 ÷ 總交易金額）越高表示內部人越看空。"
+    )
+
+    @st.cache_data(ttl=86400, show_spinner="🕵️ 正在抓取 SEC Form 4（首次約 2-3 分鐘）...")
+    def _cached_insider():
+        return insider_sentiment.get_insider_pressure_index()
+
+    try:
+        insider = _cached_insider()
+    except Exception as e:
+        st.error(f"內部人賣壓計算失敗：{e}")
+        insider = None
+
+    if insider and insider.get("data_status"):
+        score = insider["score"]
+        level_text, level_color = insider["level"]
+        stats = insider["stats"]
+
+        # 主卡片
+        ins_main_col1, ins_main_col2, ins_main_col3 = st.columns([2, 1, 1])
+        with ins_main_col1:
+            st.markdown(
+                f'<div style="background:linear-gradient(135deg,#1a1a1c 0%,#2a1c1c 100%);'
+                f'padding:20px;border-radius:10px;border:2px solid {level_color};'
+                f'text-align:center;">'
+                f'<div style="color:#aaa;font-size:14px;">🇺🇸 內部人賣壓比例</div>'
+                f'<div style="color:{level_color};font-size:48px;font-weight:bold;line-height:1.1;">'
+                f'{score:.1f}<span style="font-size:20px;color:#888;">/100</span>'
+                f'</div>'
+                f'<div style="background:{level_color}22;color:{level_color};'
+                f'border:1px solid {level_color};padding:5px 12px;border-radius:18px;'
+                f'display:inline-block;margin-top:8px;font-weight:bold;">'
+                f'{level_text}'
+                f'</div>'
+                f'<div style="color:#666;font-size:11px;margin-top:8px;">'
+                f'更新於 {insider.get("updated_at","—")}'
+                f'</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        with ins_main_col2:
+            st.markdown(
+                f'<div style="background:#1a1a1c;padding:14px;border-radius:8px;'
+                f'border:1px solid #2a2a2c;height:100%;">'
+                f'<div style="color:#aaa;font-size:12px;">📈 賣出金額（30日）</div>'
+                f'<div style="color:#ef4444;font-size:22px;font-weight:bold;margin-top:4px;">'
+                f'${stats["sell_value"]/1e6:.1f}M</div>'
+                f'<div style="color:#666;font-size:11px;">{stats["sell_count"]} 筆交易</div>'
+                f'<div style="color:#aaa;font-size:12px;margin-top:10px;">📉 買進金額</div>'
+                f'<div style="color:#22c55e;font-size:22px;font-weight:bold;margin-top:4px;">'
+                f'${stats["buy_value"]/1e6:.1f}M</div>'
+                f'<div style="color:#666;font-size:11px;">{stats["buy_count"]} 筆交易</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        with ins_main_col3:
+            ratio = stats["sell_ratio"]
+            st.markdown(
+                f'<div style="background:#1a1a1c;padding:14px;border-radius:8px;'
+                f'border:1px solid #2a2a2c;height:100%;">'
+                f'<div style="color:#aaa;font-size:12px;">📊 賣壓比例</div>'
+                f'<div style="color:{level_color};font-size:32px;font-weight:bold;margin-top:6px;">'
+                f'{ratio*100:.1f}%</div>'
+                f'<div style="background:#262730;height:8px;border-radius:4px;margin-top:8px;overflow:hidden;">'
+                f'<div style="width:{ratio*100}%;height:100%;background:{level_color};"></div>'
+                f'</div>'
+                f'<div style="color:#666;font-size:11px;margin-top:8px;">'
+                f'掃描 {stats["companies_scanned"]} 家公司'
+                f'</div>'
+                f'<div style="color:#888;font-size:11px;margin-top:6px;">'
+                f'>70% 警戒｜>85% 危險'
+                f'</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        # 賣最多 / 買最多 表格
+        ts_col1, ts_col2 = st.columns(2)
+        with ts_col1:
+            st.markdown("##### 📉 賣最多 TOP 5")
+            if insider["top_sellers"]:
+                for i, s in enumerate(insider["top_sellers"], 1):
+                    insiders_str = ", ".join(s["insiders"][:2]) if s["insiders"] else "—"
+                    medal = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"][i-1]
+                    st.markdown(
+                        f'<div style="background:#1a1a1c;border-left:3px solid #ef4444;'
+                        f'border-radius:6px;padding:8px 12px;margin-bottom:6px;">'
+                        f'<div style="display:flex;justify-content:space-between;">'
+                        f'<span style="font-weight:bold;color:#fff;">{medal} {s["ticker"]}</span>'
+                        f'<span style="color:#ef4444;font-weight:bold;">'
+                        f'${s["value"]/1e6:.2f}M</span></div>'
+                        f'<div style="color:#888;font-size:11px;">'
+                        f'{s["count"]} 筆 ｜ {insiders_str}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.caption("無賣出資料")
+
+        with ts_col2:
+            st.markdown("##### 📈 買最多 TOP 5")
+            if insider["top_buyers"]:
+                for i, b in enumerate(insider["top_buyers"], 1):
+                    insiders_str = ", ".join(b["insiders"][:2]) if b["insiders"] else "—"
+                    medal = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"][i-1]
+                    st.markdown(
+                        f'<div style="background:#1a1a1c;border-left:3px solid #22c55e;'
+                        f'border-radius:6px;padding:8px 12px;margin-bottom:6px;">'
+                        f'<div style="display:flex;justify-content:space-between;">'
+                        f'<span style="font-weight:bold;color:#fff;">{medal} {b["ticker"]}</span>'
+                        f'<span style="color:#22c55e;font-weight:bold;">'
+                        f'${b["value"]/1e6:.2f}M</span></div>'
+                        f'<div style="color:#888;font-size:11px;">'
+                        f'{b["count"]} 筆 ｜ {insiders_str}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.caption("無買進資料")
+
+        with st.expander("💡 怎麼看這個指標？", expanded=False):
+            st.markdown("""
+            **內部人賣壓比例** = 賣出金額 ÷ (賣出金額 + 買進金額)
+
+            - **<40%**：內部人在加碼，極強看多訊號
+            - **40-60%**：平衡，中性
+            - **60-75%**：賣方占優，留意減碼
+            - **>75%**：高度賣壓，內部人集中出貨
+            - **>85%**：危險區，**歷史經驗常是中期頂部前 2-4 週**
+
+            **資料來源**：SEC EDGAR Form 4（內部人法定 2 個工作天內申報）
+
+            **追蹤範圍**：S&P 100 大型權值股，CEO/CFO/Director 在開放市場的真實買賣（已排除員工配股、選擇權行權、贈與等非市場行為）
+            """)
+
+    elif insider:
+        st.warning(f"📊 內部人資料暫時無法取得：{insider.get('reason', '未知原因')}")
+
+# ==========================================
+# 🤫 悄悄吸籌探測器（找尚未大漲但有徵兆的股票）
+# ==========================================
+try:
+    import accumulation_screener as _accum
+    _ACCUM_AVAILABLE = True
+except ImportError:
+    _ACCUM_AVAILABLE = False
+
+if _ACCUM_AVAILABLE:
+    st.markdown("---")
+    accum_col1, accum_col2 = st.columns([5, 1])
+    accum_col1.header("🤫 悄悄吸籌探測器")
+    if accum_col2.button("🔄 強制刷新", key="accum_force_refresh",
+                          help="清除快取重新掃描（約 1-2 分鐘）"):
+        st.cache_data.clear()
+        import shutil as _sh
+        try:
+            _sh.rmtree(".accumulation_cache", ignore_errors=True)
+        except Exception:
+            pass
+        st.rerun()
+    st.caption(
+        "找出「**尚未大漲但有資金悄悄流入**」的股票。"
+        "**前提**：股價 30 日變化在 -10% ~ +8%（不算進場 + 沒崩盤）。"
+        "再依 4 個量價訊號計分。"
+    )
+
+    accum_market_col, accum_min_col = st.columns([1, 1])
+    accum_market = accum_market_col.radio(
+        "市場", ["🇺🇸 美股", "🇹🇼 台股"],
+        horizontal=True, key="accum_market", label_visibility="collapsed",
+    )
+    accum_min = accum_min_col.radio(
+        "最低訊號數", ["3/4 強訊號", "4/4 極強訊號", "2/4 觀察名單"],
+        horizontal=True, key="accum_min", label_visibility="collapsed",
+    )
+    market_key = "us" if "美" in accum_market else "tw"
+    min_sig_map = {"3/4 強訊號": 3, "4/4 極強訊號": 4, "2/4 觀察名單": 2}
+    min_sig = min_sig_map[accum_min]
+
+    @st.cache_data(ttl=14400, show_spinner="🔍 正在掃描吸籌訊號（首次約 1-2 分鐘）...")
+    def _cached_accum(market, min_signals):
+        return _accum.get_accumulation_signals(market=market, min_signals=min_signals)
+
+    try:
+        accum_result = _cached_accum(market_key, min_sig)
+    except Exception as e:
+        st.error(f"掃描失敗：{e}")
+        accum_result = {"accumulation": [], "edge": []}
+
+    # 拆兩塊：吸籌 / 邊緣
+    accum_list = accum_result.get("accumulation", []) if isinstance(accum_result, dict) else []
+    edge_list = accum_result.get("edge", []) if isinstance(accum_result, dict) else []
+
+    def _render_stock_card(stock):
+        ticker = stock["ticker"]
+        n_hit = stock["n_hit"]
+        level_text, level_color = stock["level"]
+        themes = stock["themes"]
+        signals = stock["signals"]
+        m = stock["metrics"]
+        close = stock["last_close"]
+
+        signal_dots = "".join(
+            f'<span style="color:{"#22c55e" if s else "#444"};font-size:14px;">●</span>'
+            for s in signals
+        )
+        theme_html = " ".join(
+            f'<span style="background:#2a2a2c;color:#aaa;font-size:11px;'
+            f'padding:2px 7px;border-radius:4px;margin-right:4px;">{t}</span>'
+            for t in themes[:2]
+        )
+        name = get_stock_name(ticker)
+        disp = f"{name} ({ticker})" if name != ticker else ticker
+
+        st.markdown(
+            f'<div style="background:#1a1a1c;border:1px solid #2a2a2c;'
+            f'border-left:4px solid {level_color};'
+            f'border-radius:8px;padding:14px 18px;margin-bottom:10px;">'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+            f'<div>'
+            f'<span style="font-size:16px;font-weight:bold;color:#fff;">{disp}</span>'
+            f'<span style="color:#888;margin-left:8px;font-size:13px;">${close:.2f}</span>'
+            f'</div>'
+            f'<span style="color:{level_color};font-weight:bold;font-size:14px;">'
+            f'{level_text} ({n_hit}/4)</span>'
+            f'</div>'
+            f'<div style="margin:6px 0;">{signal_dots}'
+            f'<span style="color:#888;font-size:11px;margin-left:8px;">'
+            f'價:{m["price_chg_30d"]:+.1f}% ｜ 量:{m["vol_ratio"]:.1f}x ｜ '
+            f'OBV:{m["obv_pct_of_60d_max"]:.0f}% ｜ 漲跌量:{m["up_down_vol_ratio"]:.1f}x ｜ '
+            f'距高:{m["dist_from_52w_high_pct"]:.0f}%'
+            f'</span></div>'
+            f'<div>{theme_html}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    if accum_list or edge_list:
+        # 主榜：悄悄吸籌（沒大漲）
+        if accum_list:
+            st.markdown(f"#### 🤫 悄悄吸籌（30 日 < +8%）— 找到 **{len(accum_list)}** 檔")
+            for stock in accum_list[:15]:
+                _render_stock_card(stock)
+        else:
+            st.info("🤫 目前沒有符合「悄悄吸籌」條件的股票（市場可能過熱）")
+
+        # 副榜：邊緣候選（已起漲但未飆）
+        if edge_list:
+            st.markdown(
+                f"#### 📊 邊緣候選（30 日漲幅 8~15%）— 找到 **{len(edge_list)}** 檔"
+            )
+            st.caption(
+                "已起漲、有量、有 OBV 訊號 — 介於吸籌與動能之間，"
+                "**可能是吸籌完成正在突破，也可能是要回檔的尾巴**，需搭配技術面判斷。"
+            )
+            for stock in edge_list[:10]:
+                _render_stock_card(stock)
+
+        with st.expander("💡 訊號邏輯說明", expanded=False):
+            st.markdown("""
+            **悄悄吸籌的學術依據**：機構建倉時會避免推高股價，所以特徵是**量增價不漲 + 資金累積流入**。
+
+            #### 🚫 第一道篩選
+            - **30 日均量 > 50 萬股**（流動性篩選，排除冷門小型股）
+            - **30 日股價變化 > -10%**（排除崩盤股）
+            - **30 日股價變化 < +15%**（已飆漲超過 15% 就跳出榜外）
+
+            通過後依 4 個訊號計分：
+
+            | 訊號 | 含義 |
+            |---|---|
+            | **量能放大**（30日均 > 60日均 1.5x） | 有資金在進場 |
+            | **OBV 新高** | On-Balance Volume 創 60 日新高 = 累積派發指標看好 |
+            | **上漲日量 > 下跌日量 1.3x** | 買盤強過賣盤 |
+            | **站上 50MA 距高 > 10%** | 在中性偏多區、不在頂部 |
+
+            #### 🏆 兩類榜單
+            - **🤫 悄悄吸籌**（30日 < +8%）：機構正在累積、價格還沒推高 → **最佳介入時機**
+            - **📊 邊緣候選**（30日 8~15%）：剛起漲、可能突破中 → 看技術面決定要追或等回檔
+
+            #### 等級分類
+            - **2/4 中** 🟡 觀察名單
+            - **3/4 中** 🟠 強訊號（高機率機構吸籌）
+            - **4/4 中** 🔴 極強訊號（教科書級，罕見）
+
+            ⚠️ 注意：吸籌訊號不保證一定漲，只是說明「特徵相符」。建議搭配個股戰情室的技術面再做決策。
+            """)
+    else:
+        st.info(f"目前沒有符合 {accum_min} 的股票（市場可能太熱或太冷，導致吸籌訊號不明顯）")
+
+
+# ==========================================
+# 📊 類股動能榜（原火箭類股探測器）
 # ==========================================
 try:
     import rocket_screener as _rocket
@@ -2256,8 +2740,8 @@ except ImportError:
 
 if _ROCKET_AVAILABLE:
     st.markdown("---")
-    st.header("🚀 火箭類股探測器")
-    st.caption("掃描 30+ 美股主題 + 25+ 台股主題，找出本週 / 本月最強的類股板塊")
+    st.header("📊 類股動能榜")
+    st.caption("看「現在哪些主題在熱」— 注意：高動能 ≠ 該買，可能是漲到尾巴。建議搭配「悄悄吸籌探測器」一起看")
 
     rkt_col1, rkt_col2, rkt_col3 = st.columns([1, 1, 1])
     rkt_market = rkt_col1.radio("市場", ["🇺🇸 美股", "🇹🇼 台股"],
