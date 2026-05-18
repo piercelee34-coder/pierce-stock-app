@@ -1,0 +1,305 @@
+<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8">
+<title>v4 雙向回測 + 7維推演</title><style>
+  body { background:#0e0e10; color:#e5e7eb; font-family:-apple-system,sans-serif;
+         margin:0; padding:24px; max-width:1400px; margin:0 auto; }
+  h1, h2 { color:#facc15; }
+  h1 { border-bottom:2px solid #facc15; padding-bottom:12px; }
+  table { width:100%; border-collapse:collapse; margin:12px 0;
+           background:#1a1a1c; border-radius:8px; overflow:hidden; font-size:13px; }
+  th, td { padding:8px 10px; text-align:left; border-bottom:1px solid #2a2a2c; }
+  th { background:#2a2a2c; color:#facc15; }
+  .card-row { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:16px 0; }
+  .card { background:#1a1a1c; padding:18px; border-radius:8px; border-left:4px solid #888; }
+  .big { font-size:28px; font-weight:bold; color:#facc15; }
+  .key-finding { background:#1a2a1c; border-left:4px solid #22c55e;
+                  padding:14px 18px; margin:14px 0; border-radius:6px; }
+</style></head><body>
+
+<h1>🎯 v4 雙向回測 — 新下車訊號 + 7 維推演 context</h1>
+<p style="color:#888;">產出：2026-05-16 23:48 | 股票數：23</p>
+
+<h2>🚀 起漲訊號（方案 A）</h2>
+<div class="card-row">
+  <div class="card" style="border-left-color:#ef4444;">
+    <div style="color:#ef4444;font-weight:bold;">❌ 舊規則</div>
+    <div style="margin-top:6px;">數：<b>322</b></div>
+    <div>勝率：<span class="big">55.9%</span></div>
+    <div>平均：+3.18%</div>
+  </div>
+  <div class="card" style="border-left-color:#22c55e;">
+    <div style="color:#22c55e;font-weight:bold;">✨ 方案 A</div>
+    <div style="margin-top:6px;">數：<b>68</b></div>
+    <div>勝率：<span class="big" style="color:#22c55e;">60.3%</span></div>
+    <div>平均：+5.82%</div>
+  </div>
+  <div class="card" style="border-left-color:#facc15;">
+    <div style="color:#facc15;font-weight:bold;">📐 訊號數變化</div>
+    <div style="margin-top:6px;">減少：<b>78%</b></div>
+    <div>勝率提升：<b style="color:#22c55e;">+4.4%</b></div>
+  </div>
+</div>
+
+<h2>🔻 v4 新版下車訊號</h2>
+<p style="color:#aaa;">
+<b>必要條件</b>：距 SMA60 > +5% + 過去 20 日 RSI 曾 > 65<br>
+<b>4 計分訊號</b>：RSI 負背離 / 量價背離 / 跌破 SMA20+RSI>60 / 連 5 漲後放量黑 K
+</p>
+<div class="card-row">
+  <div class="card" style="border-left-color:#dc2626;">
+    <div style="color:#dc2626;font-weight:bold;">🔴 強烈下車 (4/4)</div>
+    <div style="margin-top:6px;">數：<b>0</b></div>
+    <div>命中率：<span class="big" style="color:#dc2626;">—</span></div>
+    <div>平均跌幅：—</div>
+  </div>
+  <div class="card" style="border-left-color:#f97316;">
+    <div style="color:#f97316;font-weight:bold;">🟠 中度下車 (3/4)</div>
+    <div style="margin-top:6px;">數：<b>0</b></div>
+    <div>命中率：<span class="big" style="color:#f97316;">—</span></div>
+    <div>平均跌幅：—</div>
+  </div>
+  <div class="card" style="border-left-color:#facc15;">
+    <div style="color:#facc15;font-weight:bold;">🟡 觀察 (2/4)</div>
+    <div style="margin-top:6px;">數：<b>80</b></div>
+    <div>命中率：<span class="big">32.5%</span></div>
+    <div>平均跌幅：+4.42%</div>
+  </div>
+</div>
+
+<h3>📋 下車訊號案例（含 7 維推演 context）</h3>
+<table>
+  <tr><th>股票</th><th>日期</th><th>等級</th><th>命中</th>
+    <th>+5日</th><th>+10日</th><th>+20日</th><th>分類</th><th>7維 context</th></tr>
+  <tr>
+          <td>ONDS</td><td>2025-06-25</td>
+          <td>🟡 觀察下車</td><td>2/4</td>
+          <td>+17.50%</td><td>+25.62%</td><td>+33.75%</td>
+          <td>❌ 大錯下車(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">reversal | 🔴 | 距高53% | 量5d:0.9x | 動能+69.8% | OBV58%</span></td></tr><tr>
+          <td>ONDS</td><td>2025-07-10</td>
+          <td>🟡 觀察下車</td><td>2/4</td>
+          <td>+19.40%</td><td>+6.47%</td><td>+61.69%</td>
+          <td>❌ 大錯下車(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">reversal | 🔴 | 距高41% | 量5d:0.8x | 動能+32.2% | OBV100%</span></td></tr><tr>
+          <td>ONDS</td><td>2025-08-07</td>
+          <td>🟡 觀察下車</td><td>2/4</td>
+          <td>+20.92%</td><td>+16.92%</td><td>+73.23%</td>
+          <td>❌ 大錯下車(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">reversal | 🔴 | 距高7% | 量5d:1.5x | 動能+61.7% | OBV92%</span></td></tr><tr>
+          <td>ONDS</td><td>2025-09-08</td>
+          <td>🟡 觀察下車</td><td>2/4</td>
+          <td>+5.28%</td><td>+19.80%</td><td>+75.91%</td>
+          <td>❌ 大錯下車(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">reversal | 🔴 | 距高7% | 量5d:0.8x | 動能+70.7% | OBV100%</span></td></tr><tr>
+          <td>ONDS</td><td>2025-09-22</td>
+          <td>🟡 觀察下車</td><td>2/4</td>
+          <td>+8.40%</td><td>+46.83%</td><td>+7.02%</td>
+          <td>❌ 大錯下車(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">reversal | 🟢 | 距高1% | 量5d:0.9x | 動能+61.7% | OBV100%</span></td></tr><tr>
+          <td>ONDS</td><td>2025-12-31</td>
+          <td>🟡 觀察下車</td><td>2/4</td>
+          <td>+43.55%</td><td>+31.35%</td><td>+6.15%</td>
+          <td>❌ 大錯下車(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">reversal | 🟢 | 距高17% | 量5d:0.8x | 動能+20.9% | OBV100%</span></td></tr><tr>
+          <td>NFLX</td><td>2025-05-19</td>
+          <td>🟡 觀察下車</td><td>2/4</td>
+          <td>+1.67%</td><td>+2.21%</td><td>+2.44%</td>
+          <td>😟 假警報(+2~5%)</td><td><span style="font-size:11px;color:#aaa;">reversal | 🔴 | 距高0% | 量5d:0.9x | 動能+20.6% | OBV100%</span></td></tr><tr>
+          <td>NFLX</td><td>2025-06-03</td>
+          <td>🟡 觀察下車</td><td>2/4</td>
+          <td>-1.18%</td><td>+0.22%</td><td>+5.49%</td>
+          <td>⚖️ 平淡(±2%)</td><td><span style="font-size:11px;color:#aaa;">reversal | 🔴 | 距高1% | 量5d:0.9x | 動能+7.4% | OBV98%</span></td></tr><tr>
+          <td>NFLX</td><td>2025-06-17</td>
+          <td>🟡 觀察下車</td><td>2/4</td>
+          <td>+4.47%</td><td>+5.26%</td><td>+4.38%</td>
+          <td>❌ 大錯下車(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">reversal | 🔴 | 距高3% | 量5d:0.8x | 動能+2.4% | OBV89%</span></td></tr><tr>
+          <td>NFLX</td><td>2026-04-08</td>
+          <td>🟡 觀察下車</td><td>2/4</td>
+          <td>+8.37%</td><td>-6.19%</td><td>-11.19%</td>
+          <td>✅ 完美下車(-5%↓)</td><td><span style="font-size:11px;color:#aaa;">reversal | 🟢 | 距高26% | 量5d:0.9x | 動能+2.5% | OBV100%</span></td></tr><tr>
+          <td>QQQ</td><td>2025-06-09</td>
+          <td>🟡 觀察下車</td><td>2/4</td>
+          <td>+0.68%</td><td>+1.71%</td><td>+4.81%</td>
+          <td>⚖️ 平淡(±2%)</td><td><span style="font-size:11px;color:#aaa;">trend | 🔴 | 距高2% | 量5d:0.9x | 動能+8.8% | OBV100%</span></td></tr><tr>
+          <td>QQQ</td><td>2025-08-12</td>
+          <td>🟡 觀察下車</td><td>2/4</td>
+          <td>-1.86%</td><td>-1.28%</td><td>+0.11%</td>
+          <td>⚖️ 平淡(±2%)</td><td><span style="font-size:11px;color:#aaa;">trend | 🔴 | 距高0% | 量5d:0.9x | 動能+4.2% | OBV99%</span></td></tr><tr>
+          <td>QQQ</td><td>2025-10-24</td>
+          <td>🟡 觀察下車</td><td>2/4</td>
+          <td>+1.94%</td><td>-1.19%</td><td>-4.38%</td>
+          <td>⚖️ 平淡(±2%)</td><td><span style="font-size:11px;color:#aaa;">trend | 🟢 | 距高0% | 量5d:0.9x | 動能+3.5% | OBV89%</span></td></tr><tr>
+          <td>QQQ</td><td>2026-05-15</td>
+          <td>🟡 觀察下車</td><td>2/4</td>
+          <td>—</td><td>—</td><td>—</td>
+          <td>資料不足</td><td><span style="font-size:11px;color:#aaa;">trend | 🟢 | 距高2% | 量5d:1.1x | 動能+9.3% | OBV94%</span></td></tr><tr>
+          <td>GOOG</td><td>2025-06-12</td>
+          <td>🟡 觀察下車</td><td>2/4</td>
+          <td>-5.22%</td><td>+0.73%</td><td>+3.30%</td>
+          <td>⚖️ 平淡(±2%)</td><td><span style="font-size:11px;color:#aaa;">trend | 🔴 | 距高15% | 量5d:0.8x | 動能+6.1% | OBV74%</span></td></tr><tr>
+          <td>GOOG</td><td>2025-07-09</td>
+          <td>🟡 觀察下車</td><td>2/4</td>
+          <td>+3.44%</td><td>+7.80%</td><td>+10.84%</td>
+          <td>❌ 大錯下車(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">trend | 🔴 | 距高15% | 量5d:0.8x | 動能+0.0% | OBV52%</span></td></tr><tr>
+          <td>GOOG</td><td>2025-08-13</td>
+          <td>🟡 觀察下車</td><td>2/4</td>
+          <td>-1.40%</td><td>+2.55%</td><td>+18.59%</td>
+          <td>😟 假警報(+2~5%)</td><td><span style="font-size:11px;color:#aaa;">trend | 🔴 | 距高3% | 量5d:0.8x | 動能+10.5% | OBV95%</span></td></tr><tr>
+          <td>GOOG</td><td>2025-10-21</td>
+          <td>🟡 觀察下車</td><td>2/4</td>
+          <td>+6.80%</td><td>+10.63%</td><td>+13.38%</td>
+          <td>❌ 大錯下車(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">trend | 🟢 | 距高2% | 量5d:1.0x | 動能-0.4% | OBV91%</span></td></tr><tr>
+          <td>GOOG</td><td>2026-05-11</td>
+          <td>🟡 觀察下車</td><td>2/4</td>
+          <td>—</td><td>—</td><td>—</td>
+          <td>資料不足</td><td><span style="font-size:11px;color:#aaa;">trend | 🟢 | 距高3% | 量5d:0.9x | 動能+21.2% | OBV94%</span></td></tr><tr>
+          <td>META</td><td>2025-05-28</td>
+          <td>🟡 觀察下車</td><td>2/4</td>
+          <td>+6.89%</td><td>+7.86%</td><td>+12.82%</td>
+          <td>❌ 大錯下車(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">trend | 🔴 | 距高13% | 量5d:0.6x | 動能+16.1% | OBV80%</span></td></tr>
+</table>
+
+<h3>🚀 起漲訊號代表案例（前 15 強，含 7 維 context）</h3>
+<table>
+  <tr><th>股票</th><th>日期</th><th>類型</th><th>觸發</th>
+    <th>+10日</th><th>分類</th><th>7維 context</th></tr>
+  <tr>
+          <td>ONDS</td><td>2025-12-23</td>
+          <td>⭐ MACD起漲確認</td><td>正值區金叉</td>
+          <td>+56.36%</td><td>✅ 優秀(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">reversal | 🟢 | 距高23% | 量5d:0.9x | 動能+2.8% | OBV82%</span></td></tr><tr>
+          <td>SNDK</td><td>2025-12-22</td>
+          <td>⭐ MACD起漲確認</td><td>正值區金叉</td>
+          <td>+46.67%</td><td>✅ 優秀(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">reversal | 🟢 | 距高15% | 量5d:0.8x | 動能+20.4% | OBV51%</span></td></tr><tr>
+          <td>SNDK</td><td>2025-10-15</td>
+          <td>⭐ MACD起漲確認</td><td>正值區金叉</td>
+          <td>+41.62%</td><td>✅ 優秀(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">reversal | 🟢 | 距高0% | 量5d:0.8x | 動能+53.6% | OBV92%</span></td></tr><tr>
+          <td>BE</td><td>2026-04-16</td>
+          <td>🚀 起漲點</td><td>MA金叉+RSI超賣</td>
+          <td>+34.89%</td><td>✅ 優秀(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">reversal | 🟢 | 距高8% | 量5d:1.2x | 動能+34.2% | OBV71%</span></td></tr><tr>
+          <td>MU</td><td>2026-04-23</td>
+          <td>🚀 起漲點</td><td>MA金叉+RSI超賣</td>
+          <td>+34.23%</td><td>✅ 優秀(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">momentum | 🟢 | 距高2% | 量5d:0.8x | 動能+26.1% | OBV55%</span></td></tr><tr>
+          <td>ONDS</td><td>2025-12-31</td>
+          <td>⭐ MACD起漲確認</td><td>正值區金叉</td>
+          <td>+31.35%</td><td>✅ 優秀(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">reversal | 🟢 | 距高17% | 量5d:0.8x | 動能+20.9% | OBV100%</span></td></tr><tr>
+          <td>BE</td><td>2025-10-01</td>
+          <td>⭐ MACD起漲確認</td><td>正值區金叉</td>
+          <td>+29.26%</td><td>✅ 優秀(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">reversal | 🟢 | 距高1% | 量5d:1.1x | 動能+72.0% | OBV97%</span></td></tr><tr>
+          <td>MU</td><td>2025-12-19</td>
+          <td>⭐ MACD起漲確認</td><td>正值區金叉</td>
+          <td>+29.15%</td><td>✅ 優秀(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">momentum | 🟢 | 距高1% | 量5d:1.6x | 動能+32.1% | OBV97%</span></td></tr><tr>
+          <td>AMD</td><td>2026-04-14</td>
+          <td>🚀 起漲點</td><td>MA金叉+RSI超賣</td>
+          <td>+26.71%</td><td>✅ 優秀(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">momentum | 🟢 | 距高4% | 量5d:0.9x | 動能+29.8% | OBV95%</span></td></tr><tr>
+          <td>RKLB</td><td>2025-12-26</td>
+          <td>🚀 起漲點</td><td>MA金叉+RSI超賣</td>
+          <td>+24.42%</td><td>✅ 優秀(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">reversal | 🟢 | 距高12% | 量5d:1.4x | 動能+68.5% | OBV84%</span></td></tr><tr>
+          <td>RKLB</td><td>2025-10-03</td>
+          <td>⭐ MACD起漲確認</td><td>正值區金叉</td>
+          <td>+18.00%</td><td>✅ 優秀(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">reversal | 🟢 | 距高1% | 量5d:1.1x | 動能+22.5% | OBV100%</span></td></tr><tr>
+          <td>GOOG</td><td>2026-04-23</td>
+          <td>🚀 起漲點</td><td>MA金叉+RSI超賣</td>
+          <td>+17.04%</td><td>✅ 優秀(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">trend | 🟢 | 距高4% | 量5d:0.8x | 動能+16.6% | OBV37%</span></td></tr><tr>
+          <td>RKLB</td><td>2025-09-23</td>
+          <td>⭐ MACD起漲確認</td><td>正值區金叉</td>
+          <td>+16.25%</td><td>✅ 優秀(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">reversal | 🟢 | 距高4% | 量5d:1.1x | 動能+12.1% | OBV100%</span></td></tr><tr>
+          <td>CRCL</td><td>2026-03-09</td>
+          <td>🚀 起漲點</td><td>MA金叉+RSI超賣</td>
+          <td>+13.23%</td><td>✅ 優秀(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">growth | 🟢 | 距高63% | 量5d:1.3x | 動能+96.1% | OBV100%</span></td></tr><tr>
+          <td>BE</td><td>2026-01-20</td>
+          <td>🚀 起漲點</td><td>MA金叉+RSI超賣</td>
+          <td>+11.29%</td><td>✅ 優秀(+5%↑)</td><td><span style="font-size:11px;color:#aaa;">reversal | 🟢 | 距高2% | 量5d:1.2x | 動能+89.2% | OBV100%</span></td></tr>
+</table>
+
+<h2>📋 失敗案例對應（含 v4 新增 3 個漏標）</h2>
+<table>
+  <tr><th>股票</th><th>您日期</th><th>類型</th><th>對應日</th>
+    <th>類型</th><th>觸發</th><th>+10日</th><th>分類</th><th>方案 A</th></tr>
+  <tr>
+              <td>ONDS</td><td>2026-05-01</td><td>🔴 假起漲</td>
+              <td>2026-05-01</td><td>🚀 起漲點</td><td>MA金叉+RSI超賣</td>
+              <td>+2.91%</td><td>👍 不錯(+2~5%)</td><td><span style="color:#22c55e;">✅ 砍掉</span></td></tr><tr>
+              <td>META</td><td>2026-04-28</td><td>🔴 假起漲</td>
+              <td>2026-04-28</td><td>🚀 起漲點</td><td>MA金叉+RSI超賣</td>
+              <td>-10.18%</td><td>❌ 失敗(-5%↓)</td><td><span style="color:#22c55e;">✅ 砍掉</span></td></tr><tr>
+              <td>META</td><td>2026-03-04</td><td>🔴 假起漲</td>
+              <td>2026-03-04</td><td>⭐ MACD起漲確認</td><td>近MA60+RSI回暖</td>
+              <td>-7.80%</td><td>❌ 失敗(-5%↓)</td><td><span style="color:#22c55e;">✅ 砍掉</span></td></tr><tr>
+              <td>GLW</td><td>2026-04-24</td><td>🔴 假起漲</td>
+              <td>2026-04-24</td><td>⭐ MACD起漲確認</td><td>正值區金叉</td>
+              <td>+6.28%</td><td>✅ 優秀(+5%↑)</td><td><span style="color:#facc15;">⚠️ 仍會發</span></td></tr><tr>
+              <td>QQQ</td><td>2026-01-27</td><td>🔴 假起漲</td>
+              <td>2026-01-27</td><td>⭐ MACD起漲確認</td><td>正值區金叉</td>
+              <td>-3.12%</td><td>😟 不佳(-2~-5%)</td><td><span style="color:#22c55e;">✅ 砍掉</span></td></tr><tr>
+              <td>QQQ</td><td>2026-02-25</td><td>🔴 假起漲</td>
+              <td>2026-02-25</td><td>⭐ MACD起漲確認</td><td>近MA60+RSI回暖</td>
+              <td>-1.46%</td><td>⚖️ 平淡(±2%)</td><td><span style="color:#22c55e;">✅ 砍掉</span></td></tr><tr><td>CRCL</td><td>2025-12-22</td>
+              <td>🔴 假起漲</td><td colspan="6" style="color:#888;">(回測未抓到)</td></tr><tr>
+              <td>TSLA</td><td>2026-02-25</td><td>🔴 假起漲</td>
+              <td>2026-02-25</td><td>⭐ MACD起漲確認</td><td>近MA60+RSI回暖</td>
+              <td>-2.30%</td><td>😟 不佳(-2~-5%)</td><td><span style="color:#22c55e;">✅ 砍掉</span></td></tr><tr>
+              <td>TSLA</td><td>2026-03-10</td><td>🔴 假起漲</td>
+              <td>2026-03-10</td><td>⭐ MACD起漲確認</td><td>深度反轉(MACD<0)</td>
+              <td>-4.06%</td><td>😟 不佳(-2~-5%)</td><td><span style="color:#22c55e;">✅ 砍掉</span></td></tr><tr>
+              <td>RXRX</td><td>2026-01-22</td><td>🔴 假起漲</td>
+              <td>2026-01-27</td><td>🚀 起漲點</td><td>MA金叉+RSI超賣</td>
+              <td>-16.30%</td><td>❌ 失敗(-5%↓)</td><td><span style="color:#22c55e;">✅ 砍掉</span></td></tr><tr>
+              <td>RXRX</td><td>2026-05-01</td><td>🔴 假起漲</td>
+              <td>2026-05-01</td><td>🚀 起漲點</td><td>MA金叉+RSI超賣</td>
+              <td>-13.57%</td><td>❌ 失敗(-5%↓)</td><td><span style="color:#22c55e;">✅ 砍掉</span></td></tr><tr>
+              <td>GOOG</td><td>2026-01-28</td><td>🔴 假起漲</td>
+              <td>2026-01-29</td><td>⭐ MACD起漲確認</td><td>正值區金叉</td>
+              <td>-8.65%</td><td>❌ 失敗(-5%↓)</td><td><span style="color:#facc15;">⚠️ 仍會發</span></td></tr><tr>
+              <td>GOOG</td><td>2026-03-10</td><td>🔴 假起漲</td>
+              <td>2026-03-11</td><td>⭐ MACD起漲確認</td><td>近MA60+RSI回暖</td>
+              <td>-6.11%</td><td>❌ 失敗(-5%↓)</td><td><span style="color:#22c55e;">✅ 砍掉</span></td></tr><tr>
+              <td>MU</td><td>2026-03-16</td><td>🔴 假起漲</td>
+              <td>2026-03-16</td><td>⭐ MACD起漲確認</td><td>正值區金叉</td>
+              <td>-27.16%</td><td>❌ 失敗(-5%↓)</td><td><span style="color:#facc15;">⚠️ 仍會發</span></td></tr><tr>
+              <td>MSFT</td><td>2026-01-27</td><td>🔴 假起漲</td>
+              <td>2026-01-27</td><td>⭐ MACD起漲確認</td><td>近MA60+RSI回暖</td>
+              <td>-14.01%</td><td>❌ 失敗(-5%↓)</td><td><span style="color:#22c55e;">✅ 砍掉</span></td></tr><tr><td>MSFT</td><td>2026-01-07</td>
+              <td>🔴 假起漲</td><td colspan="6" style="color:#888;">(回測未抓到)</td></tr><tr>
+              <td>MSFT</td><td>2026-04-28</td><td>🔴 假起漲</td>
+              <td>2026-04-28</td><td>🚀 起漲點</td><td>MA金叉+RSI超賣</td>
+              <td>-5.00%</td><td>😟 不佳(-2~-5%)</td><td><span style="color:#22c55e;">✅ 砍掉</span></td></tr><tr><td>SOFI</td><td>2025-12-26</td>
+              <td>🔴 假起漲</td><td colspan="6" style="color:#888;">(回測未抓到)</td></tr><tr>
+              <td>COIN</td><td>2026-01-06</td><td>🔴 假起漲</td>
+              <td>2026-01-05</td><td>⭐ MACD起漲確認</td><td>深度反轉(MACD<0)</td>
+              <td>-10.67%</td><td>❌ 失敗(-5%↓)</td><td><span style="color:#22c55e;">✅ 砍掉</span></td></tr><tr>
+              <td>NKE</td><td>2026-02-17</td><td>🔴 假起漲</td>
+              <td>2026-02-17</td><td>⭐ MACD起漲確認</td><td>近MA60+RSI回暖</td>
+              <td>-8.38%</td><td>❌ 失敗(-5%↓)</td><td><span style="color:#22c55e;">✅ 砍掉</span></td></tr><tr>
+              <td>NKE</td><td>2026-03-31</td><td>🔴 假起漲</td>
+              <td>2026-03-31</td><td>⭐ MACD起漲確認</td><td>深度反轉(MACD<0)</td>
+              <td>-13.97%</td><td>❌ 失敗(-5%↓)</td><td><span style="color:#22c55e;">✅ 砍掉</span></td></tr><tr>
+              <td>BE</td><td>2026-02-25</td><td>🔴 假起漲</td>
+              <td>2026-02-25</td><td>⭐ MACD起漲確認</td><td>正值區金叉</td>
+              <td>-8.90%</td><td>❌ 失敗(-5%↓)</td><td><span style="color:#facc15;">⚠️ 仍會發</span></td></tr><tr>
+              <td>NFLX</td><td>2026-04-02</td><td>🔴 假起漲</td>
+              <td>2026-04-02</td><td>⭐ MACD起漲確認</td><td>正值區金叉</td>
+              <td>-1.37%</td><td>⚖️ 平淡(±2%)</td><td><span style="color:#22c55e;">✅ 砍掉</span></td></tr><tr>
+              <td>PLTR</td><td>2026-04-08</td><td>🔴 假起漲</td>
+              <td>2026-04-08</td><td>🚀 起漲點</td><td>MA金叉+RSI超賣</td>
+              <td>+8.43%</td><td>✅ 優秀(+5%↑)</td><td><span style="color:#22c55e;">✅ 砍掉</span></td></tr><tr>
+              <td>AMZN</td><td>2026-01-28</td><td>🔴 假起漲</td>
+              <td>2026-01-27</td><td>⭐ MACD起漲確認</td><td>正值區金叉</td>
+              <td>-15.42%</td><td>❌ 失敗(-5%↓)</td><td><span style="color:#facc15;">⚠️ 仍會發</span></td></tr><tr><td>META</td><td>2026-04-07</td>
+              <td>🟡 漏標起漲</td><td colspan="6" style="color:#888;">(回測未抓到)</td></tr><tr>
+              <td>TSLA</td><td>2025-11-25</td><td>🟡 漏標起漲</td>
+              <td>2025-11-28</td><td>⭐ MACD起漲確認</td><td>近MA60+RSI回暖</td>
+              <td>+6.69%</td><td>✅ 優秀(+5%↑)</td><td><span style="color:#ef4444;">❌ 仍漏</span></td></tr><tr>
+              <td>PLTR</td><td>2025-12-01</td><td>🟡 漏標起漲</td>
+              <td>2025-12-03</td><td>⭐ MACD起漲確認</td><td>近MA60+RSI回暖</td>
+              <td>+0.69%</td><td>⚖️ 平淡(±2%)</td><td><span style="color:#ef4444;">❌ 仍漏</span></td></tr><tr><td>SNDK</td><td>2025-12-08</td>
+              <td>🟡 漏標起漲</td><td colspan="6" style="color:#888;">(回測未抓到)</td></tr><tr><td>RKLB</td><td>2026-04-06</td>
+              <td>🟡 漏標起漲</td><td colspan="6" style="color:#888;">(回測未抓到)</td></tr><tr>
+              <td>NVDA</td><td>2026-04-02</td><td>🟡 漏標起漲</td>
+              <td>2026-04-02</td><td>⭐ MACD起漲確認</td><td>近MA60+RSI回暖</td>
+              <td>+13.69%</td><td>✅ 優秀(+5%↑)</td><td><span style="color:#ef4444;">❌ 仍漏</span></td></tr><tr>
+              <td>TSM</td><td>2026-04-02</td><td>🟡 漏標起漲</td>
+              <td>2026-04-02</td><td>⭐ MACD起漲確認</td><td>近MA60+RSI回暖</td>
+              <td>+9.28%</td><td>✅ 優秀(+5%↑)</td><td><span style="color:#ef4444;">❌ 仍漏</span></td></tr><tr><td>AMD</td><td>2026-03-30</td>
+              <td>🟡 漏標起漲</td><td colspan="6" style="color:#888;">(回測未抓到)</td></tr>
+</table>
+
+<div class="key-finding">
+  <b>💡 7 維推演 context</b><br>
+  每個訊號附帶：個股性質 / 大盤狀態(🟢/🔴) / 距 52W 高 / 5日量比 / 20日動能 / OBV%<br>
+  → 用於 AI 劇本給「機率推演 + 行動建議」
+</div>
+
+</body></html>

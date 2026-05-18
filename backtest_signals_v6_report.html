@@ -1,0 +1,308 @@
+<!DOCTYPE html><html lang="zh-Hant"><head><meta charset="UTF-8">
+<title>v6 反轉預警加嚴 + OBV 滿格反轉</title><style>
+  body { background:#0e0e10; color:#e5e7eb; font-family:-apple-system,sans-serif;
+         margin:0; padding:24px; max-width:1400px; margin:0 auto; }
+  h1, h2 { color:#facc15; }
+  h1 { border-bottom:2px solid #facc15; padding-bottom:12px; }
+  table { width:100%; border-collapse:collapse; margin:12px 0;
+           background:#1a1a1c; border-radius:8px; overflow:hidden; font-size:13px; }
+  th, td { padding:9px 11px; text-align:left; border-bottom:1px solid #2a2a2c; }
+  th { background:#2a2a2c; color:#facc15; }
+  .card-row { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:16px 0; }
+  .card { background:#1a1a1c; padding:18px; border-radius:8px; border-left:4px solid #888; }
+  .big { font-size:30px; font-weight:bold; color:#facc15; }
+  .verdict { background:linear-gradient(135deg,#1a1a1c,#1a2a1c);
+              padding:20px; border-radius:10px; border:2px solid #facc15;
+              margin:20px 0; }
+  .ok { color:#22c55e;font-weight:bold; }
+  .bad { color:#ef4444;font-weight:bold; }
+</style></head><body>
+
+<h1>🎯 v6 反轉預警加嚴 + OBV 滿格反轉</h1>
+<p style="color:#888;">產出：2026-05-18 21:32 | 成功 69 / 失敗 1 支 | 已排除公用事業/必需消費等保守股</p>
+
+<div class="verdict">
+  <h2 style="margin-top:0;">📊 三方案大比拼</h2>
+  <div class="card-row">
+    
+        <div class="card" style="border-left-color:#facc15;">
+          <div style="color:#facc15;font-weight:bold;">⚡ 方案 A 起漲訊號（基準）</div>
+          <div style="margin-top:6px;">數：<b>173</b></div>
+          <div>勝率：<span class="big" style="color:#facc15;">53.2%</span></div>
+          <div>平均：+1.15%</div>
+          <div>中位：+0.89%</div>
+          
+        </div>
+    
+        <div class="card" style="border-left-color:#22c55e;">
+          <div style="color:#22c55e;font-weight:bold;">💡 反轉預警 v6（加嚴）</div>
+          <div style="margin-top:6px;">數：<b>11</b></div>
+          <div>勝率：<span class="big" style="color:#22c55e;">81.8%</span></div>
+          <div>平均：+3.58%</div>
+          <div>中位：+2.06%</div>
+          <div>領先方案 A：<b style='color:#22c55e'>22.3 天</b>（6 案例）</div>
+        </div>
+    
+        <div class="card" style="border-left-color:#ec4899;">
+          <div style="color:#ec4899;font-weight:bold;">💰 OBV 滿格反轉（金訊號）</div>
+          <div style="margin-top:6px;">數：<b>29</b></div>
+          <div>勝率：<span class="big" style="color:#facc15;">55.2%</span></div>
+          <div>平均：-0.32%</div>
+          <div>中位：+0.51%</div>
+          <div>領先方案 A：<b style='color:#22c55e'>18.9 天</b>（7 案例）</div>
+        </div>
+  </div>
+  
+  <h3 style="margin-top:18px;">📋 採用結論</h3>
+  <p>
+    <b>反轉預警 v6</b>：勝率 81.8% 
+    <span class="ok">
+      ✅ 達標（≥60%）
+    </span> 
+    | 樣本 11 
+    <span class="bad">
+      ⚠️ 偏少
+    </span> 
+    → <b>不採用</b>
+  </p>
+  <p>
+    <b>OBV 滿格反轉</b>：勝率 55.2% 
+    <span class="bad">
+      ❌ 未達標（&lt;65%）
+    </span> 
+    | 樣本 29 
+    <span class="ok">
+      ✅ 充足
+    </span>
+    → <b>不採用</b>
+  </p>
+</div>
+
+<h2>💰 OBV 滿格反轉 — 代表案例（前 15 強）</h2>
+<p style="color:#aaa;">這是預期的「金訊號」 — OBV 在 60 日內 > 90% + 深度 RSI 反轉。</p>
+<table>
+  <tr><th>股票</th><th>日期</th><th>RSI 反轉</th><th>OBV</th><th>20日動能</th>
+    <th>+5日</th><th>+10日</th><th>+20日</th><th>分類</th></tr>
+  <tr>
+          <td>INTC</td><td>2026-01-02</td>
+          <td>RSI 17→49</td>
+          <td><b style="color:#22c55e">97%</b></td>
+          <td>-10.0%</td>
+          <td>+15.67%</td><td>+19.25%</td><td>+23.95%</td>
+          <td>✅ 優秀(+5%↑)</td></tr><tr>
+          <td>WFC</td><td>2025-12-01</td>
+          <td>RSI 21→47</td>
+          <td><b style="color:#22c55e">94%</b></td>
+          <td>-1.8%</td>
+          <td>+5.46%</td><td>+8.78%</td><td>+10.43%</td>
+          <td>✅ 優秀(+5%↑)</td></tr><tr>
+          <td>QCOM</td><td>2025-10-22</td>
+          <td>RSI 28→51</td>
+          <td><b style="color:#22c55e">95%</b></td>
+          <td>-2.5%</td>
+          <td>+5.55%</td><td>+6.17%</td><td>-1.87%</td>
+          <td>✅ 優秀(+5%↑)</td></tr><tr>
+          <td>GE</td><td>2026-02-06</td>
+          <td>RSI 32→48</td>
+          <td><b style="color:#22c55e">92%</b></td>
+          <td>+2.1%</td>
+          <td>-1.74%</td><td>+5.60%</td><td>+0.29%</td>
+          <td>✅ 優秀(+5%↑)</td></tr><tr>
+          <td>RTX</td><td>2025-12-11</td>
+          <td>RSI 30→58</td>
+          <td><b style="color:#22c55e">100%</b></td>
+          <td>-0.1%</td>
+          <td>+0.49%</td><td>+4.37%</td><td>+9.26%</td>
+          <td>👍 不錯(+2~5%)</td></tr><tr>
+          <td>AMGN</td><td>2025-09-30</td>
+          <td>RSI 27→53</td>
+          <td><b style="color:#22c55e">91%</b></td>
+          <td>-1.6%</td>
+          <td>+4.73%</td><td>+4.13%</td><td>+3.50%</td>
+          <td>👍 不錯(+2~5%)</td></tr><tr>
+          <td>AAPL</td><td>2025-10-23</td>
+          <td>RSI 32→52</td>
+          <td><b style="color:#22c55e">98%</b></td>
+          <td>+1.1%</td>
+          <td>+4.55%</td><td>+3.93%</td><td>+2.57%</td>
+          <td>👍 不錯(+2~5%)</td></tr><tr>
+          <td>BAC</td><td>2025-10-20</td>
+          <td>RSI 17→52</td>
+          <td><b style="color:#22c55e">98%</b></td>
+          <td>+0.2%</td>
+          <td>+1.88%</td><td>+2.92%</td><td>-1.08%</td>
+          <td>👍 不錯(+2~5%)</td></tr><tr>
+          <td>UPS</td><td>2025-12-03</td>
+          <td>RSI 34→56</td>
+          <td><b style="color:#22c55e">92%</b></td>
+          <td>+5.3%</td>
+          <td>+1.46%</td><td>+2.80%</td><td>+2.86%</td>
+          <td>👍 不錯(+2~5%)</td></tr><tr>
+          <td>BAC</td><td>2025-11-28</td>
+          <td>RSI 33→53</td>
+          <td><b style="color:#22c55e">100%</b></td>
+          <td>+1.2%</td>
+          <td>+0.56%</td><td>+2.78%</td><td>+3.17%</td>
+          <td>👍 不錯(+2~5%)</td></tr><tr>
+          <td>CAT</td><td>2026-01-05</td>
+          <td>RSI 30→58</td>
+          <td><b style="color:#22c55e">95%</b></td>
+          <td>+2.8%</td>
+          <td>+2.22%</td><td>+2.09%</td><td>+14.09%</td>
+          <td>👍 不錯(+2~5%)</td></tr><tr>
+          <td>AXP</td><td>2025-12-03</td>
+          <td>RSI 33→47</td>
+          <td><b style="color:#22c55e">97%</b></td>
+          <td>+2.1%</td>
+          <td>+2.02%</td><td>+2.03%</td><td>+1.25%</td>
+          <td>👍 不錯(+2~5%)</td></tr><tr>
+          <td>ISRG</td><td>2025-12-23</td>
+          <td>RSI 34→54</td>
+          <td><b style="color:#22c55e">96%</b></td>
+          <td>+1.6%</td>
+          <td>-1.90%</td><td>+1.34%</td><td>-9.24%</td>
+          <td>⚖️ 平淡(±2%)</td></tr><tr>
+          <td>MCD</td><td>2025-10-14</td>
+          <td>RSI 31→50</td>
+          <td><b style="color:#22c55e">100%</b></td>
+          <td>+0.4%</td>
+          <td>+0.96%</td><td>+0.60%</td><td>+0.75%</td>
+          <td>⚖️ 平淡(±2%)</td></tr><tr>
+          <td>GILD</td><td>2025-11-13</td>
+          <td>RSI 34→60</td>
+          <td><b style="color:#22c55e">100%</b></td>
+          <td>+6.2%</td>
+          <td>-0.17%</td><td>+0.51%</td><td>-3.83%</td>
+          <td>⚖️ 平淡(±2%)</td></tr>
+</table>
+
+<h2>⏱️ OBV 滿格 vs 方案 A：領先案例（前 10）</h2>
+<table>
+  <tr><th>股票</th><th>OBV 滿格日</th><th>方案 A 日</th><th>領先天數</th>
+    <th>OBV</th><th>OBV +10日</th><th>方案 A +10日</th></tr>
+  <tr>
+          <td>INTC</td>
+          <td>2026-01-02</td>
+          <td>2026-01-12</td>
+          <td><b style="color:#22c55e;">10 天</b></td>
+          <td>OBV 97%</td>
+          <td>+19.25%</td>
+          <td>-0.30%</td></tr><tr>
+          <td>CAT</td>
+          <td>2026-01-05</td>
+          <td>2026-01-29</td>
+          <td><b style="color:#22c55e;">24 天</b></td>
+          <td>OBV 95%</td>
+          <td>+2.09%</td>
+          <td>+13.99%</td></tr><tr>
+          <td>ISRG</td>
+          <td>2025-12-23</td>
+          <td>2026-01-06</td>
+          <td><b style="color:#22c55e;">14 天</b></td>
+          <td>OBV 96%</td>
+          <td>+1.34%</td>
+          <td>-11.67%</td></tr><tr>
+          <td>ACN</td>
+          <td>2026-01-08</td>
+          <td>2026-01-22</td>
+          <td><b style="color:#22c55e;">14 天</b></td>
+          <td>OBV 100%</td>
+          <td>-0.27%</td>
+          <td>-18.07%</td></tr><tr>
+          <td>AMGN</td>
+          <td>2025-12-24</td>
+          <td>2026-01-07</td>
+          <td><b style="color:#22c55e;">14 天</b></td>
+          <td>OBV 100%</td>
+          <td>-2.35%</td>
+          <td>+1.59%</td></tr><tr>
+          <td>AMGN</td>
+          <td>2025-12-24</td>
+          <td>2026-01-21</td>
+          <td><b style="color:#22c55e;">28 天</b></td>
+          <td>OBV 100%</td>
+          <td>-2.35%</td>
+          <td>+6.58%</td></tr><tr>
+          <td>AMZN</td>
+          <td>2025-10-09</td>
+          <td>2025-11-06</td>
+          <td><b style="color:#22c55e;">28 天</b></td>
+          <td>OBV 94%</td>
+          <td>-2.92%</td>
+          <td>-10.66%</td></tr>
+</table>
+
+<h2>💡 反轉預警 v6 — 代表案例（前 15 強）</h2>
+<table>
+  <tr><th>股票</th><th>日期</th><th>RSI 反轉</th><th>OBV</th><th>20日動能</th>
+    <th>+5日</th><th>+10日</th><th>+20日</th><th>分類</th></tr>
+  <tr>
+          <td>INTC</td><td>2026-01-02</td>
+          <td>RSI 17→49</td>
+          <td>97%</td>
+          <td>-10.0%</td>
+          <td>+15.67%</td><td>+19.25%</td><td>+23.95%</td>
+          <td>✅ 優秀(+5%↑)</td></tr><tr>
+          <td>WFC</td><td>2025-12-01</td>
+          <td>RSI 21→47</td>
+          <td>94%</td>
+          <td>-1.8%</td>
+          <td>+5.46%</td><td>+8.78%</td><td>+10.43%</td>
+          <td>✅ 優秀(+5%↑)</td></tr><tr>
+          <td>QCOM</td><td>2025-10-22</td>
+          <td>RSI 28→51</td>
+          <td>95%</td>
+          <td>-2.5%</td>
+          <td>+5.55%</td><td>+6.17%</td><td>-1.87%</td>
+          <td>✅ 優秀(+5%↑)</td></tr><tr>
+          <td>RTX</td><td>2025-12-11</td>
+          <td>RSI 30→58</td>
+          <td>100%</td>
+          <td>-0.1%</td>
+          <td>+0.49%</td><td>+4.37%</td><td>+9.26%</td>
+          <td>👍 不錯(+2~5%)</td></tr><tr>
+          <td>BAC</td><td>2025-10-20</td>
+          <td>RSI 17→52</td>
+          <td>98%</td>
+          <td>+0.2%</td>
+          <td>+1.88%</td><td>+2.92%</td><td>-1.08%</td>
+          <td>👍 不錯(+2~5%)</td></tr><tr>
+          <td>BLK</td><td>2025-09-18</td>
+          <td>RSI 29→53</td>
+          <td>77%</td>
+          <td>+0.8%</td>
+          <td>+0.89%</td><td>+2.06%</td><td>+3.01%</td>
+          <td>👍 不錯(+2~5%)</td></tr><tr>
+          <td>BRK-B</td><td>2025-11-06</td>
+          <td>RSI 26→51</td>
+          <td>76%</td>
+          <td>-0.7%</td>
+          <td>+4.05%</td><td>+1.62%</td><td>+2.27%</td>
+          <td>⚖️ 平淡(±2%)</td></tr><tr>
+          <td>C</td><td>2025-10-27</td>
+          <td>RSI 29→57</td>
+          <td>74%</td>
+          <td>-2.1%</td>
+          <td>+0.61%</td><td>+0.50%</td><td>-1.29%</td>
+          <td>⚖️ 平淡(±2%)</td></tr><tr>
+          <td>GILD</td><td>2025-12-22</td>
+          <td>RSI 28→51</td>
+          <td>83%</td>
+          <td>-2.0%</td>
+          <td>-0.79%</td><td>+0.15%</td><td>+5.62%</td>
+          <td>⚖️ 平淡(±2%)</td></tr><tr>
+          <td>WFC</td><td>2025-10-15</td>
+          <td>RSI 16→56</td>
+          <td>100%</td>
+          <td>+4.8%</td>
+          <td>-2.98%</td><td>-0.53%</td><td>-0.23%</td>
+          <td>⚖️ 平淡(±2%)</td></tr><tr>
+          <td>IBM</td><td>2026-01-12</td>
+          <td>RSI 18→61</td>
+          <td>100%</td>
+          <td>+0.5%</td>
+          <td>-6.67%</td><td>-5.87%</td><td>-6.54%</td>
+          <td>❌ 失敗(-5%↓)</td></tr>
+</table>
+
+</body></html>

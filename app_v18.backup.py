@@ -118,236 +118,6 @@ def get_cache_anchor():
 
 
 FINMIND_TOKEN = _get_secret("FINMIND_TOKEN", "")
-
-
-# ──────────────────────────────────────────────────────
-# v27 起漲訊號 — 大盤過濾器 (SPY) + 7 維推演 context
-# ──────────────────────────────────────────────────────
-@st.cache_data(ttl=21600, show_spinner=False)
-def get_market_filter_state(anchor):
-    """抓 SPY 計算大盤過濾器：是否站上 SMA200 + SMA200 上升
-    
-    回傳 dict: {date: market_ok_bool}
-    給「起漲訊號」當大盤過濾條件用
-    """
-    try:
-        import yfinance as _yf
-        spy = _yf.Ticker("SPY").history(period="2y", auto_adjust=False)
-        if spy.empty:
-            return {}
-        spy["SMA_200"] = spy["Close"].rolling(200).mean()
-        spy["above"] = spy["Close"] > spy["SMA_200"]
-        spy["uptrend"] = spy["SMA_200"] > spy["SMA_200"].shift(5)
-        spy["market_ok"] = spy["above"] & spy["uptrend"]
-        # 轉成 dict: date -> bool
-        result = {}
-        for d, ok in spy["market_ok"].items():
-            try:
-                key = pd.Timestamp(d).normalize()
-                result[key] = bool(ok) if not pd.isna(ok) else True
-            except Exception:
-                continue
-        return result
-    except Exception:
-        return {}
-
-
-def market_ok_at_date(market_state, date):
-    """查指定日期的大盤狀態。若無資料則回傳 True（不過濾）"""
-    if not market_state:
-        return True
-    try:
-        key = pd.Timestamp(date).normalize()
-        # 找最接近的日期（往前）
-        sorted_keys = sorted(market_state.keys())
-        for k in reversed(sorted_keys):
-            if k <= key:
-                return market_state[k]
-        return True
-    except Exception:
-        return True
-
-
-def get_engine_type_v27(ticker):
-    """股票分類 (給 7 維 context 用)"""
-    trend = {"NVDA", "MSFT", "AAPL", "GOOG", "GOOGL", "AMZN", "META", "TSM",
-              "QQQ", "ORCL", "AVGO", "2330.TW", "2317.TW"}
-    momentum = {"AMD", "TSLA", "MU", "INTC", "ASX"}
-    growth = {"PLTR", "CRCL", "SOFI", "PYPL"}
-    if ticker in trend: return "trend"
-    if ticker in momentum: return "momentum"
-    if ticker in growth: return "growth"
-    return "reversal"
-
-
-def compute_signal_context(p_data, idx_pos, ticker, market_state):
-    """計算 7 維推演 context（給 AI 劇本用）
-    
-    Returns dict with: engine, market, position, vol ratios, momentum, obv_pct
-    """
-    try:
-        if idx_pos < 20 or idx_pos >= len(p_data):
-            return None
-        curr = p_data.iloc[idx_pos]
-        prior_20 = p_data.iloc[max(0, idx_pos - 20)]
-        engine = get_engine_type_v27(ticker)
-        mkt_ok = market_ok_at_date(market_state, curr.name if hasattr(curr, "name") else curr.get("Date"))
-        
-        # 位置
-        high_52w_window = p_data.iloc[max(0, idx_pos - 252): idx_pos + 1]
-        high_52w = high_52w_window["High"].max() if "High" in high_52w_window.columns else curr["Close"]
-        sma60 = curr.get("SMA_60", curr["Close"])
-        sma200 = curr.get("SMA_200", np.nan)
-        dist_from_52w_high = (high_52w - curr["Close"]) / high_52w * 100 if high_52w > 0 else 0
-        dist_from_sma60 = (curr["Close"] - sma60) / sma60 * 100 if sma60 > 0 else 0
-        above_sma200 = (not pd.isna(sma200) and curr["Close"] > sma200)
-        
-        # 量能
-        vol_5 = curr.get("Vol_SMA5", np.nan)
-        vol_20 = curr.get("Vol_SMA20", np.nan)
-        vol_60 = curr.get("Vol_SMA60", np.nan)
-        short_vol = (vol_5 / vol_20) if (not pd.isna(vol_5) and not pd.isna(vol_20) and vol_20 > 0) else 1.0
-        trend_vol = (vol_20 / vol_60) if (not pd.isna(vol_20) and not pd.isna(vol_60) and vol_60 > 0) else 1.0
-        
-        # 動能
-        ret_20d = ((curr["Close"] / prior_20["Close"]) - 1) * 100 if prior_20["Close"] > 0 else 0
-        
-        # OBV
-        obv_window = p_data.iloc[max(0, idx_pos - 60): idx_pos + 1].get("OBV", pd.Series())
-        obv_now = curr.get("OBV", 0)
-        if len(obv_window) > 1:
-            obv_max = obv_window.max()
-            obv_min = obv_window.min()
-            obv_pct = ((obv_now - obv_min) / (obv_max - obv_min) * 100) if obv_max > obv_min else 50
-        else:
-            obv_pct = 50
-        
-        return {
-            "engine": engine,
-            "market_ok": mkt_ok,
-            "dist_from_52w_high": round(dist_from_52w_high, 1),
-            "dist_from_sma60": round(dist_from_sma60, 1),
-            "above_sma200": above_sma200,
-            "short_vol_ratio": round(short_vol, 2),
-            "trend_vol_ratio": round(trend_vol, 2),
-            "momentum_20d": round(ret_20d, 2),
-            "obv_pct": round(obv_pct, 0),
-        }
-    except Exception:
-        return None
-
-
-def render_signal_context_panel(ctx, signal_label):
-    """渲染 7 維 context 推演面板 (HTML)"""
-    if not ctx:
-        return ""
-    mkt_icon = "🟢 大盤健康" if ctx["market_ok"] else "🔴 大盤偏空"
-    mkt_color = "#22c55e" if ctx["market_ok"] else "#ef4444"
-    
-    # 機率推演
-    base_win = 60  # 方案 A 基準勝率
-    bonus = 0
-    if ctx["market_ok"]: bonus += 5
-    if ctx["short_vol_ratio"] > 1.2: bonus += 3
-    if ctx["obv_pct"] > 80: bonus += 3
-    if ctx["dist_from_52w_high"] > 15: bonus += 3  # 不在頂部
-    if ctx["momentum_20d"] > 0 and ctx["momentum_20d"] < 15: bonus += 2  # 動能合理
-    if ctx["dist_from_52w_high"] < 5: bonus -= 5   # 已在頂部
-    
-    win_rate = min(85, max(35, base_win + bonus))
-    
-    # 風險警示
-    risks = []
-    if ctx["dist_from_52w_high"] < 5:
-        risks.append("⚠️ 距 52W 高點僅 {:.1f}%，逢高風險".format(ctx["dist_from_52w_high"]))
-    if not ctx["market_ok"]:
-        risks.append("⚠️ 大盤偏空，個股表現受拖累")
-    if ctx["momentum_20d"] > 20:
-        risks.append("⚠️ 20 日漲幅 +{:.1f}%，已偏熱".format(ctx["momentum_20d"]))
-    if ctx["short_vol_ratio"] < 0.8:
-        risks.append("⚠️ 近 5 日量縮，動能可能轉弱")
-    
-    risk_html = "".join(f'<div style="color:#facc15;font-size:12px;margin-top:3px;">{r}</div>' for r in risks)
-    if not risks:
-        risk_html = '<div style="color:#22c55e;font-size:12px;margin-top:3px;">✅ 無明顯警示</div>'
-    
-    # ── 各維度直白解讀 ──
-    engine_hint_map = {
-        "trend": "權值股/龍頭股，訊號最可靠",
-        "momentum": "高波動成長股，訊號需驗證",
-        "growth": "成長型新股，可信度中等",
-        "reversal": "妖股/低流動性，訊號最雜訊",
-    }
-    engine_hint = engine_hint_map.get(ctx["engine"], "")
-    
-    # 距 52W 高點解讀
-    d52 = ctx["dist_from_52w_high"]
-    if d52 < 5: d52_hint = "⚠️ 在頂部，逢高風險"
-    elif d52 < 15: d52_hint = "接近高點，注意過熱"
-    elif d52 < 30: d52_hint = "✅ 健康位置，仍有空間"
-    else: d52_hint = "深度回檔/低位，反轉空間大"
-    
-    # 距 SMA60 解讀
-    d60 = ctx["dist_from_sma60"]
-    if d60 > 15: d60_hint = "⚠️ 大幅偏離季線，可能回檔"
-    elif d60 > 5: d60_hint = "✅ 趨勢向上"
-    elif d60 > -5: d60_hint = "貼近季線，整理中"
-    else: d60_hint = "跌破季線，仍偏弱"
-    
-    # 5 日量比解讀
-    sv = ctx["short_vol_ratio"]
-    if sv > 1.5: sv_hint = "✅ 量增明顯，動能強"
-    elif sv > 1.1: sv_hint = "輕微量增"
-    elif sv > 0.9: sv_hint = "量平"
-    else: sv_hint = "⚠️ 量縮，動能轉弱"
-    
-    # 20 日動能解讀
-    m20 = ctx["momentum_20d"]
-    if m20 > 25: m20_hint = "⚠️ 漲過頭，警惕回檔"
-    elif m20 > 10: m20_hint = "✅ 健康漲勢"
-    elif m20 > 0: m20_hint = "小漲，動能溫和"
-    elif m20 > -10: m20_hint = "下跌中"
-    else: m20_hint = "深度回檔，可能築底"
-    
-    # OBV 解讀
-    obv = ctx["obv_pct"]
-    if obv > 80: obv_hint = "✅ 資金強烈流入，籌碼集中"
-    elif obv > 50: obv_hint = "中位偏高，籌碼穩定"
-    elif obv > 20: obv_hint = "中位偏低，籌碼分散中"
-    else: obv_hint = "⚠️ 籌碼正在出走"
-    
-    return f'''
-<div style="background:linear-gradient(135deg,#1a1a1c,#1a2a2c);
-            border-left:4px solid #facc15; padding:12px 16px; margin:8px 0;
-            border-radius:6px; font-size:13px;">
-  <div style="color:#facc15; font-weight:bold; margin-bottom:8px;">
-    🎯 {signal_label} — AI 推演（7 維 context）
-  </div>
-  <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; color:#ddd;">
-    <div>
-      <div>個股性質：<b>{ctx["engine"]}</b> <span style="color:#888;font-size:11px;">（{engine_hint}）</span></div>
-      <div>大盤狀態：<span style="color:{mkt_color};font-weight:bold;">{mkt_icon}</span></div>
-      <div>距 52W 高點：<b>{ctx["dist_from_52w_high"]:.1f}%</b> <span style="color:#888;font-size:11px;">（{d52_hint}）</span></div>
-      <div>距 SMA60：<b>{ctx["dist_from_sma60"]:+.1f}%</b> <span style="color:#888;font-size:11px;">（{d60_hint}）</span></div>
-    </div>
-    <div>
-      <div>5 日量比：<b>{ctx["short_vol_ratio"]:.2f}x</b> <span style="color:#888;font-size:11px;">（{sv_hint}）</span></div>
-      <div>20 日趨勢量：<b>{ctx["trend_vol_ratio"]:.2f}x</b></div>
-      <div>20 日動能：<b>{ctx["momentum_20d"]:+.2f}%</b> <span style="color:#888;font-size:11px;">（{m20_hint}）</span></div>
-      <div>OBV 累積位置：<b>{ctx["obv_pct"]:.0f}%</b> <span style="color:#888;font-size:11px;">（{obv_hint}）</span></div>
-    </div>
-  </div>
-  <div style="margin-top:10px; padding-top:8px; border-top:1px solid #2a2a2c;">
-    <span style="color:#aaa;">🎯 10 日上漲機率推演：</span>
-    <span style="color:#22c55e; font-weight:bold; font-size:18px;">{win_rate}%</span>
-    <span style="color:#888; font-size:11px;"> （基準 60% ± 修正）</span>
-  </div>
-  <div style="margin-top:6px;">
-    {risk_html}
-  </div>
-</div>
-'''
-
 if not FINMIND_TOKEN:
     print("⚠️  警告：未設定 FINMIND_TOKEN，台股籌碼功能將無法使用。")
 
@@ -1097,15 +867,7 @@ def calculate_indicators(df):
     df['SMA_10'] = df['Close'].rolling(10).mean()
     df['SMA_20'] = df['Close'].rolling(20).mean()
     df['SMA_60'] = df['Close'].rolling(60).mean()
-    df['SMA_200'] = df['Close'].rolling(200).mean()
     df['Vol_SMA5'] = df['Volume'].rolling(5).mean()
-    df['Vol_SMA20'] = df['Volume'].rolling(20).mean()
-    df['Vol_SMA60'] = df['Volume'].rolling(60).mean()
-    # [v27] OBV (用於 7 維 context)
-    df['_price_diff'] = df['Close'].diff()
-    df['_obv_change'] = np.where(df['_price_diff'] > 0, df['Volume'],
-                                   np.where(df['_price_diff'] < 0, -df['Volume'], 0))
-    df['OBV'] = df['_obv_change'].cumsum()
 
     sd = df['Close'].rolling(20).std()
     df['Bollinger_Upper'] = df['SMA_20'] + sd * 2
@@ -2094,25 +1856,11 @@ if 'SMA_20' in p_data.columns and 'SMA_60' in p_data.columns:
     ma_gold = (p_data['SMA_20'] > p_data['SMA_60']) & (p_data['SMA_20'].shift(1) <= p_data['SMA_60'].shift(1))
     ma_dead = (p_data['SMA_20'] < p_data['SMA_60']) & (p_data['SMA_20'].shift(1) >= p_data['SMA_60'].shift(1))
     launch_pts  = detect_launch_points(p_data)   # ★ 起漲點遮罩
-
-    # [v27 方案 A] 預先載入大盤狀態（給主圖起漲點過濾用）
-    if '_market_state_v27' not in st.session_state:
-        st.session_state['_market_state_v27'] = get_market_filter_state(get_cache_anchor())
-    _market_state_main = st.session_state.get('_market_state_v27', {})
-
     for date in p_data[ma_gold].index:
         y_val = p_data.loc[date, 'SMA_20']
         if not pd.isna(y_val):
-            # [v27 方案 A] 起漲點需通過大盤過濾 + MA60 上升
-            idx_pos_ma = p_data.index.get_loc(date)
-            sma60_curr = p_data.iloc[idx_pos_ma].get('SMA_60', np.nan)
-            sma60_prior5 = p_data.iloc[max(0, idx_pos_ma - 5)].get('SMA_60', np.nan)
-            ma60_up = (not pd.isna(sma60_curr) and not pd.isna(sma60_prior5) and sma60_curr > sma60_prior5)
-            mkt_ok = market_ok_at_date(_market_state_main, date)
-            plan_a_pass_main = ma60_up and mkt_ok
-
-            if launch_pts.get(date, False) and plan_a_pass_main:
-                # ★ 黃金交叉 + 起漲條件 + Plan A → 強化標注
+            if launch_pts.get(date, False):
+                # ★ 黃金交叉 + 起漲條件 → 特別強化標注
                 fig.add_annotation(
                     x=date, y=p_data.loc[date, 'Low'],
                     text="🚀 起漲點", showarrow=True, arrowhead=2,
@@ -2126,30 +1874,6 @@ if 'SMA_20' in p_data.columns and 'SMA_60' in p_data.columns:
                     ax=0, ay=35, row=1, col=1,
                     bgcolor="rgba(234, 179, 8, 0.9)",
                     font=dict(color="black", size=10, weight="bold")
-                )
-                # 收集進 v27 訊號清單供 AI 推演
-                if '_launch_signals_v27' not in st.session_state:
-                    st.session_state['_launch_signals_v27'] = []
-                st.session_state['_launch_signals_v27'].append({
-                    "date": date,
-                    "idx_pos": idx_pos_ma,
-                    "close": float(p_data.iloc[idx_pos_ma]['Close']),
-                    "trigger": "MA金叉+RSI超賣",
-                    "ma60_uptrend": ma60_up,
-                    "market_ok": mkt_ok,
-                })
-            elif launch_pts.get(date, False) and not plan_a_pass_main:
-                # 起漲條件成立但 Plan A 未過 → 標弱化版「黃金交叉」（不發起漲點）
-                reason = []
-                if not ma60_up: reason.append("MA60↓")
-                if not mkt_ok: reason.append("大盤偏空")
-                reason_str = " · ".join(reason)
-                fig.add_annotation(
-                    x=date, y=y_val,
-                    text=f"🌕 黃金交叉<br><span style='font-size:9px'>⚠️{reason_str}</span>",
-                    showarrow=True, arrowhead=1, ax=0, ay=35, row=1, col=1,
-                    bgcolor="rgba(234, 179, 8, 0.6)",
-                    font=dict(color="black", size=10)
                 )
             else:
                 fig.add_annotation(x=date, y=y_val, text="🌕 黃金交叉", showarrow=True, arrowhead=1, ax=0, ay=35, row=1, col=1, bgcolor="rgba(234, 179, 8, 0.8)", font=dict(color="black", size=10, weight="bold"))
@@ -2174,9 +1898,6 @@ for i in range(len(p_data)):
     else:
         precomputed_status.append(detect_smart_money_status(p_data.iloc[max(0, i - 9):i + 1]))
 
-# [v27] 重置進場訊號清單（每次重跑都清空）
-st.session_state['_entry_signals_v27'] = []
-
 for i in range(5, len(p_data)):
     curr = p_data.iloc[i]
     prior = p_data.iloc[i - 1]
@@ -2196,23 +1917,8 @@ for i in range(5, len(p_data)):
     if status:
         if "吸籌" in status:
             fig.add_annotation(x=p_data.index[i], y=curr['Low'], text=f"🐳吸<br>${curr['Low']:.1f}", showarrow=True, arrowhead=1, ax=0, ay=35, row=1, col=1, bgcolor="rgba(111, 66, 193, 0.8)", font=dict(color="white", size=9))
-            # [v27] 收集吸籌訊號（給 AI 推演用）
-            if '_entry_signals_v27' not in st.session_state:
-                st.session_state['_entry_signals_v27'] = []
-            st.session_state['_entry_signals_v27'].append({
-                "type": "🤫 吸籌", "date": p_data.index[i], "idx_pos": i,
-                "close": float(curr['Close']), "stage": 1,
-            })
         elif "破底翻" in status or "抄底" in status:
             fig.add_annotation(x=p_data.index[i], y=curr['Low'], text=f"{status}<br>${curr['Low']:.1f}", showarrow=True, arrowhead=1, ax=0, ay=45, row=1, col=1, bgcolor="rgba(147, 51, 234, 0.8)", font=dict(color="white", size=10, weight="bold"))
-            # [v27] 收集乖離抄底/破底翻訊號
-            if '_entry_signals_v27' not in st.session_state:
-                st.session_state['_entry_signals_v27'] = []
-            sig_type = "💎 破底翻買點" if "破底翻" in status else "💎 乖離抄底"
-            st.session_state['_entry_signals_v27'].append({
-                "type": sig_type, "date": p_data.index[i], "idx_pos": i,
-                "close": float(curr['Close']), "stage": 2,
-            })
         elif "調節" in status:
             fig.add_annotation(x=p_data.index[i], y=curr['High'], text=f"🔴調節<br>${curr['High']:.1f}", showarrow=True, arrowhead=1, ax=0, ay=-40, row=1, col=1, bgcolor="rgba(185, 28, 28, 0.8)", font=dict(color="white", size=10, weight="bold"))
 
@@ -2224,13 +1930,6 @@ for i in range(5, len(p_data)):
 
     if macd_buy:
         fig.add_annotation(x=p_data.index[i], y=curr['Low'], text=f"BUY<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ax=0, ay=25, row=1, col=1, bgcolor="rgba(40, 167, 69, 0.8)", font=dict(color="white", size=9))
-        # [v27] 收集 BUY 訊號（stage 3）
-        if '_entry_signals_v27' not in st.session_state:
-            st.session_state['_entry_signals_v27'] = []
-        st.session_state['_entry_signals_v27'].append({
-            "type": "🟢 MACD BUY", "date": p_data.index[i], "idx_pos": i,
-            "close": float(curr['Close']), "stage": 3,
-        })
     if macd_sell:
         fig.add_annotation(x=p_data.index[i], y=curr['High'], text=f"SELL<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ax=0, ay=-25, row=1, col=1, bgcolor="rgba(220, 53, 69, 0.8)", font=dict(color="white", size=9))
     if (curr['High'] >= t_s or curr['RSI'] > 75) and not (prior['High'] >= t_s or prior['RSI'] > 75):
@@ -2344,28 +2043,8 @@ fig.add_trace(go.Scatter(x=p_data.index, y=p_data['Signal_Line'], line=dict(colo
 #   - 衝突 4 [v26]：trend/momentum 門檻放寬 vs 死貓彈風險
 #     → 仍需 rsi_already_recovering（RSI 比 5 根前高）雙重確認
 # =============================================================
-# 先取出主圖已判定的起漲點日期集合（MA 黃金交叉版 + Plan A）
-# [v27 BUG修復] 主圖起漲點也需要過 Plan A，否則 RXRX 等趨勢下行股會誤標
-main_launch_dates = set()
-if 'launch_pts' in dir():
-    # 預載大盤狀態
-    if '_market_state_v27' not in st.session_state:
-        st.session_state['_market_state_v27'] = get_market_filter_state(get_cache_anchor())
-    _ms_main = st.session_state.get('_market_state_v27', {})
-    for _d in p_data[launch_pts].index:
-        _idx_pos = p_data.index.get_loc(_d)
-        _sma60_curr = p_data.iloc[_idx_pos].get('SMA_60', np.nan)
-        _sma60_p5 = p_data.iloc[max(0, _idx_pos - 5)].get('SMA_60', np.nan)
-        _ma60_up = (not pd.isna(_sma60_curr) and not pd.isna(_sma60_p5)
-                     and _sma60_curr > _sma60_p5)
-        _mkt_ok = market_ok_at_date(_ms_main, _d)
-        if _ma60_up and _mkt_ok:
-            main_launch_dates.add(_d)
-
-# [v27] 載入大盤狀態 + 重置起漲訊號清單（給 AI 推演用）
-if '_market_state_v27' not in st.session_state:
-    st.session_state['_market_state_v27'] = get_market_filter_state(get_cache_anchor())
-st.session_state['_launch_signals_v27'] = []  # 每次重跑都清空
+# 先取出主圖已判定的起漲點日期集合（MA 黃金交叉版）
+main_launch_dates = set(p_data[launch_pts].index) if 'launch_pts' in dir() else set()
 
 normal_macd_x, normal_macd_y = [], []
 star_macd_x, star_macd_y = [], []
@@ -2444,53 +2123,27 @@ for date in p_data[macd_gold].index:
         normal_macd_y.append(curr['MACD'])
         continue
 
-    # ── [v27 方案 A] 給星條件 ────────────────────────────
-    # 已砍：深度反轉(MACD<0)、近MA60+RSI回暖（命中率<50%）
-    # 強制：MA60 上升 + 大盤過濾器（SPY 站 SMA200 且 SMA200 上升）
+    # ── 給星條件 ──────────────────────────────────────────────
+    # A. 正值區域金叉（非死叉）→ 直接給星（趨勢健康，不需 RSI 超賣）
+    # B. 零軸突破（非死叉）→ 直接給星
+    # C. 其他條件（近MA60 / MACD仍負 / RSI回暖）→ 傳統條件
     uptrend_zero_breakout = (not death_cross_active) and zero_cross
     strong_positive = (not death_cross_active) and positive_zone_cross
-    
-    # 新規則：MA60 上升（強制要求）
-    sma60_prior5 = p_data.iloc[max(0, idx_pos - 5)].get('SMA_60', np.nan)
-    ma60_uptrend = (not pd.isna(ma60) and not pd.isna(sma60_prior5) and ma60 > sma60_prior5)
-    
-    # 新規則：大盤過濾器
-    market_state_v27 = st.session_state.get('_market_state_v27', {})
-    market_ok = market_ok_at_date(market_state_v27, date)
-    
-    # 方案 A: 只保留 strong_positive 和 uptrend_zero_breakout
-    # （砍掉「近MA60+RSI回暖」「深度反轉」這 2 個爛條件）
-    base_trigger = strong_positive or uptrend_zero_breakout
-    plan_a_passes = base_trigger and ma60_uptrend and market_ok
-    
-    if plan_a_passes:
+
+    if strong_positive or uptrend_zero_breakout or (rsi_recovering and (near_ma60 or deep_reversal or zero_cross)):
         star_macd_x.append(date)
         star_macd_y.append(curr['MACD'])
         already_starred.add(date)
-        # 標註訊號類型供後續推演用
-        trigger_label = "正值區金叉" if strong_positive else "零軸突破"
         fig.add_annotation(
             x=date, y=curr['MACD'], text="⭐起漲確認",
             showarrow=False, yshift=20, row=2, col=1,
             font=dict(color="#facc15", size=10, weight="bold")
         )
-        # 收集起漲訊號詳情（供 AI 推演用）
-        if '_launch_signals_v27' not in st.session_state:
-            st.session_state['_launch_signals_v27'] = []
-        st.session_state['_launch_signals_v27'].append({
-            "date": date,
-            "idx_pos": idx_pos,
-            "close": float(curr['Close']),
-            "trigger": trigger_label,
-            "ma60_uptrend": ma60_uptrend,
-            "market_ok": market_ok,
-        })
     else:
         normal_macd_x.append(date)
         normal_macd_y.append(curr['MACD'])
 
-# --- [v20 修改 / v27 BUG修復] 主圖起漲點同步到副圖：MA 金叉起漲點若尚未打星，補上星星 ---
-# 注意：上面已過 Plan A 的 main_launch_dates 才會進來這裡，所以這裡直接補星是 OK 的
+# --- [v20 新增] 主圖起漲點同步到副圖：MA 金叉起漲點若尚未打星，補上星星 ---
 for date in main_launch_dates:
     if date in already_starred or date not in p_data.index:
         continue
@@ -2505,18 +2158,6 @@ for date in main_launch_dates:
         showarrow=False, yshift=20, row=2, col=1,
         font=dict(color="#facc15", size=10, weight="bold")
     )
-    # [v27] 收集主圖起漲點訊號（供 AI 推演用）
-    if '_launch_signals_v27' not in st.session_state:
-        st.session_state['_launch_signals_v27'] = []
-    _idx_p = p_data.index.get_loc(date)
-    st.session_state['_launch_signals_v27'].append({
-        "date": date,
-        "idx_pos": _idx_p,
-        "close": float(p_data.iloc[_idx_p]['Close']),
-        "trigger": "MA金叉+RSI超賣",
-        "ma60_uptrend": True,  # 已過 Plan A 過濾
-        "market_ok": True,
-    })
 
 if normal_macd_x:
     fig.add_trace(go.Scatter(
@@ -2544,138 +2185,6 @@ fig.update_layout(
     margin=dict(t=10, b=10, l=10, r=10)
 )
 st.plotly_chart(fig, use_container_width=True)
-
-# ──────────────────────────────────────────────────────
-# [v27] 進場節奏燈號（依最近訊號顯示目前位置）
-# ──────────────────────────────────────────────────────
-_entry_signals = st.session_state.get('_entry_signals_v27', [])
-_launch_signals = st.session_state.get('_launch_signals_v27', [])
-
-# 整理最近 30 根 K 棒內出現過的訊號 stage（含 launch=stage4）
-recent_stages = set()
-recent_30d_cutoff = len(p_data) - 30
-for s in _entry_signals:
-    if s["idx_pos"] >= recent_30d_cutoff:
-        recent_stages.add(s["stage"])
-# launch (stage4) 從 _launch_signals 來
-for s in _launch_signals:
-    if s.get("idx_pos", 0) >= recent_30d_cutoff:
-        recent_stages.add(4)
-
-# 找最後一個出現的 stage 作為「當前位置」
-all_recent_with_stage = []
-for s in _entry_signals:
-    if s["idx_pos"] >= recent_30d_cutoff:
-        all_recent_with_stage.append((s["idx_pos"], s["stage"], s["type"]))
-for s in _launch_signals:
-    if s.get("idx_pos", 0) >= recent_30d_cutoff:
-        all_recent_with_stage.append((s["idx_pos"], 4, "⭐ MACD起漲確認"))
-all_recent_with_stage.sort(key=lambda x: x[0])
-current_stage_label = ""
-if all_recent_with_stage:
-    last_idx, last_stage, last_type = all_recent_with_stage[-1]
-    days_ago = len(p_data) - 1 - last_idx
-    current_stage_label = f"目前位置：**{last_type}**（{days_ago} 根 K 棒前）"
-
-# 渲染 5 段燈號
-def _stage_html(num, emoji, label, hit):
-    bg = "linear-gradient(135deg,#22c55e,#16a34a)" if hit else "#1a1a1c"
-    border = "#22c55e" if hit else "#3a3a3c"
-    text_col = "white" if hit else "#666"
-    return f'''
-    <div style="background:{bg};border:2px solid {border};border-radius:8px;
-                padding:10px 8px;text-align:center;color:{text_col};min-width:100px;">
-      <div style="font-size:20px;">{emoji}</div>
-      <div style="font-size:11px;font-weight:bold;margin-top:3px;">{label}</div>
-      <div style="font-size:10px;opacity:0.8;">Stage {num}</div>
-    </div>'''
-
-st.markdown("### 🎯 進場節奏燈號（最近 30 根 K 棒）")
-if current_stage_label:
-    st.caption(current_stage_label)
-else:
-    st.caption("最近 30 根 K 棒內無進場訊號")
-
-stages_html = '<div style="display:flex;gap:8px;align-items:center;margin:12px 0;flex-wrap:wrap;">'
-stages_html += _stage_html(1, "🤫", "吸籌", 1 in recent_stages)
-stages_html += '<div style="color:#666;font-size:18px;">→</div>'
-stages_html += _stage_html(2, "💎", "乖離抄底", 2 in recent_stages)
-stages_html += '<div style="color:#666;font-size:18px;">→</div>'
-stages_html += _stage_html(3, "🟢", "BUY", 3 in recent_stages)
-stages_html += '<div style="color:#666;font-size:18px;">→</div>'
-stages_html += _stage_html(4, "⭐", "起漲確認", 4 in recent_stages)
-stages_html += '</div>'
-st.markdown(stages_html, unsafe_allow_html=True)
-st.caption(
-    "💡 **進場策略**："
-    "Stage 1-2 是**最佳介入時機**（你的「吸籌 / 乖離抄底」進場習慣）；"
-    "Stage 3 BUY 是**確認進場**；"
-    "Stage 4 ⭐起漲確認 是**最後機會**（已漲一段，追高風險高，建議只用來確認手中持股繼續持有）。"
-)
-
-# ──────────────────────────────────────────────────────
-# [v27] AI 推演面板（顯示最近的起漲訊號 + 7 維 context）
-# ──────────────────────────────────────────────────────
-_launch_signals = st.session_state.get('_launch_signals_v27', [])
-if _launch_signals:
-    # 取最近 3 個訊號（最新的在最後）
-    recent_signals = _launch_signals[-3:]
-    st.markdown("### 🎯 AI 起漲推演（最近訊號分析）")
-    st.caption(
-        f"目前共有 **{len(_launch_signals)}** 個方案 A 起漲訊號通過 "
-        f"（已套用大盤過濾器 + MA60 上升）。下方顯示最近 {len(recent_signals)} 個訊號的 AI 7 維推演。"
-    )
-    _market_state = st.session_state.get('_market_state_v27', {})
-    for sig in reversed(recent_signals):  # 最新的先顯示
-        try:
-            ctx = compute_signal_context(p_data, sig["idx_pos"], cur_t, _market_state)
-            if ctx:
-                date_str = pd.Timestamp(sig["date"]).strftime("%Y-%m-%d")
-                label = f"{date_str} ⭐ 起漲確認（{sig['trigger']}）@ ${sig['close']:.2f}"
-                st.markdown(render_signal_context_panel(ctx, label), unsafe_allow_html=True)
-        except Exception as _e:
-            pass
-else:
-    # 無訊號時的輔助提示
-    _market_state_chk = st.session_state.get('_market_state_v27', {})
-    if _market_state_chk:
-        try:
-            latest_date = p_data.index[-1]
-            mkt_ok_now = market_ok_at_date(_market_state_chk, latest_date)
-            mkt_icon = "🟢 大盤健康" if mkt_ok_now else "🔴 大盤偏空"
-            mkt_msg = (
-                "目前大盤健康，但此股近期未觸發方案 A 起漲訊號。可關注：💎 乖離抄底 / 🤫 吸籌 等前哨訊號。"
-                if mkt_ok_now else
-                "目前大盤偏空（SPY 跌破 SMA200 或 SMA200 下行），方案 A 暫不發任何起漲訊號以避免逆勢進場。"
-            )
-            st.info(f"**{mkt_icon}** — {mkt_msg}")
-        except Exception:
-            pass
-
-# ──────────────────────────────────────────────────────
-# [v27] 前哨訊號 AI 推演（吸籌 / 乖離抄底 / BUY 也享有 7 維 context）
-# ──────────────────────────────────────────────────────
-if _entry_signals:
-    # 取最近 3 個進場訊號（依 idx_pos 排序，最新的在最後）
-    sorted_entries = sorted(_entry_signals, key=lambda s: s["idx_pos"])
-    recent_entries = sorted_entries[-3:]
-    if recent_entries:
-        with st.expander(f"🔍 前哨訊號 AI 推演（最近 {len(recent_entries)} 個 — 你的真實進場點）", expanded=False):
-            st.caption(
-                "**吸籌 / 乖離抄底 / BUY** 是比 ⭐起漲確認更早的進場機會。"
-                "以下顯示每個訊號的 7 維 context 推演 — 幫你判斷「**該不該進場**」。"
-            )
-            _market_state = st.session_state.get('_market_state_v27', {})
-            for sig in reversed(recent_entries):
-                try:
-                    ctx = compute_signal_context(p_data, sig["idx_pos"], cur_t, _market_state)
-                    if ctx:
-                        date_str = pd.Timestamp(sig["date"]).strftime("%Y-%m-%d")
-                        stage_name = {1: "前哨警示", 2: "抄底機會", 3: "MACD 確認"}[sig["stage"]]
-                        label = f"{date_str} {sig['type']}（{stage_name}）@ ${sig['close']:.2f}"
-                        st.markdown(render_signal_context_panel(ctx, label), unsafe_allow_html=True)
-                except Exception:
-                    pass
 
 # 雙籌碼分析圖
 try:

@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>起漲訊號回測報告 - 2026-05-15</title>
+<style>
+  body {
+    background: #0e0e10; color: #e5e7eb; font-family: -apple-system, sans-serif;
+    margin: 0; padding: 24px; max-width: 1200px; margin: 0 auto;
+  }
+  h1, h2, h3 { color: #facc15; }
+  h1 { border-bottom: 2px solid #facc15; padding-bottom: 12px; }
+  table {
+    width: 100%; border-collapse: collapse; margin: 12px 0;
+    background: #1a1a1c; border-radius: 8px; overflow: hidden;
+  }
+  th, td {
+    padding: 10px 14px; text-align: left;
+    border-bottom: 1px solid #2a2a2c;
+  }
+  th {
+    background: #2a2a2c; color: #facc15; font-weight: bold;
+  }
+  tr:hover { background: #1f1f21; }
+  .stat-card {
+    background: #1a1a1c; padding: 18px; border-radius: 8px;
+    border: 1px solid #2a2a2c; margin-bottom: 12px;
+  }
+  .stat-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+  }
+  .stat-big {
+    font-size: 32px; font-weight: bold; color: #facc15;
+  }
+  .stat-label {
+    color: #888; font-size: 13px;
+  }
+  .verdict-box {
+    background: linear-gradient(135deg, #1a1a1c, #2a1a2c);
+    padding: 20px; border-radius: 10px; border: 2px solid #facc15;
+    margin: 20px 0;
+  }
+  .key-finding {
+    background: #2a1a1c; border-left: 4px solid #ef4444;
+    padding: 12px 18px; margin: 12px 0; border-radius: 6px;
+  }
+  .key-finding.positive {
+    background: #1a2a1c; border-left-color: #22c55e;
+  }
+</style>
+</head>
+<body>
+
+<h1>🎯 起漲訊號回測報告</h1>
+<p style="color:#888;">產出時間：2026-05-15 17:26 | 分析範圍：過去 18 個月 | 股票數：23</p>
+
+<div class="verdict-box">
+  <h2 style="margin-top:0;">📊 總體表現</h2>
+  <div class="stat-grid">
+    <div>
+      <div class="stat-label">總訊號數</div>
+      <div class="stat-big">256</div>
+    </div>
+    <div>
+      <div class="stat-label">10 日勝率（漲幅 > 0）</div>
+      <div class="stat-big" style="color:#ef4444;">54.7%</div>
+    </div>
+    <div>
+      <div class="stat-label">平均 10 日報酬</div>
+      <div class="stat-big">+3.48%</div>
+    </div>
+    <div>
+      <div class="stat-label">中位數 10 日報酬</div>
+      <div class="stat-big">+0.72%</div>
+    </div>
+    <div>
+      <div class="stat-label">最差案例</div>
+      <div class="stat-big" style="color:#ef4444;">-36.53%</div>
+    </div>
+  </div>
+</div>
+
+<h2>🔍 訊號分佈</h2>
+<div class="stat-card">
+
+        <div style="display:flex;justify-content:space-between;padding:6px 12px;
+                    background:#1a1a1c;margin-bottom:4px;border-radius:4px;">
+          <span>✅ 優秀(10日+5%以上)</span>
+          <span><b>90</b> (35.2%)</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:6px 12px;
+                    background:#1a1a1c;margin-bottom:4px;border-radius:4px;">
+          <span>❌ 失敗(10日-5%以下)</span>
+          <span><b>54</b> (21.1%)</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:6px 12px;
+                    background:#1a1a1c;margin-bottom:4px;border-radius:4px;">
+          <span>⚖️ 平淡(10日±2%)</span>
+          <span><b>51</b> (19.9%)</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:6px 12px;
+                    background:#1a1a1c;margin-bottom:4px;border-radius:4px;">
+          <span>😟 不佳(10日-2~-5%)</span>
+          <span><b>33</b> (12.9%)</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:6px 12px;
+                    background:#1a1a1c;margin-bottom:4px;border-radius:4px;">
+          <span>👍 不錯(10日+2~5%)</span>
+          <span><b>28</b> (10.9%)</span>
+        </div>
+</div>
+
+<h2>📈 各觸發條件的命中率</h2>
+<p style="color:#888;">看哪個條件最容易出假訊號 — 命中率 &lt; 50% 的條件就該砍掉或加嚴。</p>
+<table>
+  <tr>
+    <th>觸發條件</th><th>訊號數</th><th>10 日勝率</th>
+    <th>平均報酬</th><th>中位數</th><th>最差</th>
+  </tr>
+  
+        <tr>
+          <td><b>正值區金叉</b></td>
+          <td>137</td>
+          <td style="color:#22c55e;font-weight:bold;">61.3%</td>
+          <td>+5.93%</td>
+          <td>+2.29%</td>
+          <td style="color:#ef4444;">-27.16%</td>
+        </tr>
+        <tr>
+          <td><b>深度反轉(MACD<0)</b></td>
+          <td>81</td>
+          <td style="color:#ef4444;font-weight:bold;">48.1%</td>
+          <td>+0.86%</td>
+          <td>-0.06%</td>
+          <td style="color:#ef4444;">-36.53%</td>
+        </tr>
+        <tr>
+          <td><b>近MA60+RSI回暖</b></td>
+          <td>38</td>
+          <td style="color:#ef4444;font-weight:bold;">44.7%</td>
+          <td>+0.21%</td>
+          <td>-0.86%</td>
+          <td style="color:#ef4444;">-22.94%</td>
+        </tr>
+</table>
+
+<h2>🎯 過濾條件效果比較</h2>
+<p style="color:#888;">如果某個條件「是」和「否」的勝率差距大，代表這個條件有效，應該強制要求。</p>
+<table>
+  <tr>
+    <th>過濾條件</th><th>狀態</th><th>訊號數</th><th>勝率</th><th>平均報酬</th>
+  </tr>
+  
+        <tr>
+          <td rowspan="2"><b>死叉期間</b></td>
+          <td>是</td>
+          <td>80</td>
+          <td>52.5%</td>
+          <td>+2.60%</td>
+        </tr>
+        <tr>
+          <td>否</td>
+          <td>176</td>
+          <td>55.7%</td>
+          <td>+3.88%</td>
+        </tr>
+        <tr>
+          <td colspan="2" style="color:#888;font-size:12px;">差異</td>
+          <td colspan="3" style="color:#888;font-weight:bold;">-3.2%</td>
+        </tr>
+        <tr>
+          <td rowspan="2"><b>站上 SMA200</b></td>
+          <td>是</td>
+          <td>84</td>
+          <td>56.0%</td>
+          <td>+4.30%</td>
+        </tr>
+        <tr>
+          <td>否</td>
+          <td>172</td>
+          <td>54.1%</td>
+          <td>+3.07%</td>
+        </tr>
+        <tr>
+          <td colspan="2" style="color:#888;font-size:12px;">差異</td>
+          <td colspan="3" style="color:#888;font-weight:bold;">+1.9%</td>
+        </tr>
+        <tr>
+          <td rowspan="2"><b>MA60 上升</b></td>
+          <td>是</td>
+          <td>137</td>
+          <td>58.4%</td>
+          <td>+4.45%</td>
+        </tr>
+        <tr>
+          <td>否</td>
+          <td>119</td>
+          <td>50.4%</td>
+          <td>+2.35%</td>
+        </tr>
+        <tr>
+          <td colspan="2" style="color:#888;font-size:12px;">差異</td>
+          <td colspan="3" style="color:#22c55e;font-weight:bold;">+8.0%</td>
+        </tr>
+</table>
+
+<h2>📋 您的失敗案例對應</h2>
+<p style="color:#888;">把您提供的 26 個案例對應到回測中找到的訊號，看它們的真實表現。</p>
+<table>
+  <tr>
+    <th>股票</th><th>您標記日期</th><th>類型</th><th>對應訊號日期</th>
+    <th>觸發條件</th><th>+5日</th><th>+10日</th><th>+20日</th><th>分類</th>
+  </tr>
+  
+            <tr>
+              <td>ONDS</td>
+              <td>2026-05-01</td>
+              <td>🔴 假起漲</td>
+              <td colspan="6" style="color:#888;">（無對應訊號）</td>
+            </tr>
+            <tr>
+              <td>META</td>
+              <td>2026-04-28</td>
+              <td>🔴 假起漲</td>
+              <td colspan="6" style="color:#888;">（無對應訊號）</td>
+            </tr>
+            <tr>
+              <td>META</td>
+              <td>2026-03-04</td>
+              <td>🔴 假起漲</td>
+              <td>2026-03-04（差 0 天）</td>
+              <td>近MA60+RSI回暖</td>
+              <td>-1.93%</td>
+              <td>-7.80%</td>
+              <td>-13.25%</td>
+              <td>❌ 失敗(10日-5%以下)</td>
+            </tr>
+            <tr>
+              <td>GLW</td>
+              <td>2026-04-24</td>
+              <td>🔴 假起漲</td>
+              <td>2026-04-24（差 0 天）</td>
+              <td>正值區金叉</td>
+              <td>-10.02%</td>
+              <td>+6.28%</td>
+              <td>—</td>
+              <td>✅ 優秀(10日+5%以上)</td>
+            </tr>
+            <tr>
+              <td>QQQ</td>
+              <td>2026-01-27</td>
+              <td>🔴 假起漲</td>
+              <td>2026-01-27（差 0 天）</td>
+              <td>正值區金叉</td>
+              <td>-2.31%</td>
+              <td>-3.12%</td>
+              <td>-2.29%</td>
+              <td>😟 不佳(10日-2~-5%)</td>
+            </tr>
+            <tr>
+              <td>QQQ</td>
+              <td>2026-02-25</td>
+              <td>🔴 假起漲</td>
+              <td>2026-02-25（差 0 天）</td>
+              <td>近MA60+RSI回暖</td>
+              <td>-0.96%</td>
+              <td>-1.46%</td>
+              <td>-4.68%</td>
+              <td>⚖️ 平淡(10日±2%)</td>
+            </tr>
+            <tr>
+              <td>CRCL</td>
+              <td>2025-12-22</td>
+              <td>🔴 假起漲</td>
+              <td colspan="6" style="color:#888;">（無對應訊號）</td>
+            </tr>
+            <tr>
+              <td>TSLA</td>
+              <td>2026-02-25</td>
+              <td>🔴 假起漲</td>
+              <td>2026-02-25（差 0 天）</td>
+              <td>近MA60+RSI回暖</td>
+              <td>-2.75%</td>
+              <td>-2.30%</td>
+              <td>-7.53%</td>
+              <td>😟 不佳(10日-2~-5%)</td>
+            </tr>
+            <tr>
+              <td>TSLA</td>
+              <td>2026-03-10</td>
+              <td>🔴 假起漲</td>
+              <td>2026-03-10（差 0 天）</td>
+              <td>深度反轉(MACD<0)</td>
+              <td>+0.01%</td>
+              <td>-4.06%</td>
+              <td>-14.02%</td>
+              <td>😟 不佳(10日-2~-5%)</td>
+            </tr>
+            <tr>
+              <td>RXRX</td>
+              <td>2026-01-22</td>
+              <td>🔴 假起漲</td>
+              <td colspan="6" style="color:#888;">（無對應訊號）</td>
+            </tr>
+            <tr>
+              <td>RXRX</td>
+              <td>2026-05-01</td>
+              <td>🔴 假起漲</td>
+              <td colspan="6" style="color:#888;">（無對應訊號）</td>
+            </tr>
+            <tr>
+              <td>GOOG</td>
+              <td>2026-01-28</td>
+              <td>🔴 假起漲</td>
+              <td>2026-01-29（差 1 天）</td>
+              <td>正值區金叉</td>
+              <td>-2.16%</td>
+              <td>-8.65%</td>
+              <td>-8.04%</td>
+              <td>❌ 失敗(10日-5%以下)</td>
+            </tr>
+            <tr>
+              <td>GOOG</td>
+              <td>2026-03-10</td>
+              <td>🔴 假起漲</td>
+              <td>2026-03-11（差 1 天）</td>
+              <td>近MA60+RSI回暖</td>
+              <td>-0.69%</td>
+              <td>-6.11%</td>
+              <td>+2.58%</td>
+              <td>❌ 失敗(10日-5%以下)</td>
+            </tr>
+            <tr>
+              <td>MU</td>
+              <td>2026-03-16</td>
+              <td>🔴 假起漲</td>
+              <td>2026-03-16（差 0 天）</td>
+              <td>正值區金叉</td>
+              <td>-8.48%</td>
+              <td>-27.16%</td>
+              <td>+5.40%</td>
+              <td>❌ 失敗(10日-5%以下)</td>
+            </tr>
+            <tr>
+              <td>MSFT</td>
+              <td>2026-01-27</td>
+              <td>🔴 假起漲</td>
+              <td>2026-01-27（差 0 天）</td>
+              <td>近MA60+RSI回暖</td>
+              <td>-14.43%</td>
+              <td>-14.01%</td>
+              <td>-16.64%</td>
+              <td>❌ 失敗(10日-5%以下)</td>
+            </tr>
+            <tr>
+              <td>MSFT</td>
+              <td>2026-01-07</td>
+              <td>🔴 假起漲</td>
+              <td colspan="6" style="color:#888;">（無對應訊號）</td>
+            </tr>
+            <tr>
+              <td>MSFT</td>
+              <td>2026-04-28</td>
+              <td>🔴 假起漲</td>
+              <td colspan="6" style="color:#888;">（無對應訊號）</td>
+            </tr>
+            <tr>
+              <td>SOFI</td>
+              <td>2025-12-26</td>
+              <td>🔴 假起漲</td>
+              <td colspan="6" style="color:#888;">（無對應訊號）</td>
+            </tr>
+            <tr>
+              <td>COIN</td>
+              <td>2026-01-06</td>
+              <td>🔴 假起漲</td>
+              <td>2026-01-05（差 1 天）</td>
+              <td>深度反轉(MACD<0)</td>
+              <td>-4.68%</td>
+              <td>-10.67%</td>
+              <td>-29.52%</td>
+              <td>❌ 失敗(10日-5%以下)</td>
+            </tr>
+            <tr>
+              <td>NKE</td>
+              <td>2026-02-17</td>
+              <td>🔴 假起漲</td>
+              <td>2026-02-17（差 0 天）</td>
+              <td>近MA60+RSI回暖</td>
+              <td>-1.13%</td>
+              <td>-8.38%</td>
+              <td>-14.96%</td>
+              <td>❌ 失敗(10日-5%以下)</td>
+            </tr>
+            <tr>
+              <td>NKE</td>
+              <td>2026-03-31</td>
+              <td>🔴 假起漲</td>
+              <td>2026-03-31（差 0 天）</td>
+              <td>深度反轉(MACD<0)</td>
+              <td>-18.35%</td>
+              <td>-13.97%</td>
+              <td>-15.96%</td>
+              <td>❌ 失敗(10日-5%以下)</td>
+            </tr>
+            <tr>
+              <td>BE</td>
+              <td>2026-02-25</td>
+              <td>🔴 假起漲</td>
+              <td>2026-02-25（差 0 天）</td>
+              <td>正值區金叉</td>
+              <td>-5.72%</td>
+              <td>-8.90%</td>
+              <td>-14.05%</td>
+              <td>❌ 失敗(10日-5%以下)</td>
+            </tr>
+            <tr>
+              <td>NFLX</td>
+              <td>2026-04-02</td>
+              <td>🔴 假起漲</td>
+              <td>2026-04-02（差 0 天）</td>
+              <td>正值區金叉</td>
+              <td>+4.41%</td>
+              <td>-1.37%</td>
+              <td>-6.69%</td>
+              <td>⚖️ 平淡(10日±2%)</td>
+            </tr>
+            <tr>
+              <td>PLTR</td>
+              <td>2026-04-08</td>
+              <td>🔴 假起漲</td>
+              <td colspan="6" style="color:#888;">（無對應訊號）</td>
+            </tr>
+            <tr>
+              <td>AMZN</td>
+              <td>2026-01-28</td>
+              <td>🔴 假起漲</td>
+              <td>2026-01-27（差 1 天）</td>
+              <td>正值區金叉</td>
+              <td>-2.48%</td>
+              <td>-15.42%</td>
+              <td>-13.91%</td>
+              <td>❌ 失敗(10日-5%以下)</td>
+            </tr>
+            <tr>
+              <td>META</td>
+              <td>2026-04-07</td>
+              <td>🟡 漏標起漲</td>
+              <td colspan="6" style="color:#888;">（app 未發訊號 → 確認漏標）</td>
+            </tr>
+            <tr>
+              <td>TSLA</td>
+              <td>2025-11-25</td>
+              <td>🟡 漏標起漲</td>
+              <td>2025-11-28（差 3 天）</td>
+              <td>近MA60+RSI回暖</td>
+              <td>+5.77%</td>
+              <td>+6.69%</td>
+              <td>+6.85%</td>
+              <td>✅ 優秀(10日+5%以上)</td>
+            </tr>
+            <tr>
+              <td>PLTR</td>
+              <td>2025-12-01</td>
+              <td>🟡 漏標起漲</td>
+              <td>2025-12-03（差 2 天）</td>
+              <td>近MA60+RSI回暖</td>
+              <td>+6.72%</td>
+              <td>+0.69%</td>
+              <td>-4.67%</td>
+              <td>⚖️ 平淡(10日±2%)</td>
+            </tr>
+            <tr>
+              <td>SNDK</td>
+              <td>2025-12-08</td>
+              <td>🟡 漏標起漲</td>
+              <td colspan="6" style="color:#888;">（app 未發訊號 → 確認漏標）</td>
+            </tr>
+            <tr>
+              <td>RKLB</td>
+              <td>2026-04-06</td>
+              <td>🟡 漏標起漲</td>
+              <td colspan="6" style="color:#888;">（app 未發訊號 → 確認漏標）</td>
+            </tr>
+</table>
+
+<h2>💡 下一步建議</h2>
+<div class="key-finding">
+  <p>看完報告後請告訴 Claude：</p>
+  <ol>
+    <li>哪些觸發條件勝率低於 50% → 砍掉或加嚴</li>
+    <li>哪個過濾條件有顯著差異（&gt;5%）→ 強制要求</li>
+    <li>您的失敗案例中對應的「分類」是什麼 → 找共同模式</li>
+  </ol>
+</div>
+
+</body>
+</html>
