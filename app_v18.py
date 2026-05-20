@@ -1395,12 +1395,46 @@ def analyze_strategic_signals(df):
     }
 
 
-def predict_target_and_rating(df):
+def predict_target_and_rating(df, mc_result=None):
+    """
+    短/長期目標 + 強弱評等。
+    優先用蒙地卡羅 p50/p90 反映當下趨勢，無 MC 結果時退回布林+60日高點（舊邏輯）。
+    """
     price = df['Close'].iloc[-1]
-    upper = df['Bollinger_Upper'].iloc[-1]
-    recent_high_60 = df['High'].tail(60).max()
-    t_s = upper if price >= recent_high_60 else min(upper, recent_high_60)
-    return t_s, max(recent_high_60 * 1.15, t_s * 1.1), "強勢" if price > df['SMA_20'].iloc[-1] else "持有"
+    
+    if mc_result is not None and mc_result.get("p50_final") is not None:
+        # 新邏輯：用 MC 30 日後 p50 當短期、p90 當長期
+        t_s = float(mc_result["p50_final"])
+        t_l = float(mc_result["p90_final"])
+    else:
+        # 退回舊邏輯（MC 失敗時的 fallback）
+        upper = df['Bollinger_Upper'].iloc[-1]
+        recent_high_60 = df['High'].tail(60).max()
+        t_s = upper if price >= recent_high_60 else min(upper, recent_high_60)
+        t_l = max(recent_high_60 * 1.15, t_s * 1.1)
+    
+    rating = "強勢" if price > df['SMA_20'].iloc[-1] else "持有"
+    return t_s, t_l, rating
+
+
+def get_technical_target_threshold(df):
+    """技術面「達標」閾值（給走勢圖標籤用，與 AI 目標 t_s 分離）
+    
+    這個閾值用於判斷「K 線是否觸及短期壓力上緣」，與蒙地卡羅 p50 中位數預期不同。
+    永遠回傳一個「真實會被觸及」的價位（布林上軌 / 60 日高點 / 季布林上軌）。
+    """
+    price = float(df['Close'].iloc[-1])
+    upper = float(df['Bollinger_Upper'].iloc[-1])
+    recent_high_60 = float(df['High'].tail(60).max())
+    
+    # 若當前股價已逼近或突破 60 日高，用布林上軌
+    # 否則用 min(布林上軌, 60日高)，這保留「先碰小目標再衝大目標」的層次感
+    if price >= recent_high_60 * 0.98:
+        threshold = upper
+    else:
+        threshold = min(upper, recent_high_60)
+    
+    return threshold
 
 
 def format_volume(num):
@@ -1901,13 +1935,83 @@ sigs = analyze_strategic_signals(df)
 trend_txt, trend_note, trend_col = analyze_market_trend(df)
 rs_txt, rs_col = get_relative_strength(cur_t, df)
 engine_label, engine_type = get_stock_engine_mode(cur_t, df)
-t_s, t_l, rating = predict_target_and_rating(df)
+
+# [v28] 提前生成 p_data + 跑蒙地卡羅，讓 AI 目標卡片能用 MC 結果
+p_data = df.tail(120) if "日" in time_opt else df.tail(60)
+
+# ── 蒙地卡羅計算（在繪圖前先算完，c4 卡片 + 圖上雲帶 + 推演摘要共用結果）──
+_mc = None
+_mc_status = {"ran": False, "reason": "", "n_points": 0}
+try:
+    import reversal_scanner as _rev_mc
+    _MC_AVAILABLE = True
+except ImportError as _imp_e:
+    _MC_AVAILABLE = False
+    _MC_IMPORT_ERR = str(_imp_e)
+
+if _MC_AVAILABLE:
+    # 計算漂移調整（context 失敗只代表漂移=0，不影響 MC 跑）
+    _drift_adj = 0.0
+    try:
+        _market_state_mc = st.session_state.get('_market_state_v27', {})
+        if len(p_data) >= 20:
+            _ctx_mc = compute_signal_context(p_data, len(p_data) - 1, cur_t, _market_state_mc)
+            if _ctx_mc:
+                if _ctx_mc['market']['market_ok']:
+                    _drift_adj += 0.0005
+                if _ctx_mc['obv_pct_of_60d'] > 80:
+                    _drift_adj += 0.0005
+                elif _ctx_mc['obv_pct_of_60d'] < 30:
+                    _drift_adj -= 0.0003
+                if _ctx_mc['short_vol_ratio'] > 1.2:
+                    _drift_adj += 0.0003
+                elif _ctx_mc['short_vol_ratio'] < 0.8:
+                    _drift_adj -= 0.0002
+                if 0 < _ctx_mc['momentum_20d'] < 15:
+                    _drift_adj += 0.0002
+                elif _ctx_mc['momentum_20d'] > 25:
+                    _drift_adj -= 0.0003
+                if _ctx_mc['position']['dist_from_52w_high_pct'] < 5:
+                    _drift_adj -= 0.0005
+    except Exception as _ctx_e:
+        _mc_status["reason"] = f"7 維 context 計算失敗（漂移=0）: {_ctx_e}"
+
+    if len(p_data) < 60:
+        _mc_status["reason"] = f"p_data 只有 {len(p_data)} 筆，MC 需 60+ 筆"
+    else:
+        try:
+            _mc = _rev_mc.generate_monte_carlo_bands(
+                p_data, days=30, n_simulations=1000, drift_adjust=_drift_adj
+            )
+            if _mc is None:
+                _mc_status["reason"] = "MC 函式回傳 None（內部例外，已被 reversal_scanner 吞掉）"
+            else:
+                _mc_status["ran"] = True
+                _mc_status["n_points"] = len(_mc.get('dates', []))
+                st.session_state['_mc_result_v27'] = {
+                    'p10_final': _mc['p10'][-1],
+                    'p50_final': _mc['p50'][-1],
+                    'p90_final': _mc['p90'][-1],
+                    'sigma': _mc['sigma'],
+                    'drift_adjust': _drift_adj,
+                }
+        except Exception as _mc_e:
+            _mc_status["reason"] = f"MC 呼叫拋例外: {type(_mc_e).__name__}: {_mc_e}"
+else:
+    _mc_status["reason"] = f"reversal_scanner 模組未匯入"
+
+st.session_state['_mc_status_v27'] = _mc_status
+
+# AI 目標：優先使用 MC 結果（反映當下趨勢），無 MC 時退回布林+60日高點
+_mc_for_target = st.session_state.get('_mc_result_v27') if _mc_status["ran"] else None
+t_s, t_l, rating = predict_target_and_rating(df, _mc_for_target)
+# 技術面「達標」閾值（與 AI 目標 t_s 分離，避免 MC p50 誤判過去 K 線）
+_target_threshold = get_technical_target_threshold(df)
 
 vp_60 = calculate_volume_profile(df.tail(60), bins=40)
 vol_poc = vp_60.loc[vp_60['Volume'].idxmax(), 'Price'] if not vp_60.empty else close_v
 iron_price, _box_start, _box_end, is_breaking = find_structural_box_bottom(df, close_v)
 
-p_data = df.tail(120) if "日" in time_opt else df.tail(60)
 abs_high = p_data['High'].max()
 local_maxes = p_data['High'][(p_data['High'] == p_data['High'].rolling(9, center=True).max())].dropna()
 filtered_maxes = local_maxes[local_maxes < abs_high]
@@ -1995,8 +2099,27 @@ if is_index_or_etf(cur_t):
 # 一體化四大戰情方塊佈局
 # ==========================================
 ern_date, ern_res = get_earnings_status(cur_t)
-px, py, sc_name = generate_projection_points(df, trend_txt, close_v, iron_price, is_breaking, support_line, resist_line)
-sc_color_class = get_compre_color_class(sc_name)
+
+# [v28] 砍掉規則式劇本，改用 MC 漂移方向作為「未來推演」標籤
+_drift_for_label = st.session_state.get('_mc_result_v27', {}).get('drift_adjust', 0.0)
+if not _mc_status.get("ran"):
+    sc_name = "⚠️ MC 未計算<br>無法推演"
+    sc_color_class = "sig-orange"
+elif _drift_for_label >= 0.0008:
+    sc_name = "📈 偏多漂移<br>傾向上行"
+    sc_color_class = "sig-green"
+elif _drift_for_label >= 0.0003:
+    sc_name = "↗ 輕微偏多<br>溫和上行"
+    sc_color_class = "sig-green"
+elif _drift_for_label > -0.0003:
+    sc_name = "↔ 中性漂移<br>區間震盪"
+    sc_color_class = "sig-orange"
+elif _drift_for_label > -0.0008:
+    sc_name = "↘ 輕微偏空<br>溫和下行"
+    sc_color_class = "sig-red"
+else:
+    sc_name = "📉 偏空漂移<br>傾向下行"
+    sc_color_class = "sig-red"
 
 c1, c2, c3, c4 = st.columns([1.3, 1, 1, 1])
 
@@ -2040,10 +2163,22 @@ with c3:
     st.markdown(c3_html, unsafe_allow_html=True)
 
 with c4:
+    # MC 預期方向（漲跌幅 vs 現價）+ 來源標籤
+    _t_s_pct = (t_s / close_v - 1) * 100 if close_v > 0 else 0
+    _t_l_pct = (t_l / close_v - 1) * 100 if close_v > 0 else 0
+    _t_s_clr = "#22c55e" if _t_s_pct >= 0 else "#ef4444"
+    _t_l_clr = "#22c55e" if _t_l_pct >= 0 else "#ef4444"
+    _mc_ran = st.session_state.get('_mc_status_v27', {}).get('ran', False)
+    _source_label = ("🔮 MC p50/p90" if _mc_ran else "📐 布林/60日高")
+    
     c4_html = (
         '<div class="ai-box" style="border: 1px solid #00d4ff; display: flex; flex-direction: column; justify-content: center;">'
-        '<h5 style="color:white; margin:0; margin-bottom:12px;">🎯 AI 目標 & 強弱</h5>'
-        f'<div style="font-size:14px; color: #ddd; margin-bottom: 8px;">短: ${t_s:.2f} | 長: ${t_l:.2f}</div>'
+        '<h5 style="color:white; margin:0; margin-bottom:8px;">🎯 AI 目標 & 強弱</h5>'
+        f'<div style="font-size:13px; color: #ddd; margin-bottom: 4px;">'
+        f'短: <b>${t_s:.2f}</b> <span style="color:{_t_s_clr};font-size:11px;">({_t_s_pct:+.1f}%)</span><br>'
+        f'長: <b>${t_l:.2f}</b> <span style="color:{_t_l_clr};font-size:11px;">({_t_l_pct:+.1f}%)</span>'
+        f'</div>'
+        f'<div style="font-size:10px; color:#888; margin-bottom: 6px;">{_source_label}（30 日推演）</div>'
         f'<div><span class="{rs_col}" style="display: inline-block;">{rs_txt}</span></div>'
         '</div>'
     )
@@ -2233,13 +2368,13 @@ for i in range(5, len(p_data)):
         })
     if macd_sell:
         fig.add_annotation(x=p_data.index[i], y=curr['High'], text=f"SELL<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ax=0, ay=-25, row=1, col=1, bgcolor="rgba(220, 53, 69, 0.8)", font=dict(color="white", size=9))
-    if (curr['High'] >= t_s or curr['RSI'] > 75) and not (prior['High'] >= t_s or prior['RSI'] > 75):
+    if (curr['High'] >= _target_threshold or curr['RSI'] > 75) and not (prior['High'] >= _target_threshold or prior['RSI'] > 75):
         fig.add_annotation(
             x=p_data.index[i], y=curr['High'],
-            text=f"💰達標<br>${curr['Close']:.1f}" if curr['High'] >= t_s else f"🔥過熱<br>${curr['Close']:.1f}",
+            text=f"💰達標<br>${curr['Close']:.1f}" if curr['High'] >= _target_threshold else f"🔥過熱<br>${curr['Close']:.1f}",
             showarrow=True, arrowhead=1, ax=0, ay=-45, row=1, col=1,
-            bgcolor="rgba(255, 193, 7, 0.8)" if curr['High'] >= t_s else "rgba(255, 69, 0, 0.8)",
-            font=dict(color="black" if curr['High'] >= t_s else "white", size=9)
+            bgcolor="rgba(255, 193, 7, 0.8)" if curr['High'] >= _target_threshold else "rgba(255, 69, 0, 0.8)",
+            font=dict(color="black" if curr['High'] >= _target_threshold else "white", size=9)
         )
 
     is_near_support = False
@@ -2261,14 +2396,140 @@ for i in range(5, len(p_data)):
     if is_near_support and vol_surge and strong_reversal:
         fig.add_annotation(x=p_data.index[i], y=curr['Low'], text="支撐", showarrow=True, arrowhead=1, ax=0, ay=30, row=1, col=1, font=dict(color="#00ffff", size=9, weight="bold"))
 
-fig.add_trace(go.Scatter(
-    x=px, y=py, mode='lines+markers',
-    line=dict(color='#eab308', width=1, dash='dash'),
-    marker=dict(size=8, symbol='diamond', color='#eab308'),
-    name='🔮 AI 劇本推演'
-), row=1, col=1)
-for i in range(1, len(px)):
-    fig.add_annotation(x=px[i], y=py[i], text=f"${py[i]:.2f}", showarrow=True, arrowhead=0, ay=-20, font=dict(color="#eab308", size=11), bgcolor="rgba(0,0,0,0.6)", row=1, col=1)
+# ──────────────────────────────────────────────────────
+# [v28] 蒙地卡羅雲帶繪圖（計算已在卡片區之前完成，這裡只負責畫到 fig）
+# ──────────────────────────────────────────────────────
+if _mc is not None:
+    # 80% 信心帶（p10-p90）
+    fig.add_trace(go.Scatter(
+        x=list(_mc['dates']) + list(reversed(_mc['dates'])),
+        y=list(_mc['p90']) + list(reversed(_mc['p10'])),
+        fill='toself',
+        fillcolor='rgba(234, 179, 8, 0.10)',
+        line=dict(width=0),
+        hoverinfo='skip',
+        showlegend=True,
+        name='🔮 MC 80% 信心區'
+    ), row=1, col=1)
+    # 50% 信心帶（p25-p75）
+    fig.add_trace(go.Scatter(
+        x=list(_mc['dates']) + list(reversed(_mc['dates'])),
+        y=list(_mc['p75']) + list(reversed(_mc['p25'])),
+        fill='toself',
+        fillcolor='rgba(234, 179, 8, 0.20)',
+        line=dict(width=0),
+        hoverinfo='skip',
+        showlegend=True,
+        name='🔮 MC 50% 信心區'
+    ), row=1, col=1)
+    # 中位數路徑
+    fig.add_trace(go.Scatter(
+        x=_mc['dates'],
+        y=_mc['p50'],
+        mode='lines',
+        line=dict(color='#eab308', width=2, dash='solid'),
+        name='🔮 MC 中位數路徑',
+        hovertemplate='中位數: $%{y:.2f}<extra></extra>'
+    ), row=1, col=1)
+
+# [v28] 規則式劇本（黃色虛線+菱形）已移除，預測完全交給蒙地卡羅雲帶
+
+# ──────────────────────────────────────────────────────
+# [v29] 事件節點垂直虛線（財報日 + FOMC/CPI/PPI/非農）
+# ──────────────────────────────────────────────────────
+_ev_status = {"drawn_count": 0, "reason": ""}
+try:
+    import event_nodes as _ev
+    _EV_AVAILABLE = True
+except ImportError as _ev_imp_e:
+    _EV_AVAILABLE = False
+    _ev_status["reason"] = f"event_nodes 模組未匯入：{_ev_imp_e}"
+
+if not _EV_AVAILABLE:
+    pass  # reason 已記錄
+elif not _ev.is_us_stock(cur_t):
+    _ev_status["reason"] = f"當前股票 {cur_t} 非美股，事件節點僅標記美股事件"
+else:
+    try:
+        # 範圍：圖表左邊（p_data 起點）到 MC 雲帶終點（未來 30 交易日）
+        _ev_start = p_data.index[0] if len(p_data) > 0 else pd.Timestamp.now()
+        _ev_end = _mc['dates'][-1] if (_mc is not None) else (pd.Timestamp.now() + pd.Timedelta(days=45))
+
+        # 從 ern_date 字串解析財報日（格式：「📅 財報: 2026-05-28」或「📅 財報: N/A」）
+        _ern_date_only = None
+        if ern_date and "N/A" not in ern_date:
+            try:
+                _ern_date_only = ern_date.split(":")[-1].strip()
+                pd.to_datetime(_ern_date_only)  # 驗證可解析
+            except Exception:
+                _ern_date_only = None
+
+        events_for_chart = _ev.get_all_events_for_chart(
+            ticker=cur_t,
+            earnings_date=_ern_date_only,
+            start_date=_ev_start,
+            end_date=_ev_end,
+        )
+
+        if not events_for_chart:
+            _ev_status["reason"] = (
+                f"範圍內無事件（{pd.to_datetime(_ev_start).strftime('%Y-%m-%d')} ~ "
+                f"{pd.to_datetime(_ev_end).strftime('%Y-%m-%d')}）"
+            )
+        else:
+            # 把每個事件畫成垂直虛線 + 上方標籤
+            # 避免相同日期重疊：用 dict 收集再合併標籤
+            events_by_date = {}
+            for ev in events_for_chart:
+                key = ev["date"].strftime("%Y-%m-%d")
+                if key not in events_by_date:
+                    events_by_date[key] = []
+                events_by_date[key].append(ev)
+
+            # 標籤要畫在 K 線範圍內（避免超出 subplot 被切）
+            # 用主圖 y 軸的「波段最高」上方一點，這是已知會落在可見範圍內的位置
+            _ev_label_y = abs_high * 1.015  # 波段最高 + 1.5%
+
+            for date_key, evs in events_by_date.items():
+                # 同一天多事件 → 取 priority 最高的當主色，標籤合併
+                primary = max(evs, key=lambda x: x["priority"])
+                if len(evs) == 1:
+                    label = primary["label"]
+                else:
+                    other_labels = " + ".join(e["label"].split()[0] for e in evs if e is not primary)
+                    label = f'{primary["label"]} + {other_labels}'
+
+                # 用 add_vline（與 last_d 灰線同模式，已驗證可運作）
+                fig.add_vline(
+                    x=primary["date"],
+                    line_dash=primary["dash"],
+                    line_color=primary["color"],
+                    opacity=0.7,
+                    layer="below",
+                    row=1, col=1,
+                )
+                # 用絕對 y 值畫標籤（避免 y domain 被 subplot 切掉）
+                fig.add_annotation(
+                    x=primary["date"],
+                    y=_ev_label_y,
+                    text=label,
+                    showarrow=False,
+                    font=dict(color=primary["color"], size=9, weight="bold"),
+                    bgcolor="rgba(0,0,0,0.6)",
+                    bordercolor=primary["color"],
+                    borderwidth=1,
+                    borderpad=2,
+                    xanchor="center",
+                    yanchor="bottom",
+                    row=1, col=1,
+                )
+                _ev_status["drawn_count"] += 1
+    except Exception as _ev_e:
+        _ev_status["reason"] = f"事件節點繪製失敗：{type(_ev_e).__name__}: {_ev_e}"
+
+# 把狀態存入 session 給圖下方面板顯示
+st.session_state['_ev_status_v29'] = _ev_status
+
 
 fig.add_hline(y=abs_high, line_dash="dot", line_color="#ef4444", annotation_text=f"🔴 波段最高<br>${abs_high:.2f}", annotation_font_color="#ef4444", annotation_position="top right", annotation_align="right", opacity=1.0, layer="above", row=1, col=1)
 if resist_line:
@@ -2617,6 +2878,84 @@ st.caption(
 # [v27] AI 推演面板（顯示最近的起漲訊號 + 7 維 context）
 # ──────────────────────────────────────────────────────
 _launch_signals = st.session_state.get('_launch_signals_v27', [])
+
+# 📊 蒙地卡羅推演結果摘要
+_mc_result = st.session_state.get('_mc_result_v27', None)
+_mc_status_disp = st.session_state.get('_mc_status_v27', {})
+
+if _mc_result:
+    st.markdown("### 🔮 蒙地卡羅推演（1000 次模擬 + 7 維 context 動態調整）")
+    _last_close = float(p_data['Close'].iloc[-1])
+    _p10 = _mc_result['p10_final']
+    _p50 = _mc_result['p50_final']
+    _p90 = _mc_result['p90_final']
+    _ret_p10 = (_p10 / _last_close - 1) * 100
+    _ret_p50 = (_p50 / _last_close - 1) * 100
+    _ret_p90 = (_p90 / _last_close - 1) * 100
+    _drift_str = (f"<span style='color:#22c55e'>+{_mc_result['drift_adjust']*100:.3f}%/日加分</span>"
+                   if _mc_result['drift_adjust'] > 0
+                   else f"<span style='color:#ef4444'>{_mc_result['drift_adjust']*100:.3f}%/日減分</span>"
+                   if _mc_result['drift_adjust'] < 0
+                   else "<span style='color:#888'>±0 中性</span>")
+    
+    st.markdown(f"""
+    <div style="background:linear-gradient(135deg,#1a1a1c,#2a1a2c);
+                border-left:4px solid #eab308; padding:14px 18px; margin:10px 0;
+                border-radius:8px;">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;font-size:13px;">
+        <div>
+          <div style="color:#888;font-size:11px;">悲觀情境 (p10)</div>
+          <div style="color:#ef4444;font-weight:bold;font-size:18px;">${_p10:.2f}</div>
+          <div style="color:#ef4444;font-size:12px;">{_ret_p10:+.2f}%</div>
+        </div>
+        <div>
+          <div style="color:#888;font-size:11px;">中位數路徑 (p50)</div>
+          <div style="color:#facc15;font-weight:bold;font-size:22px;">${_p50:.2f}</div>
+          <div style="color:#facc15;font-size:12px;">{_ret_p50:+.2f}%</div>
+        </div>
+        <div>
+          <div style="color:#888;font-size:11px;">樂觀情境 (p90)</div>
+          <div style="color:#22c55e;font-weight:bold;font-size:18px;">${_p90:.2f}</div>
+          <div style="color:#22c55e;font-size:12px;">{_ret_p90:+.2f}%</div>
+        </div>
+        <div>
+          <div style="color:#888;font-size:11px;">歷史日波動率</div>
+          <div style="color:#ddd;font-weight:bold;font-size:18px;">{_mc_result['sigma']*100:.2f}%</div>
+          <div style="font-size:11px;">7 維調整：{_drift_str}</div>
+        </div>
+      </div>
+      <div style="margin-top:10px;color:#aaa;font-size:12px;">
+        💡 <b>解讀</b>：30 個交易日後，80% 機率股價落在 <b style="color:#ddd;">${_p10:.2f} ~ ${_p90:.2f}</b> 之間，
+        中位數預期 <b style="color:#facc15;">${_p50:.2f}</b>。
+        圖上「淺黃帶」= 80% 信心區、「深黃帶」= 50% 信心區、「黃實線」= 中位數路徑。<br>
+        🔔 <b>垂直虛線</b>＝會發生大波動的關鍵日：
+        <span style="color:#ef4444;">📊 財報</span> ·
+        <span style="color:#f97316;">🏛️ FOMC</span> ·
+        <span style="color:#eab308;">📈 CPI</span> ·
+        <span style="color:#3b82f6;">💼 非農</span> ·
+        <span style="color:#9ca3af;">📉 PPI</span>
+        （只標日期、不預測方向）
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+elif _mc_status_disp and not _mc_status_disp.get("ran", False):
+    # MC 沒跑成功，明確告訴使用者原因（Rule 12: fail loud）
+    _reason = _mc_status_disp.get("reason", "未知原因")
+    st.warning(
+        f"⚠️ **蒙地卡羅模擬未產出**：{_reason}\n\n"
+        f"資料筆數：{len(p_data)} 筆（MC 需要 60+ 筆 K 線資料）"
+    )
+
+# 🔔 事件節點狀態（Rule 12: fail loud）
+_ev_status_disp = st.session_state.get('_ev_status_v29', {})
+if _ev_status_disp:
+    _drawn = _ev_status_disp.get("drawn_count", 0)
+    _ev_reason = _ev_status_disp.get("reason", "")
+    if _drawn > 0:
+        st.caption(f"🔔 已標記 **{_drawn}** 個事件節點（垂直虛線）於走勢圖上")
+    elif _ev_reason:
+        st.caption(f"🔔 事件節點未顯示：{_ev_reason}")
+
 if _launch_signals:
     # 取最近 3 個訊號（最新的在最後）
     recent_signals = _launch_signals[-3:]
@@ -3379,6 +3718,287 @@ if _ACCUM_AVAILABLE:
 
 
 # ==========================================
+# 🔬 訊號變動診斷工具（為什麼今天訊號變了？）
+# ==========================================
+try:
+    import signal_diagnostic as _sigdiag
+    _SIGDIAG_AVAILABLE = True
+except ImportError:
+    _SIGDIAG_AVAILABLE = False
+
+if _SIGDIAG_AVAILABLE:
+    st.markdown("---")
+    st.header("🔬 訊號變動診斷工具")
+    st.caption(
+        "**痛點解法**：「為什麼昨天命中 3/4，今天變 2/4？」"
+        "這個工具會回溯過去 14 天，告訴你**哪個維度**從 ✅ 變 ❌，以及**為什麼**。"
+    )
+
+    diag_col1, diag_col2 = st.columns([3, 1])
+    with diag_col1:
+        diag_ticker = st.text_input(
+            "輸入股票代碼（如 2354.TW、NVDA、TSLA）",
+            value="",
+            placeholder="例如：2354.TW",
+            key="diag_ticker_input"
+        ).strip().upper()
+    with diag_col2:
+        st.caption("")  # 空白對齊
+        diag_btn = st.button("🔬 診斷訊號軌跡", key="diag_run_btn", use_container_width=True)
+
+    if diag_btn and diag_ticker:
+        with st.spinner(f"診斷 {diag_ticker} 過去 14 天訊號軌跡..."):
+            try:
+                # 抓 6 個月歷史資料（足夠算 14 天回溯 + 70 天基底）
+                diag_t = yf.Ticker(diag_ticker)
+                diag_df = diag_t.history(period="6mo", auto_adjust=False)
+                if diag_df.empty:
+                    st.error(f"找不到 {diag_ticker} 的資料，請確認代碼是否正確。")
+                else:
+                    diag_df = diag_df.reset_index()
+                    diag_df["Date"] = pd.to_datetime(diag_df["Date"]).dt.tz_localize(None)
+                    diag_result = _sigdiag.diagnose_signal_history(diag_df, days_back=14)
+
+                    if diag_result is None:
+                        st.warning(
+                            f"⚠️ 資料不足無法診斷（需 84+ 個交易日，目前 {len(diag_df)} 天）"
+                        )
+                    else:
+                        # ── 標題 + 總結 ──
+                        summary = _sigdiag.get_summary_text(diag_result)
+                        n_t = diag_result["n_hit_today"]
+                        n_y = diag_result["n_hit_yesterday"]
+                        change = diag_result["n_hit_change"]
+
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("昨天", f"{n_y}/4 訊號")
+                        c2.metric("今天", f"{n_t}/4 訊號",
+                                   f"{'+' if change > 0 else ''}{change}" if change != 0 else "無變動")
+                        c3.metric("變動數", f"{len(diag_result['diff'])} 個維度")
+
+                        # ── 今天 vs 昨天差異 ──
+                        if diag_result["diff"]:
+                            st.subheader("🎯 變動的維度（這就是答案）")
+                            for d in diag_result["diff"]:
+                                icon = "📉" if d["direction"] == "lost" else "📈"
+                                color = "#ef4444" if d["direction"] == "lost" else "#22c55e"
+                                action = "從 ✅ 變 ❌" if d["direction"] == "lost" else "從 ❌ 變 ✅"
+                                st.markdown(
+                                    f'<div style="background:#1a1a1c; border-left:4px solid {color}; '
+                                    f'padding:12px 16px; margin:8px 0; border-radius:6px;">'
+                                    f'<div style="font-weight:bold; color:{color};">{icon} 訊號 {d["signal_id"]}：{d["full_name"]} {action}</div>'
+                                    f'<div style="margin-top:6px; color:#ccc; font-size:13px;">'
+                                    f'💡 原因：{d["reason"]}'
+                                    f'</div></div>',
+                                    unsafe_allow_html=True
+                                )
+                        else:
+                            st.info("✅ 今天的 4 個訊號與昨天完全相同，沒有任何維度發生變動。")
+
+                        # ── 14 天命中數變化圖 ──
+                        st.subheader("📊 過去 14 天命中數軌跡")
+                        hist = diag_result["history"]
+                        trace_dates = [h["date"] for h in hist]
+                        trace_hits = [h["n_hit"] for h in hist]
+                        trace_close = [h["close"] for h in hist]
+                        hover_text = []
+                        for h in hist:
+                            sig_str = "".join(
+                                ("✅" if h["signals"][s] else "❌") + f"S{s} "
+                                for s in [2, 3, 4, 5]
+                            )
+                            hover_text.append(
+                                f"{h['date'].strftime('%Y-%m-%d')}<br>"
+                                f"命中：{h['n_hit']}/4<br>"
+                                f"{sig_str}<br>"
+                                f"收盤：${h['close']:.2f}"
+                            )
+
+                        fig_diag = go.Figure()
+                        fig_diag.add_trace(go.Scatter(
+                            x=trace_dates, y=trace_hits,
+                            mode='lines+markers',
+                            line=dict(color='#facc15', width=2),
+                            marker=dict(size=10, color=['#22c55e' if h >= 3 else '#facc15' if h >= 2 else '#888'
+                                                          for h in trace_hits]),
+                            hovertext=hover_text,
+                            hoverinfo='text',
+                            name='命中數'
+                        ))
+                        fig_diag.add_hline(y=3, line_dash="dash", line_color="#22c55e",
+                                            annotation_text="強訊號門檻 (3/4)",
+                                            annotation_position="right",
+                                            annotation_font_color="#22c55e")
+                        fig_diag.update_layout(
+                            height=250, template="plotly_dark",
+                            margin=dict(t=20, b=20, l=10, r=10),
+                            yaxis=dict(range=[-0.5, 4.5], dtick=1, title="命中數"),
+                            showlegend=False,
+                        )
+                        st.plotly_chart(fig_diag, use_container_width=True, config={'displayModeBar': False})
+
+                        # ── 14 天詳細表格 ──
+                        with st.expander("📋 完整 14 天詳細紀錄", expanded=False):
+                            table_data = []
+                            for h in reversed(hist):  # 最新的在上
+                                sigs = h["signals"]
+                                m = h["metrics"]
+                                table_data.append({
+                                    "日期": h["date"].strftime("%Y-%m-%d"),
+                                    "收盤": f"${h['close']:.2f}",
+                                    "命中": f"{h['n_hit']}/4",
+                                    "S2 量能放大": "✅" if sigs[2] else "❌",
+                                    "S3 OBV 新高": "✅" if sigs[3] else "❌",
+                                    "S4 買盤強勢": "✅" if sigs[4] else "❌",
+                                    "S5 位置合適": "✅" if sigs[5] else "❌",
+                                    "30日漲幅": f"{m['price_chg_30d']:+.1f}%",
+                                    "量比": f"{m['vol_ratio']:.2f}x",
+                                    "OBV%": f"{m['obv_pct']:.0f}%",
+                                    "漲跌量比": f"{m['up_down_vol_ratio']:.2f}x",
+                                    "距 52w 高": f"{m['dist_from_52w_high_pct']:.1f}%",
+                                })
+                            st.dataframe(table_data, hide_index=True, use_container_width=True)
+                            st.caption(
+                                "💡 **看板說明**：\n"
+                                "- **S2 量能放大**：30 日均量比 60 日均量 ×1.5 以上\n"
+                                "- **S3 OBV 新高**：OBV 達 60 日範圍 99% 以上\n"
+                                "- **S4 買盤強勢**：30 日內上漲日量是下跌日量 ×1.3 以上\n"
+                                "- **S5 位置合適**：站上 50MA 且距 52 週高點 > 10%\n"
+                                "- 訊號每天會自然進出，看軌跡比看單日重要"
+                            )
+            except Exception as _de:
+                st.error(f"診斷失敗：{type(_de).__name__}: {_de}")
+
+
+# ==========================================
+# 💡 反轉預警掃描器（v6 限定 S&P 100 成長股 + 訊號追蹤）
+# ==========================================
+try:
+    import reversal_scanner as _rev
+    _REV_AVAILABLE = True
+except ImportError:
+    _REV_AVAILABLE = False
+
+if _REV_AVAILABLE:
+    st.markdown("---")
+    rev_col1, rev_col2 = st.columns([5, 1])
+    rev_col1.header("💡 反轉預警掃描器（S&P 100）")
+    if rev_col2.button("🔄 強制刷新", key="rev_force_refresh",
+                        help="清除快取重新掃描（約 2-3 分鐘）"):
+        st.cache_data.clear()
+
+    st.caption(
+        "**v6 反轉預警**：RSI 從 < 30 深度反轉到 > 45 + MACD 近零軸金叉 + OBV > 70%。"
+        "**比 ⭐ 起漲確認早 ~22 天出現**。"
+        "**回測勝率 81.8%（11 個樣本，需累積 25+ 樣本才正式採用）**。"
+        "目前處於「**實戰觀察期**」— 訊號自動追蹤，5/10/20 天後自動評估。"
+    )
+
+    @st.cache_data(ttl=21600, show_spinner="🔍 正在掃描 S&P 100 反轉預警訊號（首次約 2-3 分鐘）...")
+    def _cached_rev_scan(anchor):
+        return _rev.scan_reversal_signals(lookback_days=5)
+
+    try:
+        scan_result = _cached_rev_scan(get_cache_anchor())
+        tracking = _rev.update_and_get_tracking(scan_result)
+    except Exception as e:
+        st.error(f"反轉預警掃描失敗：{e}")
+        scan_result = {"signals": [], "scan_time": "", "total_scanned": 0}
+        tracking = {"total_signals": 0, "evaluated_count": 0, "pending_count": 0,
+                    "win_rate_10d": 0, "avg_return_10d": 0, "all_signals": [], "can_decide": False}
+
+    # ─── 統計卡片 ───
+    track_col1, track_col2, track_col3, track_col4 = st.columns(4)
+    with track_col1:
+        st.metric("本次掃描", f"{len(scan_result.get('signals', []))} 個",
+                    f"近 5 天內 / {scan_result.get('total_scanned', 0)} 支")
+    with track_col2:
+        st.metric("累積樣本", f"{tracking['total_signals']} 個",
+                    f"{tracking['evaluated_count']} 已評估")
+    with track_col3:
+        win_color = "🟢" if tracking['win_rate_10d'] >= 60 else "🟡" if tracking['win_rate_10d'] >= 50 else "🔴"
+        st.metric("實戰勝率", f"{tracking['win_rate_10d']}%",
+                    f"{win_color} {'達標' if tracking['win_rate_10d'] >= 60 else '觀察中'}")
+    with track_col4:
+        st.metric("平均報酬", f"{tracking['avg_return_10d']:+.2f}%",
+                    "10 日後")
+
+    # 採用建議
+    if tracking['can_decide']:
+        if tracking['win_rate_10d'] >= 60:
+            st.success(f"✅ **可正式採用**：實戰勝率 {tracking['win_rate_10d']}%（{tracking['evaluated_count']} 個樣本）達標")
+        else:
+            st.error(f"❌ **建議放棄**：實戰勝率 {tracking['win_rate_10d']}% 未達 60%")
+    else:
+        st.info(f"⏳ 樣本不足（需 25 個已評估）— 還缺 {max(0, 25 - tracking['evaluated_count'])} 個")
+
+    # ─── 本次掃描到的訊號 ───
+    current_sigs = scan_result.get("signals", [])
+    if current_sigs:
+        st.subheader(f"🎯 本次掃描出 {len(current_sigs)} 個新鮮訊號")
+        rev_data = []
+        for s in current_sigs:
+            rev_data.append({
+                "股票": s["ticker"],
+                "訊號日": s["date"],
+                "天數": f"{s.get('days_ago', 0)} 天前",
+                "RSI 反轉": f"{s['rsi_was']} → {s['rsi_now']}",
+                "OBV": f"{s['obv_pct']}%",
+                "距 SMA60": f"{s['dist_sma60']:+.1f}%",
+                "20 日動能": f"{s['momentum_20d']:+.2f}%",
+                "進場價": f"${s['close']:.2f}",
+            })
+        st.dataframe(rev_data, hide_index=True, use_container_width=True)
+    else:
+        st.info("💤 本次掃描未發現新訊號（市場可能在強勢區或弱勢區，反轉條件不易觸發）")
+
+    # ─── 歷史訊號追蹤紀錄 ───
+    with st.expander(f"📋 歷史訊號追蹤紀錄（共 {tracking['total_signals']} 筆）", expanded=False):
+        if tracking['all_signals']:
+            history_data = []
+            # 由新到舊
+            sorted_sigs = sorted(tracking['all_signals'],
+                                  key=lambda x: x.get('date', ''), reverse=True)
+            for s in sorted_sigs[:50]:  # 顯示最近 50 筆
+                def fmt(v):
+                    if v is None: return "—"
+                    return f"{v:+.2f}%"
+                
+                # 分類標記
+                r10 = s.get('actual_10d')
+                if r10 is None:
+                    badge = "⏳ 待評估"
+                elif r10 >= 5:
+                    badge = "✅ 優秀"
+                elif r10 >= 0:
+                    badge = "👍 有效"
+                elif r10 >= -5:
+                    badge = "😟 不佳"
+                else:
+                    badge = "❌ 失敗"
+                
+                history_data.append({
+                    "股票": s['ticker'],
+                    "訊號日": s['date'],
+                    "RSI 反轉": f"{s['rsi_was']}→{s['rsi_now']}",
+                    "OBV": f"{s['obv_pct']}%",
+                    "進場價": f"${s['close']:.2f}",
+                    "+5日": fmt(s.get('actual_5d')),
+                    "+10日": fmt(s.get('actual_10d')),
+                    "+20日": fmt(s.get('actual_20d')),
+                    "結果": badge,
+                })
+            st.dataframe(history_data, hide_index=True, use_container_width=True)
+            st.caption(
+                f"💡 系統每天自動追蹤這些訊號的實際表現。**5 天後**填入「+5日」、"
+                f"**10 天後**填入「+10日」、**20 天後**填入「+20日」。"
+                f"累積到 25 個已評估樣本後，會給你「採用 / 放棄」建議。"
+            )
+        else:
+            st.caption("尚無歷史訊號紀錄（每次掃描到新訊號會自動加入）")
+
+
+# ==========================================
 # 📊 類股動能榜（原火箭類股探測器）
 # ==========================================
 try:
@@ -3598,9 +4218,16 @@ else:
 
     if naaim_status == "demo" or aaii_status == "demo":
         st.header("🏛️ 美股專屬：總經情緒雙核觀測站")
-        st.caption("ℹ️ 部分指標為示範數據（網站抓取失敗時自動退回，每日嘗試最多 5 次後使用快取）")
+        st.caption(
+            "ℹ️ 部分指標為示範數據（網站抓取失敗時自動退回，每日嘗試最多 5 次後使用快取）。"
+            "**NAAIM 與 AAII 每週四發布新數據**，狀態標籤顯示是否為即時/快取/示範資料。"
+        )
     else:
         st.header("🏛️ 美股專屬：總經情緒雙核觀測站")
+        st.caption(
+            "**NAAIM 大戶曝險 vs AAII 散戶情緒**：兩者每週四同日發布，量化方式不同（大戶用 % 曝險、散戶用看多/看空比例）。"
+            "**通常會方向一致，但敏感度不同** — NAAIM 反應較快、AAII 慣性較強。"
+        )
 
     bc1, bc2 = st.columns([0.6, 0.4])
 
