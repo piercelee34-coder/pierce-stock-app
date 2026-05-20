@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.03", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.04", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -279,42 +279,52 @@ def render_signal_context_panel(ctx, signal_label):
         "reversal": "妖股/低流動性，訊號最雜訊",
     }
     engine_hint = engine_hint_map.get(ctx["engine"], "")
-    
+
+    # [V26.04] 提示分色 helper：危險=紅、中等=橙、機會=綠、中性=灰
+    def _hc(hint: str) -> str:
+        """根據提示文字前綴回傳對應 CSS 顏色。"""
+        if hint.startswith("✅"):
+            return "#22c55e"   # 綠：機會 / 正面
+        if hint.startswith("⚠️"):
+            _danger_kw = ("風險", "回檔", "出走", "轉弱", "警惕", "跌破", "偏弱", "清倉")
+            return "#ef4444" if any(k in hint for k in _danger_kw) else "#f97316"
+        return "#9ca3af"       # 灰：中性
+
     # 距 52W 高點解讀
     d52 = ctx["dist_from_52w_high"]
-    if d52 < 5: d52_hint = "⚠️ 在頂部，逢高風險"
-    elif d52 < 15: d52_hint = "接近高點，注意過熱"
+    if d52 < 5:    d52_hint = "⚠️ 在頂部，逢高風險"
+    elif d52 < 15: d52_hint = "⚠️ 接近高點，注意過熱"
     elif d52 < 30: d52_hint = "✅ 健康位置，仍有空間"
-    else: d52_hint = "深度回檔/低位，反轉空間大"
-    
+    else:          d52_hint = "✅ 深度回檔/低位，反轉空間大"
+
     # 距 SMA60 解讀
     d60 = ctx["dist_from_sma60"]
-    if d60 > 15: d60_hint = "⚠️ 大幅偏離季線，可能回檔"
-    elif d60 > 5: d60_hint = "✅ 趨勢向上"
+    if d60 > 15:   d60_hint = "⚠️ 大幅偏離季線，可能回檔"
+    elif d60 > 5:  d60_hint = "✅ 趨勢向上"
     elif d60 > -5: d60_hint = "貼近季線，整理中"
-    else: d60_hint = "跌破季線，仍偏弱"
-    
+    else:          d60_hint = "⚠️ 跌破季線，仍偏弱"
+
     # 5 日量比解讀
     sv = ctx["short_vol_ratio"]
-    if sv > 1.5: sv_hint = "✅ 量增明顯，動能強"
-    elif sv > 1.1: sv_hint = "輕微量增"
+    if sv > 1.5:   sv_hint = "✅ 量增明顯，動能強"
+    elif sv > 1.1: sv_hint = "✅ 輕微量增"
     elif sv > 0.9: sv_hint = "量平"
-    else: sv_hint = "⚠️ 量縮，動能轉弱"
-    
+    else:          sv_hint = "⚠️ 量縮，動能轉弱"
+
     # 20 日動能解讀
     m20 = ctx["momentum_20d"]
-    if m20 > 25: m20_hint = "⚠️ 漲過頭，警惕回檔"
-    elif m20 > 10: m20_hint = "✅ 健康漲勢"
-    elif m20 > 0: m20_hint = "小漲，動能溫和"
+    if m20 > 25:    m20_hint = "⚠️ 漲過頭，警惕回檔"
+    elif m20 > 10:  m20_hint = "✅ 健康漲勢"
+    elif m20 > 0:   m20_hint = "小漲，動能溫和"
     elif m20 > -10: m20_hint = "下跌中"
-    else: m20_hint = "深度回檔，可能築底"
-    
+    else:           m20_hint = "深度回檔，可能築底"
+
     # OBV 解讀
     obv = ctx["obv_pct"]
-    if obv > 80: obv_hint = "✅ 資金強烈流入，籌碼集中"
+    if obv > 80:   obv_hint = "✅ 資金強烈流入，籌碼集中"
     elif obv > 50: obv_hint = "中位偏高，籌碼穩定"
     elif obv > 20: obv_hint = "中位偏低，籌碼分散中"
-    else: obv_hint = "⚠️ 籌碼正在出走"
+    else:          obv_hint = "⚠️ 籌碼正在出走"
     
     return f'''
 <div style="background:linear-gradient(135deg,#1a1a1c,#1a2a2c);
@@ -325,16 +335,16 @@ def render_signal_context_panel(ctx, signal_label):
   </div>
   <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; color:#ddd;">
     <div>
-      <div>個股性質：<b>{ctx["engine"]}</b> <span style="color:#888;font-size:11px;">（{engine_hint}）</span></div>
+      <div>個股性質：<b>{ctx["engine"]}</b> <span style="color:{_hc(engine_hint)};font-size:11px;">（{engine_hint}）</span></div>
       <div>大盤狀態：<span style="color:{mkt_color};font-weight:bold;">{mkt_icon}</span></div>
-      <div>距 52W 高點：<b>{ctx["dist_from_52w_high"]:.1f}%</b> <span style="color:#888;font-size:11px;">（{d52_hint}）</span></div>
-      <div>距 SMA60：<b>{ctx["dist_from_sma60"]:+.1f}%</b> <span style="color:#888;font-size:11px;">（{d60_hint}）</span></div>
+      <div>距 52W 高點：<b>{ctx["dist_from_52w_high"]:.1f}%</b> <span style="color:{_hc(d52_hint)};font-size:11px;">（{d52_hint}）</span></div>
+      <div>距 SMA60：<b>{ctx["dist_from_sma60"]:+.1f}%</b> <span style="color:{_hc(d60_hint)};font-size:11px;">（{d60_hint}）</span></div>
     </div>
     <div>
-      <div>5 日量比：<b>{ctx["short_vol_ratio"]:.2f}x</b> <span style="color:#888;font-size:11px;">（{sv_hint}）</span></div>
+      <div>5 日量比：<b>{ctx["short_vol_ratio"]:.2f}x</b> <span style="color:{_hc(sv_hint)};font-size:11px;">（{sv_hint}）</span></div>
       <div>20 日趨勢量：<b>{ctx["trend_vol_ratio"]:.2f}x</b></div>
-      <div>20 日動能：<b>{ctx["momentum_20d"]:+.2f}%</b> <span style="color:#888;font-size:11px;">（{m20_hint}）</span></div>
-      <div>OBV 累積位置：<b>{ctx["obv_pct"]:.0f}%</b> <span style="color:#888;font-size:11px;">（{obv_hint}）</span></div>
+      <div>20 日動能：<b>{ctx["momentum_20d"]:+.2f}%</b> <span style="color:{_hc(m20_hint)};font-size:11px;">（{m20_hint}）</span></div>
+      <div>OBV 累積位置：<b>{ctx["obv_pct"]:.0f}%</b> <span style="color:{_hc(obv_hint)};font-size:11px;">（{obv_hint}）</span></div>
     </div>
   </div>
   <div style="margin-top:10px; padding-top:8px; border-top:1px solid #2a2a2c;">
@@ -1902,7 +1912,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.03")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.04")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -2529,7 +2539,7 @@ else:
 
 # 把狀態存入 session 給圖下方面板顯示
 st.session_state['_ev_status_v29'] = _ev_status
-# [V26.03] 也把事件列表存起來，讓燈號上方面板可以讀取
+# [V26.04] 也把事件列表存起來，讓燈號上方面板可以讀取
 if 'events_for_chart' not in dir():
     events_for_chart = []
 st.session_state['_events_for_chart_v29'] = events_for_chart if events_for_chart else []
@@ -2812,7 +2822,7 @@ st.plotly_chart(fig, use_container_width=True)
 
 # ──────────────────────────────────────────────────────
 # ──────────────────────────────────────────────────────
-# [V26.03] 事件節點註解面板（走勢圖外、進場燈號上方）
+# [V26.04] 事件節點註解面板（走勢圖外、進場燈號上方）
 # ──────────────────────────────────────────────────────
 _ev_panel_events = st.session_state.get('_events_for_chart_v29', [])
 _ev_panel_drawn  = st.session_state.get('_ev_status_v29', {}).get("drawn_count", 0)
