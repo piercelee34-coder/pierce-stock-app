@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.01", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.02", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1902,7 +1902,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.01")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.02")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -4036,26 +4036,26 @@ if _REV_AVAILABLE:
 
 
 # ==========================================
-# 🎯 [V26.01 新增] AI 目標掃描器（S&P 100：依目標價上漲空間排序）
+# 🎯 [V26.02] AI 目標掃描器（可切換股票池：S&P 100 核心 / 擴大熱門 ~200）
 # ==========================================
 if _REV_AVAILABLE:  # 共用 reversal_scanner 的 generate_monte_carlo_bands
     st.markdown("---")
     tgt_hdr_col1, tgt_hdr_col2 = st.columns([5, 1])
-    tgt_hdr_col1.header("🎯 AI 目標掃描器（S&P 100）")
+    tgt_hdr_col1.header("🎯 AI 目標掃描器")
     if tgt_hdr_col2.button("🔄 強制刷新", key="target_force_refresh",
-                            help="清除快取重新跑蒙地卡羅（約 3-5 分鐘）"):
-        st.cache_data.clear()
+                            help="清除本掃描器的快取重新跑"):
+        # [V26.02] 只清掉本掃描器的 cache，不動其他掃描器
+        try:
+            _cached_target_scan.clear()
+        except Exception:
+            st.cache_data.clear()
         st.rerun()
 
     _tgt_anchor = get_cache_anchor()
-    st.caption(
-        "用蒙地卡羅 30 日推演的 **p50 中位數（短）/ p90 樂觀（長）** 當目標價，"
-        "計算每支股票的「目標 vs 現價」上漲空間。**演算法跟個股卡片右上「AI 目標 & 強弱」一致。**"
-        f" 每日 05:00 / 08:00 / 14:00 / 20:00 (台灣時間) 固定刷新 ｜ 當前錨點：`{_tgt_anchor}`"
-    )
 
-    # S&P 100 股票池（與 insider_sentiment 的 SP100_TICKERS 對齊，方便交叉比對）
-    _SP100_TGT_TICKERS = [
+    # ── 股票池定義 ──
+    # S&P 100 核心（與 insider_sentiment 的 SP100_TICKERS 對齊）
+    _SP100_CORE_TICKERS = [
         "NVDA", "MSFT", "AAPL", "GOOG", "GOOGL", "AMZN", "META", "TSLA", "BRK-B",
         "AVGO", "JPM", "V", "WMT", "LLY", "MA", "ORCL", "XOM", "JNJ", "HD", "ABBV",
         "PG", "BAC", "COST", "KO", "TMUS", "PLTR", "CVX", "CSCO", "NFLX", "ABT",
@@ -4068,26 +4068,83 @@ if _REV_AVAILABLE:  # 共用 reversal_scanner 的 generate_monte_carlo_bands
         "MO", "PYPL", "FI", "ICE", "DUK", "AMAT", "TGT", "MDLZ", "INTC", "USB",
     ]
 
-    @st.cache_data(ttl=21600, show_spinner="🎯 正在掃描 S&P 100 AI 目標（首次約 3-5 分鐘）...")
-    def _cached_target_scan(anchor):
-        """批次跑 100 檔的 MC + 目標價計算
+    # [V26.02] 額外熱門股票（補齊 SP100 之外的散戶熱門股，含 SNDK）
+    _EXTRA_POPULAR_TICKERS = [
+        # 半導體 / 記憶體 / AI 硬體
+        "SNDK", "WDC", "MRVL", "ON", "MCHP", "KLAC", "LRCX", "ASML", "TSM", "ARM",
+        "NXPI", "SMCI", "ANET", "ALAB", "ENTG", "SWKS", "QRVO", "TER", "MPWR",
+        # 雲端 / SaaS
+        "SNOW", "NET", "DDOG", "MDB", "CRWD", "ZS", "OKTA", "ZM", "TEAM", "WDAY",
+        "SHOP", "TWLO", "NTNX", "ESTC", "HUBS", "DOCU", "DBX", "ASAN", "MNDY", "GTLB",
+        # AI / 量子 / 數據
+        "AI", "PATH", "SOUN", "IONQ", "RGTI", "QBTS", "BBAI",
+        # 消費 / 網路 / 媒體
+        "ROKU", "PINS", "SPOT", "ABNB", "DASH", "U", "RBLX", "EA", "TTWO", "ETSY",
+        "EBAY", "W", "CHWY", "DKNG", "BMBL", "MTCH", "WBD", "PARA",
+        # 金融科技
+        "COIN", "HOOD", "AFRM", "UPST", "SOFI", "NU", "MELI",
+        # 電動車 / 汽車
+        "RIVN", "LCID", "NIO", "XPEV", "LI", "F", "GM",
+        # 中概股
+        "BABA", "JD", "PDD", "BIDU", "BILI", "TME", "VIPS",
+        # 醫療 / 生技
+        "MRNA", "BNTX", "BIIB", "ILMN", "DXCM", "EW", "ZTS", "ALGN", "IDXX", "GH",
+        # 能源
+        "SLB", "OXY", "EOG", "MPC", "VLO", "PSX", "DVN", "FANG", "COP",
+        # 旅遊 / 航空 / 服務
+        "UBER", "LYFT", "DAL", "UAL", "AAL", "CCL", "RCL", "MAR", "HLT",
+        # 其他熱門
+        "SE", "GRAB",
+    ]
+
+    # 去重（SP100 + extra，保留順序）
+    _EXTENDED_TGT_TICKERS = list(dict.fromkeys(_SP100_CORE_TICKERS + _EXTRA_POPULAR_TICKERS))
+
+    _TGT_UNIVERSE_MAP = {
+        f"🎯 S&P 100 核心（{len(_SP100_CORE_TICKERS)} 檔，~3-5 分鐘）": ("core", _SP100_CORE_TICKERS),
+        f"🚀 擴大熱門（{len(_EXTENDED_TGT_TICKERS)} 檔，~7-12 分鐘）": ("extended", _EXTENDED_TGT_TICKERS),
+    }
+
+    # ── 範圍選擇器（一定要在 scan 前）──
+    universe_label = st.radio(
+        "📊 掃描範圍",
+        list(_TGT_UNIVERSE_MAP.keys()),
+        horizontal=True,
+        key="tgt_universe",
+        help="切換不會立刻重跑 — 各範圍快取獨立，已掃過的會秒回。",
+    )
+    universe_key, selected_tickers = _TGT_UNIVERSE_MAP[universe_label]
+
+    st.caption(
+        "用蒙地卡羅 30 日推演的 **p50 中位數（短）/ p90 樂觀（長）** 當目標價，"
+        "計算每支股票的「目標 vs 現價」上漲空間。**演算法跟個股卡片右上「AI 目標 & 強弱」一致。**"
+        f" 每日 05:00 / 08:00 / 14:00 / 20:00 (台灣時間) 固定刷新 ｜ "
+        f"當前範圍：**{len(selected_tickers)} 檔** ｜ 錨點：`{_tgt_anchor}`"
+    )
+
+    @st.cache_data(ttl=21600, show_spinner="🎯 正在掃描 AI 目標（首次需數分鐘，視範圍而定）...")
+    def _cached_target_scan(anchor, universe_key, tickers_tuple):
+        """批次跑指定股票池的 MC + 目標價計算
         重用既有 calculate_indicators() + predict_target_and_rating() + generate_monte_carlo_bands()
+        cache key 跟 anchor + universe_key 綁定，不同範圍快取獨立。
         """
+        tickers = list(tickers_tuple)
         results = []
-        # 批次下載提升效率（yf 一次抓 100 檔比 100 次單抓快很多）
+        # 批次下載提升效率（yf 一次抓很多檔比逐檔快）
         try:
             batch = yf.download(
-                _SP100_TGT_TICKERS, period="1y",
+                tickers, period="1y",
                 auto_adjust=False, group_by="ticker",
                 progress=False, threads=True,
             )
         except Exception:
             batch = None
 
-        for tk in _SP100_TGT_TICKERS:
+        for tk in tickers:
             try:
                 # 從 batch 取出單股 df；若 batch 失敗則退回單檔抓
-                if batch is not None and tk in batch.columns.get_level_values(0):
+                if batch is not None and isinstance(batch.columns, pd.MultiIndex) \
+                        and tk in batch.columns.get_level_values(0):
                     hist = batch[tk].dropna(how="all").copy()
                 else:
                     hist = yf.Ticker(tk).history(period="1y", auto_adjust=False)
@@ -4142,10 +4199,10 @@ if _REV_AVAILABLE:  # 共用 reversal_scanner 的 generate_monte_carlo_bands
                 })
             except Exception:
                 continue
-        return {"results": results, "scanned": len(_SP100_TGT_TICKERS), "ok": len(results)}
+        return {"results": results, "scanned": len(tickers), "ok": len(results)}
 
     try:
-        target_scan = _cached_target_scan(_tgt_anchor)
+        target_scan = _cached_target_scan(_tgt_anchor, universe_key, tuple(selected_tickers))
     except Exception as e:
         st.error(f"AI 目標掃描失敗：{e}")
         target_scan = {"results": [], "scanned": 0, "ok": 0}
