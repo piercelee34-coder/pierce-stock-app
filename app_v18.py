@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.01", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1902,7 +1902,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.01")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -3292,22 +3292,54 @@ if _CRISIS_AVAILABLE:
 # ==========================================
 if _INSIDER_AVAILABLE:
     st.markdown("---")
-    st.header("🕵️ 內部人賣壓指數 (SEC Form 4)")
+    # [V26.01] 標題列加強制刷新按鈕
+    ins_hdr_col1, ins_hdr_col2 = st.columns([5, 1])
+    ins_hdr_col1.header("🕵️ 內部人賣壓指數 (SEC Form 4)")
+    _force_insider_refresh = ins_hdr_col2.button(
+        "🔄 強制刷新", key="insider_force_refresh",
+        help="清除 cache 重新抓 SEC 資料（約 2-3 分鐘）",
+    )
+
+    _ins_anchor = get_cache_anchor()
+
+    def _fmt_anchor(a):
+        """anchor "20260520_14" → "2026-05-20 14:00"""
+        try:
+            return f"{a[:4]}-{a[4:6]}-{a[6:8]} {a[9:]}:00"
+        except Exception:
+            return a
+
     st.caption(
         "追蹤 S&P 100 大型權值股近 30 日的 CEO/CFO/Director 開放市場交易。"
         "賣壓比例（賣出金額 ÷ 總交易金額）越高表示內部人越看空。"
-        "**每天 05:00 / 08:00 / 14:00 / 20:00 (台灣時間) 固定刷新**"
+        f"**每天 05:00 / 08:00 / 14:00 / 20:00 (台灣時間) 固定刷新** ｜ "
+        f"當前錨點：`{_ins_anchor}`"
     )
 
+    # [V26.01] 把 anchor 傳進 insider_sentiment 模組，
+    # 讓它的 disk cache key 也跟 anchor 連動（解決多裝置不同步問題）
     @st.cache_data(ttl=21600, show_spinner="🕵️ 正在抓取 SEC Form 4（首次約 2-3 分鐘）...")
     def _cached_insider(anchor):
-        return insider_sentiment.get_insider_pressure_index()
+        return insider_sentiment.get_insider_pressure_index(anchor=anchor)
 
-    try:
-        insider = _cached_insider(get_cache_anchor())
-    except Exception as e:
-        st.error(f"內部人賣壓計算失敗：{e}")
-        insider = None
+    if _force_insider_refresh:
+        # 清 Streamlit cache + 強制 module 端 force_refresh（會跳過 disk cache 重抓）
+        st.cache_data.clear()
+        try:
+            insider = insider_sentiment.get_insider_pressure_index(
+                force_refresh=True, anchor=_ins_anchor
+            )
+        except Exception as e:
+            st.error(f"強制刷新失敗：{e}")
+            insider = None
+        else:
+            st.success("✅ 已重新抓取 SEC Form 4 資料")
+    else:
+        try:
+            insider = _cached_insider(_ins_anchor)
+        except Exception as e:
+            st.error(f"內部人賣壓計算失敗：{e}")
+            insider = None
 
     if insider and insider.get("data_status"):
         score = insider["score"]
@@ -3317,6 +3349,8 @@ if _INSIDER_AVAILABLE:
         # 主卡片
         ins_main_col1, ins_main_col2, ins_main_col3 = st.columns([2, 1, 1])
         with ins_main_col1:
+            # [V26.01] 用 anchor 時間取代 updated_at（多裝置一致）
+            _module_stamp = insider.get("updated_at", "—")
             st.markdown(
                 f'<div style="background:linear-gradient(135deg,#1a1a1c 0%,#2a1c1c 100%);'
                 f'padding:20px;border-radius:10px;border:2px solid {level_color};'
@@ -3330,8 +3364,11 @@ if _INSIDER_AVAILABLE:
                 f'display:inline-block;margin-top:8px;font-weight:bold;">'
                 f'{level_text}'
                 f'</div>'
-                f'<div style="color:#666;font-size:11px;margin-top:8px;">'
-                f'更新於 {insider.get("updated_at","—")}'
+                f'<div style="color:#aaa;font-size:11px;margin-top:8px;">'
+                f'資料快照：{_fmt_anchor(_ins_anchor)}'
+                f'</div>'
+                f'<div style="color:#555;font-size:10px;margin-top:2px;">'
+                f'(模組執行時間：{_module_stamp})'
                 f'</div>'
                 f'</div>',
                 unsafe_allow_html=True,
@@ -3996,6 +4033,209 @@ if _REV_AVAILABLE:
             )
         else:
             st.caption("尚無歷史訊號紀錄（每次掃描到新訊號會自動加入）")
+
+
+# ==========================================
+# 🎯 [V26.01 新增] AI 目標掃描器（S&P 100：依目標價上漲空間排序）
+# ==========================================
+if _REV_AVAILABLE:  # 共用 reversal_scanner 的 generate_monte_carlo_bands
+    st.markdown("---")
+    tgt_hdr_col1, tgt_hdr_col2 = st.columns([5, 1])
+    tgt_hdr_col1.header("🎯 AI 目標掃描器（S&P 100）")
+    if tgt_hdr_col2.button("🔄 強制刷新", key="target_force_refresh",
+                            help="清除快取重新跑蒙地卡羅（約 3-5 分鐘）"):
+        st.cache_data.clear()
+        st.rerun()
+
+    _tgt_anchor = get_cache_anchor()
+    st.caption(
+        "用蒙地卡羅 30 日推演的 **p50 中位數（短）/ p90 樂觀（長）** 當目標價，"
+        "計算每支股票的「目標 vs 現價」上漲空間。**演算法跟個股卡片右上「AI 目標 & 強弱」一致。**"
+        f" 每日 05:00 / 08:00 / 14:00 / 20:00 (台灣時間) 固定刷新 ｜ 當前錨點：`{_tgt_anchor}`"
+    )
+
+    # S&P 100 股票池（與 insider_sentiment 的 SP100_TICKERS 對齊，方便交叉比對）
+    _SP100_TGT_TICKERS = [
+        "NVDA", "MSFT", "AAPL", "GOOG", "GOOGL", "AMZN", "META", "TSLA", "BRK-B",
+        "AVGO", "JPM", "V", "WMT", "LLY", "MA", "ORCL", "XOM", "JNJ", "HD", "ABBV",
+        "PG", "BAC", "COST", "KO", "TMUS", "PLTR", "CVX", "CSCO", "NFLX", "ABT",
+        "WFC", "PEP", "CRM", "MRK", "ACN", "TMO", "AMD", "MCD", "GE", "ADBE",
+        "DIS", "AXP", "LIN", "IBM", "CAT", "PM", "QCOM", "MS", "VZ", "GS",
+        "INTU", "T", "ISRG", "RTX", "TXN", "NEE", "BX", "AMGN", "BKNG", "PFE",
+        "C", "SCHW", "UPS", "LOW", "BLK", "DHR", "NOW", "UNH", "HON", "ELV",
+        "SPGI", "ADP", "TJX", "SYK", "ETN", "DE", "GILD", "VRTX", "MMC", "PGR",
+        "MDT", "PANW", "REGN", "MU", "ADI", "SBUX", "LMT", "BSX", "CMCSA", "BMY",
+        "MO", "PYPL", "FI", "ICE", "DUK", "AMAT", "TGT", "MDLZ", "INTC", "USB",
+    ]
+
+    @st.cache_data(ttl=21600, show_spinner="🎯 正在掃描 S&P 100 AI 目標（首次約 3-5 分鐘）...")
+    def _cached_target_scan(anchor):
+        """批次跑 100 檔的 MC + 目標價計算
+        重用既有 calculate_indicators() + predict_target_and_rating() + generate_monte_carlo_bands()
+        """
+        results = []
+        # 批次下載提升效率（yf 一次抓 100 檔比 100 次單抓快很多）
+        try:
+            batch = yf.download(
+                _SP100_TGT_TICKERS, period="1y",
+                auto_adjust=False, group_by="ticker",
+                progress=False, threads=True,
+            )
+        except Exception:
+            batch = None
+
+        for tk in _SP100_TGT_TICKERS:
+            try:
+                # 從 batch 取出單股 df；若 batch 失敗則退回單檔抓
+                if batch is not None and tk in batch.columns.get_level_values(0):
+                    hist = batch[tk].dropna(how="all").copy()
+                else:
+                    hist = yf.Ticker(tk).history(period="1y", auto_adjust=False)
+
+                if hist is None or hist.empty or len(hist) < 80:
+                    continue
+
+                hist = calculate_indicators(hist)
+                if "Bollinger_Upper" not in hist.columns:
+                    continue
+                if pd.isna(hist["Bollinger_Upper"].iloc[-1]) or pd.isna(hist["SMA_20"].iloc[-1]):
+                    continue
+
+                price = float(hist["Close"].iloc[-1])
+                if price <= 0:
+                    continue
+
+                p_data = hist.tail(120)
+                if len(p_data) < 60:
+                    continue
+
+                # 跑 MC（drift_adjust=0，batch 掃描不算 7 維 context 漂移，
+                # 跟個股卡片接近但不完全相同；數字差約 1-3%，方向與順序一致）
+                mc = _rev.generate_monte_carlo_bands(
+                    p_data, days=30, n_simulations=1000, drift_adjust=0.0
+                )
+                if mc is None:
+                    continue
+
+                p10_final = float(mc["p10"][-1])
+                p50_final = float(mc["p50"][-1])
+                p90_final = float(mc["p90"][-1])
+
+                # 用既有函式算目標 + 評等（跟個股卡片完全一致）
+                _mc_for_target = {"p50_final": p50_final, "p90_final": p90_final}
+                t_s, t_l, rating = predict_target_and_rating(hist, _mc_for_target)
+
+                upside_s = (t_s - price) / price * 100
+                upside_l = (t_l - price) / price * 100
+                downside = (p10_final - price) / price * 100
+
+                results.append({
+                    "ticker": tk,
+                    "price": price,
+                    "target_s": t_s,
+                    "target_l": t_l,
+                    "p10": p10_final,
+                    "upside_s": upside_s,
+                    "upside_l": upside_l,
+                    "downside": downside,
+                    "rating": rating,
+                })
+            except Exception:
+                continue
+        return {"results": results, "scanned": len(_SP100_TGT_TICKERS), "ok": len(results)}
+
+    try:
+        target_scan = _cached_target_scan(_tgt_anchor)
+    except Exception as e:
+        st.error(f"AI 目標掃描失敗：{e}")
+        target_scan = {"results": [], "scanned": 0, "ok": 0}
+
+    res_list = target_scan.get("results", [])
+
+    # ── 統計摘要 ──
+    if res_list:
+        avg_up_s = float(np.mean([r["upside_s"] for r in res_list]))
+        avg_up_l = float(np.mean([r["upside_l"] for r in res_list]))
+        positive_count = sum(1 for r in res_list if r["upside_s"] > 0)
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("掃描成功", f"{target_scan['ok']} / {target_scan['scanned']}",
+                  f"{target_scan['ok']/max(target_scan['scanned'],1)*100:.0f}%")
+        s2.metric("平均短期空間", f"{avg_up_s:+.2f}%")
+        s3.metric("平均長期空間", f"{avg_up_l:+.2f}%")
+        s4.metric("MC 看多比例", f"{positive_count}/{target_scan['ok']}",
+                  f"{positive_count/max(target_scan['ok'],1)*100:.0f}% 短期上漲")
+
+    # ── 控制列 ──
+    tgt_ctrl1, tgt_ctrl2, tgt_ctrl3 = st.columns([2, 1.2, 1])
+    sort_mode = tgt_ctrl1.radio(
+        "排序依據",
+        ["📈 短期上漲空間 (MC p50)", "🚀 長期上漲空間 (MC p90)", "📉 下跌風險 (MC p10)"],
+        horizontal=True, key="tgt_sort_mode",
+    )
+    top_n_tgt = tgt_ctrl2.radio("顯示 Top N", [10, 20, 30, 50],
+                                 horizontal=True, index=2, key="tgt_topn")
+    only_uptrend = tgt_ctrl3.checkbox("僅顯示強勢股", value=False, key="tgt_uptrend_only",
+                                       help="只顯示現價 > SMA_20 的股票")
+
+    # ── 篩選 + 排序 ──
+    filtered = list(res_list)
+    if only_uptrend:
+        filtered = [r for r in filtered if r["rating"] == "強勢"]
+
+    if "短期" in sort_mode:
+        filtered = sorted(filtered, key=lambda r: r["upside_s"], reverse=True)
+        sort_key_label = "短期空間"
+    elif "長期" in sort_mode:
+        filtered = sorted(filtered, key=lambda r: r["upside_l"], reverse=True)
+        sort_key_label = "長期空間"
+    else:
+        filtered = sorted(filtered, key=lambda r: r["downside"])  # 越負（下跌風險越大）越前面
+        sort_key_label = "下跌風險"
+
+    # ── 結果表 ──
+    if filtered:
+        st.subheader(f"🎯 排序結果 TOP {min(top_n_tgt, len(filtered))}（依「{sort_key_label}」）")
+        rows = []
+        for i, r in enumerate(filtered[:top_n_tgt], 1):
+            name = get_stock_name(r["ticker"])
+            disp = f"{name} ({r['ticker']})" if name and name != r["ticker"] else r["ticker"]
+            rating_disp = "🦁 強勢" if r["rating"] == "強勢" else "🐢 持有"
+            rows.append({
+                "#": i,
+                "股票": disp,
+                "現價": f"${r['price']:.2f}",
+                "短期目標 p50": f"${r['target_s']:.2f}",
+                "短期空間": f"{r['upside_s']:+.2f}%",
+                "長期目標 p90": f"${r['target_l']:.2f}",
+                "長期空間": f"{r['upside_l']:+.2f}%",
+                "下跌風險 p10": f"{r['downside']:+.2f}%",
+                "強弱": rating_disp,
+            })
+        st.dataframe(rows, hide_index=True, use_container_width=True)
+    elif res_list:
+        st.info("⏳ 沒有符合篩選條件的股票。試試取消「僅顯示強勢股」勾選。")
+    else:
+        st.info("⏳ 掃描中或失敗。請等待或按「強制刷新」。")
+
+    # ── 說明 ──
+    with st.expander("💡 演算法與使用方式", expanded=False):
+        st.markdown("""
+**演算法**：跟個股卡片右上「AI 目標 & 強弱」用一樣的蒙地卡羅 30 日推演。
+
+- **短期目標 (p50)**：1000 次模擬的中位數，代表「最可能達到的價格」
+- **長期目標 (p90)**：1000 次模擬的第 90 百分位，代表「樂觀情境上緣」
+- **下跌風險 (p10)**：第 10 百分位，代表「悲觀情境下緣」
+
+**三種排序怎麼用**：
+- **短期上漲空間** → 找 MC 推演認為「現價偏低、最有機會回升」的股 → 偏短打
+- **長期上漲空間** → 找 p90 比現價高最多的「飆股潛力股」→ 偏長放
+- **下跌風險** → 看 p10 最差的股（可能避開，或拿來做空研究）
+
+**注意**：
+- 跟個股卡片數字會有 1-3% 的差異 — batch 掃描沒套用 7 維 context 的漂移調整，但方向跟順序一致。
+- 蒙地卡羅是統計推演，不保證實際走勢。應搭配「反轉預警」「悄悄吸籌」「內部人賣壓」綜合判斷。
+- 100 檔掃完約 3-5 分鐘，結果快取 6 小時。
+""")
 
 
 # ==========================================
