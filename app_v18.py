@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.02", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.03", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1902,7 +1902,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.02")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.03")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -2529,6 +2529,10 @@ else:
 
 # 把狀態存入 session 給圖下方面板顯示
 st.session_state['_ev_status_v29'] = _ev_status
+# [V26.03] 也把事件列表存起來，讓燈號上方面板可以讀取
+if 'events_for_chart' not in dir():
+    events_for_chart = []
+st.session_state['_events_for_chart_v29'] = events_for_chart if events_for_chart else []
 
 
 fig.add_hline(y=abs_high, line_dash="dot", line_color="#ef4444", annotation_text=f"🔴 波段最高<br>${abs_high:.2f}", annotation_font_color="#ef4444", annotation_position="top right", annotation_align="right", opacity=1.0, layer="above", row=1, col=1)
@@ -2805,6 +2809,154 @@ fig.update_layout(
     margin=dict(t=10, b=10, l=10, r=10)
 )
 st.plotly_chart(fig, use_container_width=True)
+
+# ──────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────
+# [V26.03] 事件節點註解面板（走勢圖外、進場燈號上方）
+# ──────────────────────────────────────────────────────
+_ev_panel_events = st.session_state.get('_events_for_chart_v29', [])
+_ev_panel_drawn  = st.session_state.get('_ev_status_v29', {}).get("drawn_count", 0)
+
+# 每種事件的靜態說明（顏色跟走勢圖上一致）
+_EV_META = {
+    "CPI":  {
+        "icon": "📈", "color": "#eab308",
+        "title": "CPI（消費者物價指數）",
+        "impact": "高影響",
+        "impact_color": "#ef4444",
+        "desc": "衡量通膨水位。高於預期 → 聯準會更鷹 → 股市偏空壓；低於預期 → 降息預期升 → 股市偏多衝。發布前 1-2 天常出現「盤整壓縮」，發布後 30 分鐘是最大波動窗口。",
+        "strategy": "避免在 CPI 前一天加碼。若本倉有獲利，可考慮先鎖利一半等結果出來再決定。",
+    },
+    "PPI":  {
+        "icon": "📉", "color": "#9ca3af",
+        "title": "PPI（生產者物價指數）",
+        "impact": "中影響",
+        "impact_color": "#f97316",
+        "desc": "CPI 的前導指標。PPI 高 → 成本壓力轉嫁 → 未來 CPI 可能跟上。對個股影響較小，但若 PPI 大幅超預期，往往拉升整體市場緊張情緒。",
+        "strategy": "PPI 單獨影響較小，但若同週有 CPI / FOMC，要合併評估。若在 Stage 1-2 的吸籌期，PPI 造成的下殺反而是很好的加碼時機。",
+    },
+    "FOMC": {
+        "icon": "🏛️", "color": "#f97316",
+        "title": "FOMC（聯準會利率決策）",
+        "impact": "極高影響",
+        "impact_color": "#ef4444",
+        "desc": "一年 8 次，每次都可能改變整體市場方向。不只看「升/降/不動」，更看 Dot Plot 和 Powell 記者會的措辭。即使「不動」但措辭偏鷹也會跌。「降息」但措辭猶豫也可能先漲後跌。",
+        "strategy": "⚠️ FOMC 當天不建議開新倉。現有持倉若在高獲利位，可縮小倉位避開噪音。FOMC 後 1-3 天市場才能消化，那個方向才是真正趨勢。",
+    },
+    "非農": {
+        "icon": "💼", "color": "#3b82f6",
+        "title": "非農就業（NFP）",
+        "impact": "高影響",
+        "impact_color": "#ef4444",
+        "desc": "每月第一個週五發布。就業強勁 → 聯準會沒理由急降息 → 偏空（對成長股）；就業疲弱 → 降息預期升 → 偏多。近年「壞消息 = 好消息」邏輯依然存在於成長股。",
+        "strategy": "科技 / 成長股在非農弱數據時往往反彈。若走勢圖在 Stage 1-2（吸籌乖離底），非農後的急殺有時是最佳進場窗口。",
+    },
+    "財報": {
+        "icon": "📊", "color": "#ef4444",
+        "title": "財報日（Earnings）",
+        "impact": "個股極高影響",
+        "impact_color": "#ef4444",
+        "desc": "個股最大波動催化劑。財報前隱含波動率（IV）攀升，財報後 IV crush（IV 崩塌），即使方向正確也可能因 IV crush 使選擇權盈虧縮水。財報後跳空缺口常是新趨勢的起點。",
+        "strategy": "⚠️ 持有到財報 = 賭注，不是交易。若你的倉位基於技術面訊號，財報前應評估是否減倉。財報後若跳空站上前高 → 可能進入新一輪主升段（Stage 4 確認）。",
+    },
+}
+
+# 只顯示這支股票圖上真正有的事件種類（不顯示空洞的通則）
+if _ev_panel_events and _ev_panel_drawn > 0:
+    # 收集圖上出現的事件 type（去重 + 保留原始日期）
+    _seen_types: dict[str, list] = {}
+    _today = pd.Timestamp.now(tz="UTC").normalize()
+    for ev in _ev_panel_events:
+        ev_type = ev.get("type", "")
+        # 事件 type 可能是 "CPI", "PPI", "FOMC", "非農", "財報" 等
+        # 也可能帶有額外文字（如 "財報 (MU)"）→ 取第一個詞
+        ev_key = ev_type.split()[0] if ev_type else ""
+        if ev_key not in _EV_META:
+            ev_key = next((k for k in _EV_META if k in ev_type), None)
+        if not ev_key:
+            continue
+        if ev_key not in _seen_types:
+            _seen_types[ev_key] = []
+        _seen_types[ev_key].append(ev.get("date", None))
+
+    if _seen_types:
+        # 把事件依日期排序（最近的先）
+        def _days_to_event(dates):
+            valid = [d for d in dates if d is not None]
+            if not valid:
+                return 9999
+            deltas = [abs((pd.Timestamp(d).tz_localize(None) - _today.tz_localize(None)).days)
+                      if pd.Timestamp(d).tzinfo is None
+                      else abs((pd.Timestamp(d).tz_localize(None) - _today.tz_localize(None)).days)
+                      for d in valid]
+            return min(deltas)
+
+        _sorted_types = sorted(_seen_types.keys(), key=lambda k: _days_to_event(_seen_types[k]))
+
+        with st.expander(
+            f"🔔 走勢圖上的事件節點說明（{len(_seen_types)} 種事件，點開看交易含義）",
+            expanded=True,
+        ):
+            _cols = st.columns(min(len(_sorted_types), 3))
+            for ci, ev_key in enumerate(_sorted_types):
+                meta = _EV_META[ev_key]
+                # 找最近一個日期（未來 or 今天）
+                _upcoming = []
+                _past = []
+                for d in _seen_types[ev_key]:
+                    if d is None:
+                        continue
+                    d_ts = pd.Timestamp(d)
+                    if d_ts.tzinfo is not None:
+                        d_ts = d_ts.tz_localize(None)
+                    if d_ts >= _today.tz_localize(None):
+                        _upcoming.append(d_ts)
+                    else:
+                        _past.append(d_ts)
+                _upcoming.sort()
+                _past.sort(reverse=True)
+
+                if _upcoming:
+                    _next_d = _upcoming[0]
+                    _days_left = (_next_d - _today.tz_localize(None)).days
+                    _date_badge = (
+                        f'<span style="background:#22c55e22;color:#22c55e;'
+                        f'border:1px solid #22c55e;padding:2px 7px;border-radius:12px;font-size:11px;">'
+                        f'📅 {_next_d.strftime("%m/%d")} · {_days_left} 天後</span>'
+                    )
+                elif _past:
+                    _last_d = _past[0]
+                    _days_ago = (_today.tz_localize(None) - _last_d).days
+                    _date_badge = (
+                        f'<span style="background:#44444422;color:#888;'
+                        f'border:1px solid #555;padding:2px 7px;border-radius:12px;font-size:11px;">'
+                        f'📅 {_last_d.strftime("%m/%d")} · {_days_ago} 天前</span>'
+                    )
+                else:
+                    _date_badge = ""
+
+                with _cols[ci % len(_cols)]:
+                    st.markdown(
+                        f'<div style="background:#141416;border:1px solid {meta["color"]}44;'
+                        f'border-left:3px solid {meta["color"]};border-radius:8px;padding:12px;'
+                        f'margin-bottom:8px;">'
+                        f'<div style="display:flex;justify-content:space-between;align-items:flex-start;'
+                        f'flex-wrap:wrap;gap:4px;margin-bottom:8px;">'
+                        f'<span style="color:{meta["color"]};font-weight:bold;font-size:14px;">'
+                        f'{meta["icon"]} {meta["title"]}</span>'
+                        f'<span style="background:{meta["impact_color"]}22;color:{meta["impact_color"]};'
+                        f'border:1px solid {meta["impact_color"]};padding:1px 7px;border-radius:10px;'
+                        f'font-size:10px;white-space:nowrap;">{meta["impact"]}</span>'
+                        f'</div>'
+                        f'{_date_badge}<br>' if _date_badge else ''
+                        f'<div style="color:#ccc;font-size:12px;line-height:1.6;margin-top:6px;">'
+                        f'{meta["desc"]}</div>'
+                        f'<div style="background:{meta["color"]}11;border-radius:5px;padding:7px 9px;'
+                        f'margin-top:8px;color:#aaa;font-size:11px;">'
+                        f'<span style="color:{meta["color"]};">💡 交易策略</span><br>{meta["strategy"]}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
 
 # ──────────────────────────────────────────────────────
 # [v27] 進場節奏燈號（依最近訊號顯示目前位置）
