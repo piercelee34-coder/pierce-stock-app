@@ -1,5 +1,16 @@
 """
 insider_sentiment.py — SEC Form 4 內部人賣壓指數
+版本 V26.01 — 修復 disk cache 不跟 anchor 連動的 bug
+
+[V26.01 修復]
+  舊版 disk cache key 固定為 "insider_pressure"、TTL 24h →
+    導致台灣時間 05:00 / 08:00 / 14:00 / 20:00 換 anchor 後，
+    Streamlit Cloud 容器內部的 .insider_cache/insider_pressure.json 還在有效期
+    → 永遠回傳舊資料 → 多台裝置開 app 時看到不同的快照時間。
+  新版 cache key 加上 anchor 後綴 (insider_pressure_<anchor>)，
+    anchor 變了 → 新 key → cache miss → 真的重抓。
+    TTL 縮到 7h（略大於 6h anchor 間隔，當 belt-and-suspenders 保險）。
+    順手清理超過 48h 的舊 cache 檔避免 disk 塞爆。
 
 直接從 SEC EDGAR 公開 API（免費、不用 key）抓取 Form 4 申報資料。
 SEC 要求：
@@ -96,6 +107,30 @@ def cache_set(key, data):
     try:
         with open(_cache_path(key), "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, default=str)
+    except Exception:
+        pass
+
+
+def cache_cleanup_stale(prefix="insider_pressure_", max_age_hours=48):
+    """[V26.01] 順手清掉超過 max_age_hours 的舊 anchor cache 檔。
+    
+    因為 cache key 改成 anchor-aware 後，每天會產生 4 個新檔（4 個 anchor），
+    不清會越塞越多。只清同 prefix 的，避免誤刪 cik_map。
+    """
+    try:
+        if not os.path.isdir(CACHE_DIR):
+            return
+        now = time.time()
+        for fn in os.listdir(CACHE_DIR):
+            if not fn.startswith(prefix):
+                continue
+            full = os.path.join(CACHE_DIR, fn)
+            try:
+                age_h = (now - os.path.getmtime(full)) / 3600
+                if age_h > max_age_hours:
+                    os.remove(full)
+            except Exception:
+                continue
     except Exception:
         pass
 
@@ -307,7 +342,7 @@ def _process_ticker(ticker, cik):
 # ──────────────────────────────────────────────────────
 # 主函式
 # ──────────────────────────────────────────────────────
-def get_insider_pressure_index(force_refresh=False, top_n=100):
+def get_insider_pressure_index(force_refresh=False, top_n=100, anchor=None):
     """
     回傳：
     {
@@ -320,12 +355,28 @@ def get_insider_pressure_index(force_refresh=False, top_n=100):
       "data_status": bool,
       "updated_at":  str,
     }
+
+    [V26.01] 新增 anchor 參數：
+      若 anchor 提供（如 "20260520_14"）→ cache_key = "insider_pressure_20260520_14"
+      anchor 變了 → 新 key → cache miss → 真的重抓
+      anchor 未提供時退回舊行為（固定 key + 24h TTL，向後相容）
     """
-    cache_key = "insider_pressure"
+    # [V26.01] cache key 跟 anchor 綁定：anchor 變了就強制重抓
+    if anchor:
+        cache_key = f"insider_pressure_{anchor}"
+        cache_ttl_h = 7  # 略大於 6 小時 anchor 間隔
+    else:
+        # 向後相容：沒給 anchor 用舊行為
+        cache_key = "insider_pressure"
+        cache_ttl_h = 24
+
     if not force_refresh:
-        cached = cache_get(cache_key, max_age_hours=24)
+        cached = cache_get(cache_key, max_age_hours=cache_ttl_h)
         if cached:
             return cached
+
+    # [V26.01] 順手清理 stale 檔（>48h），避免 disk 塞爆
+    cache_cleanup_stale(prefix="insider_pressure_", max_age_hours=48)
 
     cik_map = get_cik_map()
     if not cik_map:
