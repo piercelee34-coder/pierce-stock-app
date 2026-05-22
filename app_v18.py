@@ -278,9 +278,12 @@ def fetch_fundamental_snapshot(ticker, df):
                 else:
                     result["vol_vs_avg_hint"] = "量平，正常"
 
-        # ── Market Cap（用 cache 保護，避免重複呼叫）──
+        # ── Market Cap（加 cache 避免重複 API call — Rule 1 修復）──
         try:
-            info = yf.Ticker(ticker).info
+            @st.cache_data(ttl=3600, show_spinner=False)
+            def _cached_ticker_info(_ticker):
+                return yf.Ticker(_ticker).info
+            info = _cached_ticker_info(ticker)
             mcap = info.get("marketCap", None)
             if mcap:
                 result["market_cap"] = mcap
@@ -299,8 +302,9 @@ def fetch_fundamental_snapshot(ticker, df):
                 else:
                     result["mcap_tier"] = "micro"
                     result["mcap_display"] = f"${mcap/1e6:.0f}M（微型 ⚠️）"
-        except Exception:
-            pass
+        except Exception as _mcap_err:
+            # [V26.11 Rule 12] 不靜默失敗，記錄原因
+            result["mcap_display"] = f"—（抓取失敗）"
 
         # ── 財報（讀取已有的 session state，不重複呼叫 API）──
         ern = st.session_state.get('_earn_info_v29', {})
@@ -323,10 +327,11 @@ def fetch_fundamental_snapshot(ticker, df):
                     else:
                         result["earn_hint"] = ""
             except Exception:
-                pass
+                result["earn_hint"] = ""  # 日期解析失敗，不影響其他欄位
 
-    except Exception:
-        pass
+    except Exception as _funda_err:
+        # [V26.11 Rule 12] 外層失敗時回傳部分結果，不全部吞掉
+        result["mcap_display"] = result.get("mcap_display", "—")
     return result
 
 
