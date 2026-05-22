@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.04", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.11", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -237,8 +237,146 @@ def compute_signal_context(p_data, idx_pos, ticker, market_state):
         return None
 
 
-def render_signal_context_panel(ctx, signal_label):
-    """渲染 7 維 context 推演面板 (HTML)"""
+def fetch_fundamental_snapshot(ticker, df):
+    """[V26.11] 快速抓取基本面快照（Market Cap / 量能 vs 均量 / 財報）。
+
+    盡量用已有的 df 數據，只在需要 Market Cap 時呼叫 yf.Ticker().info（有 cache）。
+    回傳 dict 給 render_signal_context_panel 和 AI 劇本用。
+    """
+    result = {
+        "market_cap": None,
+        "mcap_display": "—",
+        "mcap_tier": "unknown",       # mega/large/mid/small/micro
+        "volume_today": None,
+        "volume_avg20": None,
+        "vol_vs_avg": None,
+        "vol_vs_avg_hint": "",
+        "next_earn_date": None,
+        "days_to_earn": None,
+        "days_since_earn": 999,
+        "last_earn_beat": None,
+        "earn_hint": "",
+    }
+    try:
+        # ── 量能 vs 均量（直接從 df 取，零 API 成本）──
+        if 'Volume' in df.columns and 'Vol_SMA20' in df.columns:
+            vol_today = float(df['Volume'].iloc[-1])
+            vol_avg = float(df['Vol_SMA20'].iloc[-1]) if not pd.isna(df['Vol_SMA20'].iloc[-1]) else None
+            result["volume_today"] = vol_today
+            result["volume_avg20"] = vol_avg
+            if vol_avg and vol_avg > 0:
+                ratio = vol_today / vol_avg
+                result["vol_vs_avg"] = round(ratio, 2)
+                if ratio < 0.5:
+                    result["vol_vs_avg_hint"] = "⚠️ 量只有均量一半，動能嚴重不足"
+                elif ratio < 0.8:
+                    result["vol_vs_avg_hint"] = "⚠️ 量縮，動能轉弱"
+                elif ratio > 2.0:
+                    result["vol_vs_avg_hint"] = "✅ 暴量，強勢動能"
+                elif ratio > 1.3:
+                    result["vol_vs_avg_hint"] = "✅ 量增，動能充沛"
+                else:
+                    result["vol_vs_avg_hint"] = "量平，正常"
+
+        # ── Market Cap（用 cache 保護，避免重複呼叫）──
+        try:
+            info = yf.Ticker(ticker).info
+            mcap = info.get("marketCap", None)
+            if mcap:
+                result["market_cap"] = mcap
+                if mcap >= 200e9:
+                    result["mcap_tier"] = "mega"
+                    result["mcap_display"] = f"${mcap/1e9:.0f}B（超大型）"
+                elif mcap >= 10e9:
+                    result["mcap_tier"] = "large"
+                    result["mcap_display"] = f"${mcap/1e9:.1f}B（大型）"
+                elif mcap >= 2e9:
+                    result["mcap_tier"] = "mid"
+                    result["mcap_display"] = f"${mcap/1e9:.1f}B（中型）"
+                elif mcap >= 300e6:
+                    result["mcap_tier"] = "small"
+                    result["mcap_display"] = f"${mcap/1e6:.0f}M（小型）"
+                else:
+                    result["mcap_tier"] = "micro"
+                    result["mcap_display"] = f"${mcap/1e6:.0f}M（微型 ⚠️）"
+        except Exception:
+            pass
+
+        # ── 財報（讀取已有的 session state，不重複呼叫 API）──
+        ern = st.session_state.get('_earn_info_v29', {})
+        if ern:
+            result["next_earn_date"] = ern.get("next_date", "N/A")
+            result["last_earn_beat"] = "🟢" in str(ern.get("last_result", ""))
+            # 計算距離財報天數
+            try:
+                nd = ern.get("next_date", "N/A")
+                if nd and nd != "N/A":
+                    dt = pd.Timestamp(nd)
+                    days_to = (dt - pd.Timestamp.now()).days
+                    result["days_to_earn"] = days_to
+                    if days_to < 0:
+                        result["days_since_earn"] = abs(days_to)
+                    if days_to <= 7 and days_to >= 0:
+                        result["earn_hint"] = f"⚠️ 財報 {days_to} 天後，注意 IV 風險"
+                    elif days_to < 0 and abs(days_to) <= 5:
+                        result["earn_hint"] = "財報剛過，等市場消化"
+                    else:
+                        result["earn_hint"] = ""
+            except Exception:
+                pass
+
+    except Exception:
+        pass
+    return result
+
+
+def _render_funda_row(funda):
+    """[V26.11] 渲染基本面速查行（嵌入 7 維 context 面板底部）"""
+    if not funda or funda.get("market_cap") is None:
+        return ""
+
+    _hcf = lambda h: "#ef4444" if "⚠️" in h and any(k in h for k in ("嚴重", "風險")) else \
+                      "#f97316" if "⚠️" in h else \
+                      "#22c55e" if "✅" in h else "#9ca3af"
+
+    mcap = funda.get("mcap_display", "—")
+    mcap_clr = "#ef4444" if funda.get("mcap_tier") == "micro" else \
+               "#f97316" if funda.get("mcap_tier") == "small" else "#9ca3af"
+
+    vol_ratio = funda.get("vol_vs_avg")
+    vol_hint = funda.get("vol_vs_avg_hint", "")
+    vol_disp = f"{vol_ratio:.2f}x" if vol_ratio else "—"
+
+    earn_hint = funda.get("earn_hint", "")
+    next_earn = funda.get("next_earn_date", "—")
+    _earn_span = f" <span style='color:#f97316;font-size:10px;'>（{earn_hint}）</span>" if earn_hint else ""
+
+    # 格式化成交量
+    def _fv(n):
+        if n is None: return "—"
+        if n >= 1e6: return f"{n/1e6:.1f}M"
+        if n >= 1e3: return f"{n/1e3:.0f}K"
+        return f"{n:.0f}"
+
+    return (
+        f'<div style="margin-top:10px;padding-top:8px;border-top:1px solid #2a2a2c;">'
+        f'<div style="color:#888;font-size:11px;margin-bottom:4px;">📊 基本面速查（分析師建倉參考）</div>'
+        f'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:12px;">'
+        f'<div>市值：<b style="color:{mcap_clr};">{mcap}</b></div>'
+        f'<div>今量/均量：<b>{_fv(funda.get("volume_today"))}</b> / <b>{_fv(funda.get("volume_avg20"))}</b>'
+        f' = <b style="color:{_hcf(vol_hint)};">{vol_disp}</b>'
+        f' <span style="color:{_hcf(vol_hint)};font-size:10px;">（{vol_hint}）</span></div>'
+        f'<div>下次財報：<b>{next_earn}</b>{_earn_span}</div>'
+        f'</div>'
+        f'</div>'
+    )
+
+
+
+def render_signal_context_panel(ctx, signal_label, funda=None):
+    """渲染 7 維 context 推演面板 (HTML)
+    [V26.11] 新增 funda 參數：基本面快照數據（Market Cap / 量能 / 財報）
+    """
     if not ctx:
         return ""
     mkt_icon = "🟢 大盤健康" if ctx["market_ok"] else "🔴 大盤偏空"
@@ -253,6 +391,15 @@ def render_signal_context_panel(ctx, signal_label):
     if ctx["dist_from_52w_high"] > 15: bonus += 3  # 不在頂部
     if ctx["momentum_20d"] > 0 and ctx["momentum_20d"] < 15: bonus += 2  # 動能合理
     if ctx["dist_from_52w_high"] < 5: bonus -= 5   # 已在頂部
+
+    # [V26.11] 基本面影響 win_rate
+    if funda:
+        if funda.get("vol_vs_avg", 1.0) < 0.5: bonus -= 5   # 量只有均量一半 → 動能嚴重不足
+        elif funda.get("vol_vs_avg", 1.0) < 0.8: bonus -= 2
+        elif funda.get("vol_vs_avg", 1.0) > 1.5: bonus += 3  # 放量 → 動能強
+        if funda.get("mcap_tier") == "micro": bonus -= 3       # 微型股風險高
+        if funda.get("days_since_earn", 999) < 5: bonus -= 3   # 財報剛過/即將到來
+        if funda.get("last_earn_beat"): bonus += 2              # 上季財報優於預期
     
     win_rate = min(85, max(35, base_win + bonus))
     
@@ -280,7 +427,7 @@ def render_signal_context_panel(ctx, signal_label):
     }
     engine_hint = engine_hint_map.get(ctx["engine"], "")
 
-    # [V26.04] 提示分色 helper：危險=紅、中等=橙、機會=綠、中性=灰
+    # [V26.11] 提示分色 helper：危險=紅、中等=橙、機會=綠、中性=灰
     def _hc(hint: str) -> str:
         """根據提示文字前綴回傳對應 CSS 顏色。"""
         if hint.startswith("✅"):
@@ -347,10 +494,11 @@ def render_signal_context_panel(ctx, signal_label):
       <div>OBV 累積位置：<b>{ctx["obv_pct"]:.0f}%</b> <span style="color:{_hc(obv_hint)};font-size:11px;">（{obv_hint}）</span></div>
     </div>
   </div>
+  {_render_funda_row(funda)}
   <div style="margin-top:10px; padding-top:8px; border-top:1px solid #2a2a2c;">
     <span style="color:#aaa;">🎯 10 日上漲機率推演：</span>
     <span style="color:#22c55e; font-weight:bold; font-size:18px;">{win_rate}%</span>
-    <span style="color:#888; font-size:11px;"> （基準 60% ± 修正）</span>
+    <span style="color:#888; font-size:11px;"> （基準 60% ± 7 維 + 基本面修正）</span>
   </div>
   <div style="margin-top:6px;">
     {risk_html}
@@ -1405,26 +1553,178 @@ def analyze_strategic_signals(df):
     }
 
 
+def find_key_sr_levels(df, n_levels=3):
+    """[V26.11] 自動偵測關鍵支撐/阻力位。
+
+    結合三種方法：
+    1. Pivot Point（局部極值）— 最近 120 根 K 線的波峰/波谷
+    2. Volume Cluster（量價密集區）— 成交量集中的價位帶
+    3. 結構性位置 — 52 週高點、近期盤整區的上下邊界
+
+    回傳 dict:
+        supports:  list[float]  — 依距離現價由近到遠排序的支撐位（最多 n_levels 個）
+        resists:   list[float]  — 依距離現價由近到遠排序的阻力位（最多 n_levels 個）
+        nearest_support: float | None
+        nearest_resist:  float | None
+        range_pos: float  — 目前在最近 S/R 區間的百分比位置（0=在支撐，100=在阻力）
+        _52w_high: float
+        _52w_low:  float
+    """
+    price = float(df['Close'].iloc[-1])
+    highs = df['High'].values
+    lows = df['Low'].values
+    closes = df['Close'].values
+    volumes = df['Volume'].values if 'Volume' in df.columns else np.ones(len(df))
+
+    # --- 1. Pivot Point Detection（局部極值）---
+    window = 5  # 左右各看 5 根
+    pivot_highs = []
+    pivot_lows = []
+    for i in range(window, len(df) - window):
+        # 局部高點
+        if highs[i] == max(highs[i - window:i + window + 1]):
+            pivot_highs.append(float(highs[i]))
+        # 局部低點
+        if lows[i] == min(lows[i - window:i + window + 1]):
+            pivot_lows.append(float(lows[i]))
+
+    # --- 2. Volume Cluster（量價密集區 POC）---
+    try:
+        tail_60 = df.tail(60)
+        if len(tail_60) > 20:
+            price_range = np.linspace(float(tail_60['Low'].min()), float(tail_60['High'].max()), 30)
+            vol_profile = np.zeros(len(price_range) - 1)
+            for idx in range(len(tail_60)):
+                row_l, row_h, row_v = float(tail_60['Low'].iloc[idx]), float(tail_60['High'].iloc[idx]), float(tail_60['Volume'].iloc[idx])
+                for bi in range(len(price_range) - 1):
+                    if price_range[bi] <= row_h and price_range[bi + 1] >= row_l:
+                        vol_profile[bi] += row_v
+            # 取量最大的前 3 個價位帶中點
+            top_bins = np.argsort(vol_profile)[-3:]
+            vol_cluster_prices = [(price_range[b] + price_range[b + 1]) / 2 for b in top_bins]
+        else:
+            vol_cluster_prices = []
+    except Exception:
+        vol_cluster_prices = []
+
+    # --- 3. 結構性位置 ---
+    _52w_high = float(df['High'].max()) if len(df) >= 200 else float(df['High'].max())
+    _52w_low = float(df['Low'].min()) if len(df) >= 200 else float(df['Low'].min())
+    recent_high_20 = float(df['High'].tail(20).max())
+    recent_low_20 = float(df['Low'].tail(20).min())
+
+    # --- 合併所有候選 S/R ---
+    all_candidates = set()
+    for p in pivot_highs + pivot_lows:
+        all_candidates.add(round(p, 2))
+    for p in vol_cluster_prices:
+        all_candidates.add(round(p, 2))
+    all_candidates.add(round(_52w_high, 2))
+    all_candidates.add(round(recent_high_20, 2))
+    all_candidates.add(round(recent_low_20, 2))
+
+    # --- 合併相近的價位（差距 < 1.5% 的合併）---
+    sorted_cands = sorted(all_candidates)
+    merged = []
+    for c in sorted_cands:
+        if merged and abs(c - merged[-1]) / max(merged[-1], 0.01) < 0.015:
+            merged[-1] = (merged[-1] + c) / 2  # 取平均
+        else:
+            merged.append(c)
+
+    # --- 分成支撐和阻力 ---
+    margin = price * 0.005  # 0.5% 容差
+    supports = sorted([p for p in merged if p < price - margin], key=lambda x: price - x)
+    resists = sorted([p for p in merged if p > price + margin], key=lambda x: x - price)
+
+    nearest_s = supports[0] if supports else None
+    nearest_r = resists[0] if resists else None
+
+    # range_pos: 0=在支撐, 100=在阻力
+    if nearest_s is not None and nearest_r is not None and nearest_r > nearest_s:
+        range_pos = (price - nearest_s) / (nearest_r - nearest_s) * 100
+    elif nearest_s is not None:
+        range_pos = 100.0  # 沒有上方阻力 → 已突破
+    elif nearest_r is not None:
+        range_pos = 0.0  # 沒有下方支撐 → 在底部
+    else:
+        range_pos = 50.0
+
+    return {
+        "supports": supports[:n_levels],
+        "resists": resists[:n_levels],
+        "nearest_support": nearest_s,
+        "nearest_resist": nearest_r,
+        "range_pos": round(min(100, max(0, range_pos)), 1),
+        "_52w_high": _52w_high,
+        "_52w_low": _52w_low,
+    }
+
+
 def predict_target_and_rating(df, mc_result=None):
     """
-    短/長期目標 + 強弱評等。
-    優先用蒙地卡羅 p50/p90 反映當下趨勢，無 MC 結果時退回布林+60日高點（舊邏輯）。
+    [V26.11] 短/長期目標 + 強弱評等 + 技術目標位。
+
+    三層目標體系：
+      短期技術目標（1-5天）= 最近阻力位（S/R 結構）
+      中期 MC 目標（5-30天）= MC p50，但若趨勢向上且 p50 < 阻力 → 拉高到阻力
+      長期 MC 目標（30天+）= MC p90（維持不變）
+
+    回傳 (t_s, t_l, rating, sr_info)
+      sr_info 為 dict，包含技術面 S/R 資訊供面板顯示
     """
-    price = df['Close'].iloc[-1]
-    
+    price = float(df['Close'].iloc[-1])
+
+    # ── S/R 偵測 ──
+    sr = find_key_sr_levels(df)
+    nearest_r = sr["nearest_resist"]
+    nearest_s = sr["nearest_support"]
+    _52w_high = sr["_52w_high"]
+
+    # ── 趨勢判斷（解決 MSFT 問題）──
+    sma20 = float(df['SMA_20'].iloc[-1]) if 'SMA_20' in df.columns and not pd.isna(df['SMA_20'].iloc[-1]) else price
+    rsi = float(df['RSI'].iloc[-1]) if 'RSI' in df.columns and not pd.isna(df['RSI'].iloc[-1]) else 50
+    trend_up = price > sma20 and rsi > 50
+    just_reversed = rsi > 45 and (df['RSI'].tail(10).min() < 35 if 'RSI' in df.columns else False)
+
     if mc_result is not None and mc_result.get("p50_final") is not None:
-        # 新邏輯：用 MC 30 日後 p50 當短期、p90 當長期
-        t_s = float(mc_result["p50_final"])
-        t_l = float(mc_result["p90_final"])
+        mc_p50 = float(mc_result["p50_final"])
+        mc_p90 = float(mc_result["p90_final"])
+
+        # [V26.11] 技術短期目標：最近阻力位（若無阻力 → 52W 高）
+        tech_target = nearest_r if nearest_r else _52w_high
+
+        # [V26.11] 修正 MSFT 問題：如果 MC 看空但趨勢已反轉向上 → 拉高 p50
+        if trend_up and mc_p50 < price:
+            # MC 用了舊的負 drift，但股票已在 SMA20 上方 → 用技術目標取代
+            t_s = tech_target
+        elif just_reversed and mc_p50 < price:
+            # RSI 剛從超賣反彈 → MC 還沒反映，取 MC 跟技術目標的平均
+            t_s = (mc_p50 + tech_target) / 2
+        else:
+            # 正常情況：MC p50 跟技術目標取較高的（偏向影片分析師的風格）
+            t_s = max(mc_p50, tech_target) if trend_up else mc_p50
+
+        t_l = mc_p90
     else:
         # 退回舊邏輯（MC 失敗時的 fallback）
-        upper = df['Bollinger_Upper'].iloc[-1]
-        recent_high_60 = df['High'].tail(60).max()
-        t_s = upper if price >= recent_high_60 else min(upper, recent_high_60)
+        upper = float(df['Bollinger_Upper'].iloc[-1])
+        recent_high_60 = float(df['High'].tail(60).max())
+        tech_target = nearest_r if nearest_r else min(upper, recent_high_60)
+        t_s = tech_target if trend_up else (upper if price >= recent_high_60 else min(upper, recent_high_60))
         t_l = max(recent_high_60 * 1.15, t_s * 1.1)
-    
-    rating = "強勢" if price > df['SMA_20'].iloc[-1] else "持有"
-    return t_s, t_l, rating
+
+    rating = "強勢" if price > sma20 else "持有"
+
+    # sr_info 給面板顯示用
+    sr_info = {
+        **sr,
+        "tech_target": tech_target if 'tech_target' in dir() else nearest_r,
+        "trend_up": trend_up,
+        "just_reversed": just_reversed,
+    }
+
+    return t_s, t_l, rating, sr_info
 
 
 def get_technical_target_threshold(df):
@@ -1912,7 +2212,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.04")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.11")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -2014,7 +2314,7 @@ st.session_state['_mc_status_v27'] = _mc_status
 
 # AI 目標：優先使用 MC 結果（反映當下趨勢），無 MC 時退回布林+60日高點
 _mc_for_target = st.session_state.get('_mc_result_v27') if _mc_status["ran"] else None
-t_s, t_l, rating = predict_target_and_rating(df, _mc_for_target)
+t_s, t_l, rating, sr_info = predict_target_and_rating(df, _mc_for_target)
 # 技術面「達標」閾值（與 AI 目標 t_s 分離，避免 MC p50 誤判過去 K 線）
 _target_threshold = get_technical_target_threshold(df)
 
@@ -2109,6 +2409,9 @@ if is_index_or_etf(cur_t):
 # 一體化四大戰情方塊佈局
 # ==========================================
 ern_date, ern_res = get_earnings_status(cur_t)
+# [V26.11] 存入 session state，讓 fetch_fundamental_snapshot 讀取
+st.session_state['_earn_info_v29'] = {"next_date": ern_date.split(":")[-1].strip() if ern_date and "N/A" not in ern_date else "N/A",
+                                       "last_result": ern_res}
 
 # [v28] 砍掉規則式劇本，改用 MC 漂移方向作為「未來推演」標籤
 _drift_for_label = st.session_state.get('_mc_result_v27', {}).get('drift_adjust', 0.0)
@@ -2179,7 +2482,18 @@ with c4:
     _t_s_clr = "#22c55e" if _t_s_pct >= 0 else "#ef4444"
     _t_l_clr = "#22c55e" if _t_l_pct >= 0 else "#ef4444"
     _mc_ran = st.session_state.get('_mc_status_v27', {}).get('ran', False)
-    _source_label = ("🔮 MC p50/p90" if _mc_ran else "📐 布林/60日高")
+    _source_label = ("🔮 MC + S/R 混合" if _mc_ran else "📐 技術面 S/R")
+
+    # [V26.11] 技術目標位
+    _tech_tgt = sr_info.get("tech_target")
+    _tech_pct = (_tech_tgt / close_v - 1) * 100 if _tech_tgt and close_v > 0 else None
+    _tech_clr = "#22c55e" if _tech_pct and _tech_pct >= 0 else "#ef4444"
+    _tech_line = (
+        f'<div style="font-size:11px;color:#aaa;margin-top:2px;">'
+        f'📍 技術目標: <b style="color:{_tech_clr};">${_tech_tgt:.2f}</b> '
+        f'<span style="color:{_tech_clr};font-size:10px;">({_tech_pct:+.1f}%)</span>'
+        f'</div>' if _tech_tgt and _tech_pct is not None else ""
+    )
     
     c4_html = (
         '<div class="ai-box" style="border: 1px solid #00d4ff; display: flex; flex-direction: column; justify-content: center;">'
@@ -2188,6 +2502,7 @@ with c4:
         f'短: <b>${t_s:.2f}</b> <span style="color:{_t_s_clr};font-size:11px;">({_t_s_pct:+.1f}%)</span><br>'
         f'長: <b>${t_l:.2f}</b> <span style="color:{_t_l_clr};font-size:11px;">({_t_l_pct:+.1f}%)</span>'
         f'</div>'
+        f'{_tech_line}'
         f'<div style="font-size:10px; color:#888; margin-bottom: 6px;">{_source_label}（30 日推演）</div>'
         f'<div><span class="{rs_col}" style="display: inline-block;">{rs_txt}</span></div>'
         '</div>'
@@ -2195,6 +2510,101 @@ with c4:
     st.markdown(c4_html, unsafe_allow_html=True)
 
 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
+
+# ──────────────────────────────────────────────────────
+# [V26.11] 📍 短期點位面板（支撐/阻力 + 區間位置 + 綜合判斷）
+# ──────────────────────────────────────────────────────
+if sr_info:
+    _sr_s = sr_info.get("supports", [])
+    _sr_r = sr_info.get("resists", [])
+    _range_pos = sr_info.get("range_pos", 50)
+    _trend_up = sr_info.get("trend_up", False)
+    _just_rev = sr_info.get("just_reversed", False)
+    _n_s = sr_info.get("nearest_support")
+    _n_r = sr_info.get("nearest_resist")
+    _52h = sr_info.get("_52w_high")
+    _mc_ran_sr = st.session_state.get('_mc_status_v27', {}).get('ran', False)
+
+    # 區間位置 bar 顏色
+    if _range_pos > 80:
+        _rp_color = "#ef4444"  # 靠近阻力 → 紅
+        _rp_label = "⚠️ 逼近阻力"
+    elif _range_pos > 60:
+        _rp_color = "#f97316"  # 偏阻力
+        _rp_label = "偏阻力端"
+    elif _range_pos > 40:
+        _rp_color = "#facc15"  # 中間
+        _rp_label = "區間中段"
+    elif _range_pos > 20:
+        _rp_color = "#84cc16"  # 偏支撐
+        _rp_label = "偏支撐端"
+    else:
+        _rp_color = "#22c55e"  # 靠近支撐 → 綠
+        _rp_label = "✅ 接近支撐"
+
+    # 綜合判斷文字
+    if _trend_up and _range_pos < 40:
+        _sr_verdict = "🟢 趨勢向上 + 靠近支撐 → <b>最佳進場位</b>"
+        _verdict_clr = "#22c55e"
+    elif _trend_up and _range_pos > 75:
+        _sr_verdict = "🟡 趨勢向上但已逼近阻力 → <b>等回踩再加碼</b>"
+        _verdict_clr = "#f97316"
+    elif not _trend_up and _range_pos < 30:
+        _sr_verdict = "🟡 趨勢偏弱但在支撐附近 → <b>觀察是否止跌反轉</b>"
+        _verdict_clr = "#facc15"
+    elif not _trend_up and _range_pos > 60:
+        _sr_verdict = "🔴 趨勢偏弱 + 遠離支撐 → <b>不建議進場</b>"
+        _verdict_clr = "#ef4444"
+    elif _just_rev:
+        _sr_verdict = "🟢 剛從超賣反彈 → <b>反轉初期，輕倉試探</b>"
+        _verdict_clr = "#22c55e"
+    else:
+        _sr_verdict = "⚪ 無明確方向 → <b>等待訊號</b>"
+        _verdict_clr = "#9ca3af"
+
+    # 格式化支撐/阻力列表
+    def _fmt_sr(levels, prefix, color):
+        if not levels:
+            return f'<span style="color:#666;">—</span>'
+        parts = []
+        for i, lv in enumerate(levels[:3]):
+            pct = (lv / close_v - 1) * 100
+            bold = "font-weight:bold;" if i == 0 else ""
+            parts.append(f'<span style="color:{color};{bold}">${lv:.2f}</span>'
+                         f'<span style="color:#888;font-size:10px;"> ({pct:+.1f}%)</span>')
+        return " → ".join(parts)
+
+    with st.expander(f"📍 短期點位分析（支撐/阻力 · 區間位置 {_range_pos:.0f}%）", expanded=True):
+        sr_col1, sr_col2 = st.columns([3, 2])
+        with sr_col1:
+            st.markdown(
+                f'<div style="background:#141416;border-radius:8px;padding:12px;border:1px solid #333;">'
+                f'<div style="margin-bottom:8px;font-size:13px;">'
+                f'🟢 支撐位：{_fmt_sr(_sr_s, "S", "#22c55e")}</div>'
+                f'<div style="margin-bottom:8px;font-size:13px;">'
+                f'🔴 阻力位：{_fmt_sr(_sr_r, "R", "#ef4444")}</div>'
+                f'<div style="font-size:12px;color:#aaa;">'
+                f'📏 52W 高: <b>${_52h:.2f}</b>'
+                f'{"  ← 距 " + f"{(_52h/close_v-1)*100:.1f}%" if _52h and close_v > 0 else ""}'
+                f'</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        with sr_col2:
+            # 區間位置 bar
+            st.markdown(
+                f'<div style="background:#141416;border-radius:8px;padding:12px;border:1px solid #333;">'
+                f'<div style="font-size:12px;color:#aaa;margin-bottom:6px;">區間位置</div>'
+                f'<div style="background:#262730;border-radius:4px;height:20px;position:relative;overflow:hidden;">'
+                f'<div style="background:{_rp_color};height:100%;width:{_range_pos}%;'
+                f'border-radius:4px;transition:width 0.3s;"></div>'
+                f'</div>'
+                f'<div style="display:flex;justify-content:space-between;font-size:10px;color:#666;margin-top:2px;">'
+                f'<span>支撐</span><span>{_rp_label}</span><span>阻力</span></div>'
+                f'<div style="margin-top:8px;font-size:13px;color:{_verdict_clr};">{_sr_verdict}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
 # ==========================================
 # 繪圖區
@@ -2539,7 +2949,7 @@ else:
 
 # 把狀態存入 session 給圖下方面板顯示
 st.session_state['_ev_status_v29'] = _ev_status
-# [V26.04] 也把事件列表存起來，讓燈號上方面板可以讀取
+# [V26.11] 也把事件列表存起來，讓燈號上方面板可以讀取
 if 'events_for_chart' not in dir():
     events_for_chart = []
 st.session_state['_events_for_chart_v29'] = events_for_chart if events_for_chart else []
@@ -2552,6 +2962,80 @@ if support_line:
     fig.add_hline(y=support_line, line_dash="dot", line_color="#3b82f6", annotation_text=f"🔵 前高支撐<br>${support_line:.2f}", annotation_font_color="#3b82f6", annotation_position="bottom right", annotation_align="right", opacity=1.0, layer="above", row=1, col=1)
 if not is_breaking and iron_price > 0:
     fig.add_hline(y=iron_price, line_dash="dash", line_color="#20c997", annotation_text=f"🧱 鐵板 ${iron_price:.2f}", annotation_font_color="#20c997", annotation_position="bottom right", opacity=1.0, layer="above", row=1, col=1)
+
+# ──────────────────────────────────────────────────────
+# [V26.11] 目標價線 + S/R 強化線（走勢圖上直接看到）
+# ──────────────────────────────────────────────────────
+# 短期目標線（藍色）
+if t_s and close_v > 0 and abs(t_s / close_v - 1) > 0.005:  # 差距 > 0.5% 才畫
+    _ts_pct = (t_s / close_v - 1) * 100
+    _ts_color = "#00bfff"
+    fig.add_hline(
+        y=t_s, line_dash="dash", line_color=_ts_color, line_width=1.5,
+        annotation_text=f"🎯 短期目標<br>${t_s:.2f} ({_ts_pct:+.1f}%)",
+        annotation_font_color=_ts_color, annotation_font_size=10,
+        annotation_position="top left", annotation_align="left",
+        opacity=0.8, layer="above", row=1, col=1,
+    )
+
+# 長期目標線（紫色）
+if t_l and close_v > 0 and abs(t_l / close_v - 1) > 0.01:  # 差距 > 1% 才畫
+    _tl_pct = (t_l / close_v - 1) * 100
+    _tl_color = "#a855f7"
+    fig.add_hline(
+        y=t_l, line_dash="dashdot", line_color=_tl_color, line_width=1.5,
+        annotation_text=f"🚀 長期目標<br>${t_l:.2f} ({_tl_pct:+.1f}%)",
+        annotation_font_color=_tl_color, annotation_font_size=10,
+        annotation_position="top left", annotation_align="left",
+        opacity=0.7, layer="above", row=1, col=1,
+    )
+
+# V26.07 S/R 強化線（只畫跟現有 support_line/resist_line 不重疊的）
+if sr_info:
+    _sr_supports = sr_info.get("supports", [])
+    _sr_resists = sr_info.get("resists", [])
+    _52h = sr_info.get("_52w_high")
+
+    # 畫最近 2 條支撐（綠色虛線，跟舊 support_line 不重疊）
+    for i, s_lv in enumerate(_sr_supports[:2]):
+        # 跳過跟舊線太近的（差距 < 1.5%）
+        if support_line and abs(s_lv - support_line) / max(support_line, 1) < 0.015:
+            continue
+        if iron_price and abs(s_lv - iron_price) / max(iron_price, 1) < 0.015:
+            continue
+        _s_pct = (s_lv / close_v - 1) * 100
+        fig.add_hline(
+            y=s_lv, line_dash="dot", line_color="#22c55e", line_width=1,
+            annotation_text=f"S{i+1} ${s_lv:.2f} ({_s_pct:+.1f}%)",
+            annotation_font_color="#22c55e", annotation_font_size=9,
+            annotation_position="bottom left", annotation_align="left",
+            opacity=0.6, layer="above", row=1, col=1,
+        )
+
+    # 畫最近 2 條阻力（紅色虛線，跟舊 resist_line / abs_high 不重疊）
+    for i, r_lv in enumerate(_sr_resists[:2]):
+        if resist_line and abs(r_lv - resist_line) / max(resist_line, 1) < 0.015:
+            continue
+        if abs(r_lv - abs_high) / max(abs_high, 1) < 0.015:
+            continue
+        _r_pct = (r_lv / close_v - 1) * 100
+        fig.add_hline(
+            y=r_lv, line_dash="dot", line_color="#ef4444", line_width=1,
+            annotation_text=f"R{i+1} ${r_lv:.2f} ({_r_pct:+.1f}%)",
+            annotation_font_color="#ef4444", annotation_font_size=9,
+            annotation_position="top left", annotation_align="left",
+            opacity=0.6, layer="above", row=1, col=1,
+        )
+
+    # 52W 高點線（灰色細虛線，只在跟 abs_high 差距 > 3% 時才畫）
+    if _52h and abs(_52h - abs_high) / max(abs_high, 1) > 0.03:
+        fig.add_hline(
+            y=_52h, line_dash="dot", line_color="#6b7280", line_width=1,
+            annotation_text=f"52W 高 ${_52h:.2f}",
+            annotation_font_color="#6b7280", annotation_font_size=9,
+            annotation_position="top left", annotation_align="left",
+            opacity=0.5, layer="above", row=1, col=1,
+        )
 
 fig.add_annotation(
     x=0.5, y=0.98, xref="paper", yref="paper",
@@ -2822,7 +3306,7 @@ st.plotly_chart(fig, use_container_width=True)
 
 # ──────────────────────────────────────────────────────
 # ──────────────────────────────────────────────────────
-# [V26.04] 事件節點註解面板（走勢圖外、進場燈號上方）
+# [V26.11] 事件節點註解面板（走勢圖外、進場燈號上方）
 # ──────────────────────────────────────────────────────
 _ev_panel_events = st.session_state.get('_events_for_chart_v29', [])
 _ev_panel_drawn  = st.session_state.get('_ev_status_v29', {}).get("drawn_count", 0)
@@ -3127,13 +3611,15 @@ if _launch_signals:
         f"（已套用大盤過濾器 + MA60 上升）。下方顯示最近 {len(recent_signals)} 個訊號的 AI 7 維推演。"
     )
     _market_state = st.session_state.get('_market_state_v27', {})
+    # [V26.11] 基本面快照（一次抓取，傳給所有 context 面板）
+    _funda = fetch_fundamental_snapshot(cur_t, df)
     for sig in reversed(recent_signals):  # 最新的先顯示
         try:
             ctx = compute_signal_context(p_data, sig["idx_pos"], cur_t, _market_state)
             if ctx:
                 date_str = pd.Timestamp(sig["date"]).strftime("%Y-%m-%d")
                 label = f"{date_str} ⭐ 起漲確認（{sig['trigger']}）@ ${sig['close']:.2f}"
-                st.markdown(render_signal_context_panel(ctx, label), unsafe_allow_html=True)
+                st.markdown(render_signal_context_panel(ctx, label, funda=_funda), unsafe_allow_html=True)
         except Exception as _e:
             pass
 else:
@@ -3167,6 +3653,7 @@ if _entry_signals:
                 "以下顯示每個訊號的 7 維 context 推演 — 幫你判斷「**該不該進場**」。"
             )
             _market_state = st.session_state.get('_market_state_v27', {})
+            _funda_early = fetch_fundamental_snapshot(cur_t, df) if '_funda' not in dir() else _funda
             for sig in reversed(recent_entries):
                 try:
                     ctx = compute_signal_context(p_data, sig["idx_pos"], cur_t, _market_state)
@@ -3174,7 +3661,7 @@ if _entry_signals:
                         date_str = pd.Timestamp(sig["date"]).strftime("%Y-%m-%d")
                         stage_name = {1: "前哨警示", 2: "抄底機會", 3: "MACD 確認"}[sig["stage"]]
                         label = f"{date_str} {sig['type']}（{stage_name}）@ ${sig['close']:.2f}"
-                        st.markdown(render_signal_context_panel(ctx, label), unsafe_allow_html=True)
+                        st.markdown(render_signal_context_panel(ctx, label, funda=_funda_early), unsafe_allow_html=True)
                 except Exception:
                     pass
 
@@ -3475,7 +3962,11 @@ if _INSIDER_AVAILABLE:
         "追蹤 S&P 100 大型權值股近 30 日的 CEO/CFO/Director 開放市場交易。"
         "賣壓比例（賣出金額 ÷ 總交易金額）越高表示內部人越看空。"
         f"**每天 05:00 / 08:00 / 14:00 / 20:00 (台灣時間) 固定刷新** ｜ "
-        f"當前錨點：`{_ins_anchor}`"
+        f"當前錨點：`{_ins_anchor}`\n\n"
+        "⏱️ **資料延遲說明**：SEC Form 4 是申報制度（非即時），"
+        "內部人交易後**法定 2 個工作天內**提交，EDGAR 公開後本系統才抓取。"
+        "因此你看到的數據大約**反映 1-3 天前**的實際交易行為，"
+        "適合判斷中長期趨勢，不適合當日沖銷參考。"
     )
 
     # [V26.01] 把 anchor 傳進 insider_sentiment 模組，
@@ -4262,9 +4753,218 @@ if _REV_AVAILABLE:  # 共用 reversal_scanner 的 generate_monte_carlo_bands
     # 去重（SP100 + extra，保留順序）
     _EXTENDED_TGT_TICKERS = list(dict.fromkeys(_SP100_CORE_TICKERS + _EXTRA_POPULAR_TICKERS))
 
+    # [V26.11] 台股熱門（權值 30 + 安聯台灣大壩成分 + 被動元件 + 封裝 + AI/半導體/航運）
+    # [V26.11] 台股熱門（權值 30 + 安聯大壩 + 被動元件 + 封裝 + 面板 + PCB + 能源 + 電子科技）
+    _TW_HOT_TICKERS = [
+        # ── 台股權值 30 ──
+        "2330.TW",  # 台積電
+        "2317.TW",  # 鴻海
+        "2454.TW",  # 聯發科
+        "2308.TW",  # 台達電
+        "2412.TW",  # 中華電
+        "2881.TW",  # 富邦金
+        "2882.TW",  # 國泰金
+        "2891.TW",  # 中信金
+        "2303.TW",  # 聯電
+        "3711.TW",  # 日月光投控
+        "2886.TW",  # 兆豐金
+        "1301.TW",  # 台塑
+        "2002.TW",  # 中鋼
+        "1303.TW",  # 南亞
+        "2884.TW",  # 玉山金
+        "3034.TW",  # 聯詠
+        "2382.TW",  # 廣達
+        "2357.TW",  # 華碩
+        "2603.TW",  # 長榮
+        "2301.TW",  # 光寶科
+        "2892.TW",  # 第一金
+        "5871.TW",  # 中租-KY
+        "2345.TW",  # 智邦
+        "3231.TW",  # 緯創
+        "2395.TW",  # 研華
+        "4904.TW",  # 遠傳
+        "3045.TW",  # 台灣大
+        "2379.TW",  # 瑞昱
+        "2207.TW",  # 和泰車
+        "2880.TW",  # 華南金
+        # ── 安聯台灣大壩基金成分股（2026/03 持股明細）──
+        "6223.TWO",  # 旺矽（12.34%）
+        "6515.TWO",  # 穎崴（10.81%）
+        "2383.TW",   # 台光電（5.52%）
+        "5274.TWO",  # 信驊（5.29%）
+        "2344.TW",   # 華邦電（4.85%）
+        "6274.TWO",  # 台燿（4.19%）
+        "3037.TW",   # 欣興（3.85%）
+        "3260.TWO",  # 威剛（3.27%）
+        "2408.TW",   # 南亞科（2.64%）
+        "2368.TW",   # 金像電（2.37%）
+        "3443.TW",   # 創意（2.16%）
+        "3514.TWO",  # 景碩（2.09%）
+        "8046.TW",   # 南電（2.09%）
+        "6805.TWO",  # 富世達（2.04%）
+        "3264.TWO",  # 欣銓（1.93%）
+        "3017.TW",   # 奇鋐（1.68%）
+        "3665.TW",   # 貿聯-KY（1.35%）
+        "8299.TW",   # 群聯（1.28%）
+        "3105.TW",   # 穩懋（1.24%）
+        # ── 被動元件 ──
+        "2327.TW",   # 國巨
+        "2492.TW",   # 華新科
+        "3026.TWO",  # 禾伸堂
+        "2456.TW",   # 奇力新
+        "2478.TW",   # 大毅
+        # ── 封裝 / 測試 ──
+        "2449.TW",   # 京元電子
+        "6147.TW",   # 頎邦
+        "3374.TW",   # 精材
+        "6239.TW",   # 力成
+        "8150.TW",   # 南茂
+        "2441.TW",   # 超豐
+        # ── AI / 半導體 / IC 設計 ──
+        "3661.TW",   # 世芯-KY
+        "3008.TW",   # 大立光
+        "2376.TW",   # 技嘉
+        "6669.TW",   # 緯穎
+        "2356.TW",   # 英業達
+        "2324.TW",   # 仁寶
+        "3653.TW",   # 健策
+        "5269.TW",   # 祥碩
+        "2458.TW",   # 義隆
+        "6285.TW",   # 啟碁
+        "3036.TW",   # 文曄
+        "4938.TW",   # 和碩
+        "8016.TW",   # 矽創
+        "3529.TW",   # 力旺
+        "6488.TW",   # 環球晶
+        "3035.TW",   # 智原
+        "6770.TW",   # 力積電
+        "4966.TW",   # 譜瑞-KY
+        "6533.TW",   # 晶心科
+        "2401.TW",   # 凌陽
+        "3533.TW",   # 嘉澤
+        "6415.TW",   # 矽力-KY
+        # ── 面板 / 顯示器 ──
+        "3481.TW",   # 群創
+        "2409.TW",   # 友達
+        "6116.TW",   # 彩晶
+        "8069.TW",   # 元太（電子紙）
+        "6176.TW",   # 瑞儀
+        # ── PCB / CCL / 基板 ──
+        "3044.TW",   # 健鼎
+        "2313.TW",   # 華通
+        "6153.TW",   # 嘉聯益
+        "2404.TW",   # 漢唐
+        # ── 電子科技 / 連接器 / 散熱 ──
+        "6830.TW",   # 汎銓
+        "8021.TW",   # 尖點
+        "2385.TW",   # 群光
+        "6414.TW",   # 樺漢
+        "3706.TW",   # 神達
+        "3702.TW",   # 大聯大
+        "6278.TW",   # 台表科
+        "3023.TW",   # 信邦
+        "3532.TW",   # 台勝科
+        "6552.TW",   # 易華電
+        "3714.TW",   # 富采
+        # ── 能源 / 太陽能 / 風電 / 電力 ──
+        "1513.TW",   # 中興電
+        "1519.TW",   # 華城
+        "1503.TW",   # 士電
+        "6244.TW",   # 茂迪
+        "3576.TW",   # 聯合再生
+        "6443.TW",   # 元晶
+        "3708.TW",   # 上緯投控
+        "6409.TW",   # 旭隼
+        "9933.TW",   # 中鼎
+        # ── 航運 ──
+        "2609.TW",   # 陽明
+        "2615.TW",   # 萬海
+        # ── 其他熱門 ──
+        "2049.TW",   # 上銀
+        "2353.TW",   # 宏碁
+        "2474.TW",   # 可成
+        "2312.TW",   # 金寶
+        "6591.TW",   # 動力-KY
+        # ── [V26.11] Yahoo 台股成交金額 Top 100 補充（截圖交叉比對）──
+        # 半導體 / IC
+        "4958.TW",   # 臻鼎-KY（全球最大 PCB 廠）
+        "2337.TW",   # 旺宏（NOR Flash）
+        "4919.TW",   # 新唐（MCU）
+        "8028.TW",   # 昇陽半導體
+        "3042.TW",   # 晶技（石英元件）
+        "3006.TW",   # 晶豪科（IC 設計）
+        "6257.TW",   # 矽格（封測）
+        "2426.TW",   # 鼎元（LED 晶粒）
+        "2455.TW",   # 全新（光通訊）
+        "3189.TW",   # 景碩（IC 載板）
+        # 電子零組件 / 連接器 / 散熱
+        "2377.TW",   # 微星（電競 / 主機板）
+        "2360.TW",   # 致茂（測試設備）
+        "2481.TW",   # 強茂（二極體）
+        "2464.TW",   # 盟立（自動化）
+        "6271.TW",   # 同欣電（陶瓷基板）
+        "6213.TW",   # 聯茂（CCL 銅箔基板）
+        "3030.TW",   # 德律（測試設備）
+        "3563.TW",   # 牧德（AOI 檢測）
+        "6139.TW",   # 亞翔（無塵室工程）
+        "2472.TW",   # 立隆電（鋁質電容）
+        "2375.TW",   # 凱美（電容）
+        "8996.TW",   # 高力（散熱 / 熱交換）
+        "2421.TW",   # 建準（散熱風扇）
+        "3673.TW",   # TPK-KY（觸控）
+        "4916.TW",   # 事欣科（工業電腦）
+        "6442.TW",   # 光聖（光纖）
+        "6531.TW",   # 愛普（真空設備）
+        # PCB / 基板 / 電路板
+        "2355.TW",   # 敬鵬（PCB）
+        "2316.TW",   # 楠梓電（PCB）
+        "6282.TW",   # 康舒（電源供應）
+        "6197.TW",   # 佳必琪（連接器）
+        "2489.TW",   # 瑞軒（顯示器代工）
+        # 化工 / 材料 / 傳產
+        "1717.TW",   # 長興（特化）
+        "1802.TW",   # 台玻（玻璃）
+        "1727.TW",   # 中華化
+        # 其他科技
+        "3167.TW",   # 大量（AOI）
+        "3048.TW",   # 益登（IC 通路）
+        "6209.TW",   # 今國光（光學鏡頭）
+        # ── [V26.11] Yahoo 上市成交金額 84-100 補充 ──
+        "8039.TW",   # 台虹（PI 膜）
+        "7610.TW",   # 聯友金屬-創
+        "4722.TW",   # 國精化（特化）
+        "2367.TW",   # 燿華（PCB）
+        "1582.TW",   # 信錦（機殼）
+        "1560.TW",   # 中砂（研磨材料）
+        # ── [V26.11] Yahoo 上櫃成交金額 Top 28 補充（排除 ETF）──
+        "5328.TWO",  # 華容
+        "6207.TWO",  # 雷科
+        "3707.TWO",  # 漢磊（SiC 碳化矽）
+        "6265.TWO",  # 方土昶
+        "1815.TWO",  # 富喬（玻纖）
+        "6182.TWO",  # 合晶（矽晶圓）
+        "8043.TWO",  # 蜜望實
+        "5425.TWO",  # 台半（二極體）
+        "3221.TWO",  # 台嘉碩（CCL）
+        "8289.TWO",  # 泰藝（石英元件）
+        "3615.TWO",  # 安可（連接器）
+        "6127.TWO",  # 九豪（散熱）
+        "5347.TWO",  # 世界（IC 通路）
+        "8096.TWO",  # 擎亞（散熱模組）
+        "8064.TWO",  # 東捷（設備）
+        "5351.TWO",  # 鉅創
+        "3236.TWO",  # 千如（被動元件）
+        "3490.TWO",  # 單井（工業用紙）
+        "3663.TWO",  # 鑫科（光通訊）
+        "3357.TWO",  # 臺慶科（EMI/磁性元件）
+        "4743.TWO",  # 合一（生技）
+    ]
+    # 台股去重
+    _TW_HOT_TICKERS = list(dict.fromkeys(_TW_HOT_TICKERS))
+
     _TGT_UNIVERSE_MAP = {
-        f"🎯 S&P 100 核心（{len(_SP100_CORE_TICKERS)} 檔，~3-5 分鐘）": ("core", _SP100_CORE_TICKERS),
-        f"🚀 擴大熱門（{len(_EXTENDED_TGT_TICKERS)} 檔，~7-12 分鐘）": ("extended", _EXTENDED_TGT_TICKERS),
+        f"🚀 美股熱門（{len(_EXTENDED_TGT_TICKERS)} 檔，~7-12 分鐘）": ("extended", _EXTENDED_TGT_TICKERS),
+        f"🇹🇼 台股熱門（{len(_TW_HOT_TICKERS)} 檔，~12-18 分鐘）": ("tw_hot", _TW_HOT_TICKERS),
     }
 
     # ── 範圍選擇器（一定要在 scan 前）──
@@ -4342,7 +5042,7 @@ if _REV_AVAILABLE:  # 共用 reversal_scanner 的 generate_monte_carlo_bands
 
                 # 用既有函式算目標 + 評等（跟個股卡片完全一致）
                 _mc_for_target = {"p50_final": p50_final, "p90_final": p90_final}
-                t_s, t_l, rating = predict_target_and_rating(hist, _mc_for_target)
+                t_s, t_l, rating, _sr = predict_target_and_rating(hist, _mc_for_target)
 
                 upside_s = (t_s - price) / price * 100
                 upside_l = (t_l - price) / price * 100
@@ -4450,10 +5150,16 @@ if _REV_AVAILABLE:  # 共用 reversal_scanner 的 generate_monte_carlo_bands
 - **長期上漲空間** → 找 p90 比現價高最多的「飆股潛力股」→ 偏長放
 - **下跌風險** → 看 p10 最差的股（可能避開，或拿來做空研究）
 
+**掃描範圍**：
+- 🎯 **S&P 100 核心**：美股大型權值股（~100 檔，3-5 分鐘）
+- 🚀 **擴大熱門**：SP100 + 半導體/SaaS/AI/中概/EV 等散戶熱門（~215 檔，7-12 分鐘）
+- 🇹🇼 **台股熱門**：權值 30 + 安聯台灣大壩基金成分 + 被動元件 + 封裝 + AI/半導體/航運（~80 檔，5-8 分鐘）
+
 **注意**：
 - 跟個股卡片數字會有 1-3% 的差異 — batch 掃描沒套用 7 維 context 的漂移調整，但方向跟順序一致。
 - 蒙地卡羅是統計推演，不保證實際走勢。應搭配「反轉預警」「悄悄吸籌」「內部人賣壓」綜合判斷。
-- 100 檔掃完約 3-5 分鐘，結果快取 6 小時。
+- 各範圍結果獨立快取 6 小時，切換已掃過的範圍會秒回。
+- 台股有漲跌停限制（10%），MC 的極端值（p10/p90）可能略高估，大型權值股影響較小。
 """)
 
 
