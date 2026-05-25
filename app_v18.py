@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.11", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.14", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -65,11 +65,13 @@ st.markdown("""
 # --- 1. 資料系統 ---
 WATCHLIST_FILE, ANCHOR_FILE, TW_NAMES_FILE = "watchlist.json", "anchors.json", "tw_names.json"
 DEFAULT_WATCHLISTS = {
-    "🇺🇸 美持股": ['^NDX', 'NVDA', 'TSM', 'AAPL', 'PLTR'],
-    "🔭 美觀察": ['AMD', 'TSLA', 'GOOG', 'META', 'AMZN'],
-    "🔭 觀察股2": ['COIN', 'SOFI', 'NKE', 'NFLX'],
-    "🇹🇼 台持股": ['2330.TW', '0050.TW', '00878.TW'],
-    "🔭 台觀察": ['8150.TW', '5534.TW', '3535.TW', '6830.TW'],
+    "🇺🇸 美持股": ['^NDX', 'NVDA', 'TSM', 'AMD', 'QQQ', 'CRCL', 'TSLA', 'RXRX', 'MU',
+                  'MSFT', 'SOFI', 'ASX', 'NKE', 'INTC', 'GLW', 'SNDK', 'WDC'],
+    "🔭 美觀察": ['AAPL', 'BE', 'NFLX', 'META', 'ONDS', 'AMZN', 'CRWV', 'COIN', 'GOOG', 'PLTR'],
+    "🔭 觀察股2": ['RKLB', 'LUNR', 'FTNT', 'OUST', 'QUBT'],
+    "🇹🇼 台持股": ['00403A.TW', '0050.TW', '00878.TW', '2330.TW', '5534.TW', '3037.TW', '7610.TW'],
+    "🔭 台觀察": ['^TWII', '8150.TW', '3535.TW', '1504.TW', '6830.TW', '8021.TW', '2327.TW',
+                  '1815.TWO', '5347.TWO', '2344.TW', '2324.TW', '8215.TW', '4958.TW'],
 }
 
 # [修復 #3 v2] 拿掉 hardcoded fallback；抓不到環境變數時回空字串並印警告
@@ -238,7 +240,7 @@ def compute_signal_context(p_data, idx_pos, ticker, market_state):
 
 
 def fetch_fundamental_snapshot(ticker, df):
-    """[V26.11] 快速抓取基本面快照（Market Cap / 量能 vs 均量 / 財報）。
+    """[V26.13] 快速抓取基本面快照（Market Cap / 量能 vs 均量 / 財報）。
 
     盡量用已有的 df 數據，只在需要 Market Cap 時呼叫 yf.Ticker().info（有 cache）。
     回傳 dict 給 render_signal_context_panel 和 AI 劇本用。
@@ -303,7 +305,7 @@ def fetch_fundamental_snapshot(ticker, df):
                     result["mcap_tier"] = "micro"
                     result["mcap_display"] = f"${mcap/1e6:.0f}M（微型 ⚠️）"
         except Exception as _mcap_err:
-            # [V26.11 Rule 12] 不靜默失敗，記錄原因
+            # [V26.13 Rule 12] 不靜默失敗，記錄原因
             result["mcap_display"] = f"—（抓取失敗）"
 
         # ── 財報（讀取已有的 session state，不重複呼叫 API）──
@@ -330,13 +332,13 @@ def fetch_fundamental_snapshot(ticker, df):
                 result["earn_hint"] = ""  # 日期解析失敗，不影響其他欄位
 
     except Exception as _funda_err:
-        # [V26.11 Rule 12] 外層失敗時回傳部分結果，不全部吞掉
+        # [V26.13 Rule 12] 外層失敗時回傳部分結果，不全部吞掉
         result["mcap_display"] = result.get("mcap_display", "—")
     return result
 
 
 def _render_funda_row(funda):
-    """[V26.11] 渲染基本面速查行（嵌入 7 維 context 面板底部）"""
+    """[V26.13] 渲染基本面速查行（嵌入 7 維 context 面板底部）"""
     if not funda or funda.get("market_cap") is None:
         return ""
 
@@ -380,7 +382,7 @@ def _render_funda_row(funda):
 
 def render_signal_context_panel(ctx, signal_label, funda=None):
     """渲染 7 維 context 推演面板 (HTML)
-    [V26.11] 新增 funda 參數：基本面快照數據（Market Cap / 量能 / 財報）
+    [V26.13] 新增 funda 參數：基本面快照數據（Market Cap / 量能 / 財報）
     """
     if not ctx:
         return ""
@@ -397,7 +399,7 @@ def render_signal_context_panel(ctx, signal_label, funda=None):
     if ctx["momentum_20d"] > 0 and ctx["momentum_20d"] < 15: bonus += 2  # 動能合理
     if ctx["dist_from_52w_high"] < 5: bonus -= 5   # 已在頂部
 
-    # [V26.11] 基本面影響 win_rate
+    # [V26.13] 基本面影響 win_rate
     if funda:
         if funda.get("vol_vs_avg", 1.0) < 0.5: bonus -= 5   # 量只有均量一半 → 動能嚴重不足
         elif funda.get("vol_vs_avg", 1.0) < 0.8: bonus -= 2
@@ -432,7 +434,7 @@ def render_signal_context_panel(ctx, signal_label, funda=None):
     }
     engine_hint = engine_hint_map.get(ctx["engine"], "")
 
-    # [V26.11] 提示分色 helper：危險=紅、中等=橙、機會=綠、中性=灰
+    # [V26.13] 提示分色 helper：危險=紅、中等=橙、機會=綠、中性=灰
     def _hc(hint: str) -> str:
         """根據提示文字前綴回傳對應 CSS 顏色。"""
         if hint.startswith("✅"):
@@ -1559,7 +1561,7 @@ def analyze_strategic_signals(df):
 
 
 def find_key_sr_levels(df, n_levels=3):
-    """[V26.11] 自動偵測關鍵支撐/阻力位。
+    """[V26.13] 自動偵測關鍵支撐/阻力位。
 
     結合三種方法：
     1. Pivot Point（局部極值）— 最近 120 根 K 線的波峰/波谷
@@ -1668,7 +1670,7 @@ def find_key_sr_levels(df, n_levels=3):
 
 def predict_target_and_rating(df, mc_result=None):
     """
-    [V26.11] 短/長期目標 + 強弱評等 + 技術目標位。
+    [V26.13] 短/長期目標 + 強弱評等 + 技術目標位。
 
     三層目標體系：
       短期技術目標（1-5天）= 最近阻力位（S/R 結構）
@@ -1696,10 +1698,10 @@ def predict_target_and_rating(df, mc_result=None):
         mc_p50 = float(mc_result["p50_final"])
         mc_p90 = float(mc_result["p90_final"])
 
-        # [V26.11] 技術短期目標：最近阻力位（若無阻力 → 52W 高）
+        # [V26.13] 技術短期目標：最近阻力位（若無阻力 → 52W 高）
         tech_target = nearest_r if nearest_r else _52w_high
 
-        # [V26.11] 修正 MSFT 問題：如果 MC 看空但趨勢已反轉向上 → 拉高 p50
+        # [V26.13] 修正 MSFT 問題：如果 MC 看空但趨勢已反轉向上 → 拉高 p50
         if trend_up and mc_p50 < price:
             # MC 用了舊的負 drift，但股票已在 SMA20 上方 → 用技術目標取代
             t_s = tech_target
@@ -1732,6 +1734,99 @@ def predict_target_and_rating(df, mc_result=None):
     return t_s, t_l, rating, sr_info
 
 
+def classify_scenario(df, sr_info, funda=None):
+    """[V26.13] 看數據 → 判定 5 級劇本（學分析師看完數據再決定畫哪條線）。
+
+    回傳 dict:
+        level:       'p90'/'p70'/'p50'/'p30'/'p10'
+        label:       中文劇本名
+        color:       線的顏色
+        reasons:     list[str] 判定理由（顯示在標籤）
+        score:       -3 ~ +3 的綜合分數（正=偏多）
+    """
+    price = float(df['Close'].iloc[-1])
+    sma20 = float(df['SMA_20'].iloc[-1]) if 'SMA_20' in df.columns and not pd.isna(df['SMA_20'].iloc[-1]) else price
+    sma60 = float(df['SMA_60'].iloc[-1]) if 'SMA_60' in df.columns and not pd.isna(df['SMA_60'].iloc[-1]) else price
+    rsi = float(df['RSI'].iloc[-1]) if 'RSI' in df.columns and not pd.isna(df['RSI'].iloc[-1]) else 50
+
+    score = 0
+    reasons = []
+
+    # ── 1. 趨勢（站上/跌破均線）──
+    if price > sma20 > sma60:
+        score += 2
+        reasons.append("站上均線多頭排列")
+    elif price > sma20:
+        score += 1
+        reasons.append("站上月線")
+    elif price < sma20 < sma60:
+        score -= 2
+        reasons.append("跌破均線空頭排列")
+    else:
+        score -= 1
+        reasons.append("跌破月線")
+
+    # ── 2. RSI 動能 ──
+    if rsi > 70:
+        score -= 1  # 過熱回檔風險
+        reasons.append(f"RSI {rsi:.0f} 過熱")
+    elif rsi > 55:
+        score += 1
+        reasons.append(f"RSI {rsi:.0f} 偏強")
+    elif rsi < 30:
+        score += 1  # 超賣反彈機會
+        reasons.append(f"RSI {rsi:.0f} 超賣")
+    elif rsi < 45:
+        score -= 1
+        reasons.append(f"RSI {rsi:.0f} 偏弱")
+
+    # ── 3. S/R 區間位置（逼近阻力扣分，靠近支撐加分）──
+    range_pos = sr_info.get("range_pos", 50) if sr_info else 50
+    if range_pos > 80:
+        score -= 1
+        reasons.append("逼近阻力")
+    elif range_pos < 25:
+        score += 1
+        reasons.append("接近支撐")
+
+    # ── 4. 量能（基本面速查的 vol_vs_avg）──
+    if funda and funda.get("vol_vs_avg"):
+        vr = funda["vol_vs_avg"]
+        if vr > 1.5:
+            score += 1
+            reasons.append("放量")
+        elif vr < 0.6:
+            score -= 1
+            reasons.append("量縮動能弱")
+
+    # ── 5. 財報週風險 ──
+    if funda and funda.get("days_to_earn") is not None:
+        dte = funda["days_to_earn"]
+        if 0 <= dte <= 5:
+            score -= 1
+            reasons.append("財報前不確定")
+
+    # ── 分數 → 5 級 percentile ──
+    if score >= 3:
+        level, label, color = "p90", "🟢 強勢樂觀（主升抱緊）", "#22c55e"
+    elif score >= 1:
+        level, label, color = "p70", "🔵 溫和偏多（回檔加碼）", "#3b82f6"
+    elif score >= -1:
+        level, label, color = "p50", "🟡 中性震盪（等方向）", "#eab308"
+    elif score >= -2:
+        level, label, color = "p30", "🟠 偏空保守（觀望不追）", "#f97316"
+    else:
+        level, label, color = "p10", "🔴 弱勢悲觀（不建倉）", "#ef4444"
+
+    return {
+        "level": level,
+        "label": label,
+        "color": color,
+        "reasons": reasons[:3],  # 最多顯示 3 個理由
+        "score": score,
+    }
+
+
 def get_technical_target_threshold(df):
     """技術面「達標」閾值（給走勢圖標籤用，與 AI 目標 t_s 分離）
     
@@ -1758,6 +1853,60 @@ def format_volume(num):
     elif num >= 1e6:
         return f"{num / 1e6:.2f}M"
     return f"{num}"
+
+
+def build_snapshot_df(watchlists):
+    """[V26.14] 凍結今日 AI 劇本推演：對所有清單股票各跑一次 scenario + 目標位，
+    回傳 (DataFrame 每股一列, 快照日期) 供日後比對實際走勢。
+    刻意不跑蒙地卡羅 / 不抓 funda（×數十檔太慢又可能觸發限流），
+    劇本核心（趨勢 / RSI / 支撐阻力）不受影響。"""
+    tw_now = datetime.utcnow() + timedelta(hours=8)
+    snap_date = tw_now.strftime("%Y-%m-%d")
+    rows, seen = [], set()
+    for _cat, _tickers in watchlists.items():
+        for tk in _tickers:
+            if tk in seen:
+                continue
+            seen.add(tk)
+            try:
+                d = yf.download(tk, period="1y", interval="1d", progress=False)
+                if d is None or d.empty:
+                    rows.append({"代碼": tk, "快照日期": snap_date, "錯誤": "無資料"})
+                    continue
+                if isinstance(d.columns, pd.MultiIndex):
+                    d.columns = d.columns.get_level_values(0)
+                d = d.loc[:, ~d.columns.duplicated()]
+                d.index = pd.to_datetime(d.index)
+                if d.index.tz is not None:
+                    d.index = d.index.tz_localize(None)
+                d = d.replace([np.inf, -np.inf], np.nan).dropna(subset=["Open", "High", "Low", "Close"])
+                if len(d) < 60:
+                    rows.append({"代碼": tk, "快照日期": snap_date, "錯誤": "資料不足(<60日)"})
+                    continue
+                d = calculate_indicators(d)
+                t_s, t_l, rating, sr_info = predict_target_and_rating(d)  # mc_result=None → fallback
+                sc = classify_scenario(d, sr_info, funda=None)
+                price = float(d["Close"].iloc[-1])
+                rows.append({
+                    "代碼": tk,
+                    "名稱": get_stock_name(tk),
+                    "快照日期": snap_date,
+                    "現價": round(price, 2),
+                    "劇本等級": sc["level"],
+                    "劇本標籤": sc["label"],
+                    "劇本分數": sc["score"],
+                    "判定理由": " / ".join(sc["reasons"]),
+                    "短期目標": round(t_s, 2) if t_s else None,
+                    "短期目標%": round((t_s / price - 1) * 100, 1) if t_s and price else None,
+                    "長期目標": round(t_l, 2) if t_l else None,
+                    "長期目標%": round((t_l / price - 1) * 100, 1) if t_l and price else None,
+                    "評等": rating,
+                    "區間位置%": sr_info.get("range_pos"),
+                    "錯誤": "",
+                })
+            except Exception as _e:
+                rows.append({"代碼": tk, "快照日期": snap_date, "錯誤": str(_e)[:60]})
+    return pd.DataFrame(rows), snap_date
 
 
 def detect_launch_points(df: pd.DataFrame) -> pd.Series:
@@ -1904,6 +2053,50 @@ with st.sidebar:
     st.title("🎛️ 控制台")
     mobile_mode = st.toggle("啟用手機防卡死模式", value=False)
     st.markdown("---")
+
+    # ── [V26.14] 一鍵記錄今日劇本快照（凍結推演供日後比對）──
+    if st.button("📸 記錄今日劇本快照", use_container_width=True,
+                 help="對左側所有清單股票凍結今日 AI 劇本判定與目標價，輸出 Excel 供日後比對實際走勢"):
+        _wl_snap = st.session_state.get("watchlists", load_watchlists())
+        with st.spinner("正在記錄所有清單股票的劇本快照（約 1-2 分鐘）..."):
+            _snap_df, _snap_date = build_snapshot_df(_wl_snap)
+        from io import BytesIO
+        _buf = BytesIO()
+        _ok = int((_snap_df["錯誤"] == "").sum()) if "錯誤" in _snap_df.columns else len(_snap_df)
+        try:
+            with pd.ExcelWriter(_buf, engine="openpyxl") as _xw:
+                _snap_df.to_excel(_xw, index=False, sheet_name="劇本快照")
+            _ext = "xlsx"
+            _mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        except Exception:
+            _buf = BytesIO(_snap_df.to_csv(index=False).encode("utf-8-sig"))
+            _ext = "csv"
+            _mime = "text/csv"
+        _fname = f"scenario_snapshot_{_snap_date}.{_ext}"
+        _bytes = _buf.getvalue()
+        # 雙保險①：嘗試寫入本機 snapshots/日期/ 資料夾（Rule 12：成敗都明講）
+        try:
+            _folder = os.path.join("snapshots", _snap_date)
+            os.makedirs(_folder, exist_ok=True)
+            with open(os.path.join(_folder, _fname), "wb") as _wf:
+                _wf.write(_bytes)
+            _msg = f"✅ 已存至 {_folder}/{_fname}（成功 {_ok}/{len(_snap_df)} 檔）"
+        except Exception as _we:
+            _msg = f"ℹ️ 無法寫入本機資料夾（{str(_we)[:40]}），請用下方下載鈕（成功 {_ok}/{len(_snap_df)} 檔）"
+        st.session_state["_snap_bytes"] = _bytes
+        st.session_state["_snap_fname"] = _fname
+        st.session_state["_snap_mime"] = _mime
+        st.session_state["_snap_msg"] = _msg
+        st.session_state["_snap_preview"] = _snap_df
+
+    # 雙保險②：下載鈕（從 session_state 渲染，點擊後不消失）
+    if st.session_state.get("_snap_bytes"):
+        st.download_button("⬇️ 下載今日快照", st.session_state["_snap_bytes"],
+                           file_name=st.session_state["_snap_fname"],
+                           mime=st.session_state["_snap_mime"],
+                           use_container_width=True)
+        if st.session_state.get("_snap_msg"):
+            st.caption(st.session_state["_snap_msg"])
 
     st.header("📌 多維度自選股清單")
     cur_t = st.session_state.get('current_ticker', "^NDX")
@@ -2217,7 +2410,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.11")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.14")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -2414,7 +2607,7 @@ if is_index_or_etf(cur_t):
 # 一體化四大戰情方塊佈局
 # ==========================================
 ern_date, ern_res = get_earnings_status(cur_t)
-# [V26.11] 存入 session state，讓 fetch_fundamental_snapshot 讀取
+# [V26.13] 存入 session state，讓 fetch_fundamental_snapshot 讀取
 st.session_state['_earn_info_v29'] = {"next_date": ern_date.split(":")[-1].strip() if ern_date and "N/A" not in ern_date else "N/A",
                                        "last_result": ern_res}
 
@@ -2489,7 +2682,7 @@ with c4:
     _mc_ran = st.session_state.get('_mc_status_v27', {}).get('ran', False)
     _source_label = ("🔮 MC + S/R 混合" if _mc_ran else "📐 技術面 S/R")
 
-    # [V26.11] 技術目標位
+    # [V26.13] 技術目標位
     _tech_tgt = sr_info.get("tech_target")
     _tech_pct = (_tech_tgt / close_v - 1) * 100 if _tech_tgt and close_v > 0 else None
     _tech_clr = "#22c55e" if _tech_pct and _tech_pct >= 0 else "#ef4444"
@@ -2517,7 +2710,7 @@ with c4:
 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
 
 # ──────────────────────────────────────────────────────
-# [V26.11] 📍 短期點位面板（支撐/阻力 + 區間位置 + 綜合判斷）
+# [V26.13] 📍 短期點位面板（支撐/阻力 + 區間位置 + 綜合判斷）
 # ──────────────────────────────────────────────────────
 if sr_info:
     _sr_s = sr_info.get("supports", [])
@@ -2857,6 +3050,70 @@ if _mc is not None:
         hovertemplate='中位數: $%{y:.2f}<extra></extra>'
     ), row=1, col=1)
 
+    # ──────────────────────────────────────────────────────
+    # [V26.13] AI 劇本路徑（看數據判定 5 級 → 畫對應 percentile 的鋸齒路徑）
+    # ──────────────────────────────────────────────────────
+    try:
+        _funda_for_scenario = _funda if '_funda' in dir() else fetch_fundamental_snapshot(cur_t, df)
+        _scenario = classify_scenario(df, sr_info, _funda_for_scenario)
+        _level = _scenario["level"]
+
+        # 選定對應 percentile 帶當骨架
+        _band_map = {
+            "p90": _mc.get('p90'),
+            "p70": _mc.get('p75'),  # 用 p75 當 p70 近似（MC 有 p75）
+            "p50": _mc.get('p50'),
+            "p30": _mc.get('p25'),  # 用 p25 當 p30 近似
+            "p10": _mc.get('p10'),
+        }
+        _skeleton = _band_map.get(_level)
+
+        if _skeleton is not None and len(_skeleton) > 1:
+            # 疊加鋸齒：用 sigma 控制幅度，製造「之字」震盪視覺
+            _sigma = _mc.get('sigma', 0.02)
+            _dates_path = list(_mc['dates'])
+            _n = len(_skeleton)
+            # 鋸齒：每 2-3 天一個轉折，幅度 = sigma × price × 係數
+            _base_price = float(df['Close'].iloc[-1])
+            _zigzag_amp = _sigma * _base_price * 0.6  # 0.6 係數讓鋸齒不過大
+            _path_y = []
+            for i in range(_n):
+                # 三角波鋸齒（每 3 天一循環）
+                _phase = (i % 6) / 6.0  # 0~1
+                _zig = (abs(_phase - 0.5) * 2 - 0.5) * 2  # -1~1 三角波
+                _path_y.append(float(_skeleton[i]) + _zig * _zigzag_amp)
+            # 起點對齊現價（第一個點 = 現價）
+            _path_y[0] = _base_price
+
+            fig.add_trace(go.Scatter(
+                x=_dates_path,
+                y=_path_y,
+                mode='lines',
+                line=dict(color=_scenario["color"], width=2.5, dash='solid'),
+                name=f'🎯 AI 劇本路徑（{_level}）',
+                hovertemplate=f'{_scenario["label"]}<br>$%{{y:.2f}}<extra></extra>',
+            ), row=1, col=1)
+
+            # 路徑終點標籤
+            _end_price = _path_y[-1]
+            _end_pct = (_end_price / _base_price - 1) * 100
+            _reason_txt = "｜".join(_scenario["reasons"])
+            fig.add_annotation(
+                x=_dates_path[-1], y=_end_price,
+                text=f"{_scenario['label']}<br>${_end_price:.2f} ({_end_pct:+.1f}%)<br><span style='font-size:9px;'>理由：{_reason_txt}</span>",
+                showarrow=True, arrowhead=2, arrowcolor=_scenario["color"],
+                font=dict(color=_scenario["color"], size=10),
+                bgcolor="rgba(20,20,22,0.85)", bordercolor=_scenario["color"], borderwidth=1,
+                xanchor="left", align="left",
+                row=1, col=1,
+            )
+            # 存到 session 給其他區塊參考
+            st.session_state['_scenario_v29'] = _scenario
+    except Exception as _scen_e:
+        # [Rule 12] 不靜默失敗
+        st.session_state['_scenario_err'] = str(_scen_e)
+
+
 # [v28] 規則式劇本（黃色虛線+菱形）已移除，預測完全交給蒙地卡羅雲帶
 
 # ──────────────────────────────────────────────────────
@@ -2954,7 +3211,7 @@ else:
 
 # 把狀態存入 session 給圖下方面板顯示
 st.session_state['_ev_status_v29'] = _ev_status
-# [V26.11] 也把事件列表存起來，讓燈號上方面板可以讀取
+# [V26.13] 也把事件列表存起來，讓燈號上方面板可以讀取
 if 'events_for_chart' not in dir():
     events_for_chart = []
 st.session_state['_events_for_chart_v29'] = events_for_chart if events_for_chart else []
@@ -2969,32 +3226,8 @@ if not is_breaking and iron_price > 0:
     fig.add_hline(y=iron_price, line_dash="dash", line_color="#20c997", annotation_text=f"🧱 鐵板 ${iron_price:.2f}", annotation_font_color="#20c997", annotation_position="bottom right", opacity=1.0, layer="above", row=1, col=1)
 
 # ──────────────────────────────────────────────────────
-# [V26.11] 目標價線 + S/R 強化線（走勢圖上直接看到）
+# [V26.13] S/R 強化線（目標價線已改為 AI 劇本路徑，畫在 MC 雲帶區）
 # ──────────────────────────────────────────────────────
-# 短期目標線（藍色）
-if t_s and close_v > 0 and abs(t_s / close_v - 1) > 0.005:  # 差距 > 0.5% 才畫
-    _ts_pct = (t_s / close_v - 1) * 100
-    _ts_color = "#00bfff"
-    fig.add_hline(
-        y=t_s, line_dash="dash", line_color=_ts_color, line_width=1.5,
-        annotation_text=f"🎯 短期目標<br>${t_s:.2f} ({_ts_pct:+.1f}%)",
-        annotation_font_color=_ts_color, annotation_font_size=10,
-        annotation_position="top left", annotation_align="left",
-        opacity=0.8, layer="above", row=1, col=1,
-    )
-
-# 長期目標線（紫色）
-if t_l and close_v > 0 and abs(t_l / close_v - 1) > 0.01:  # 差距 > 1% 才畫
-    _tl_pct = (t_l / close_v - 1) * 100
-    _tl_color = "#a855f7"
-    fig.add_hline(
-        y=t_l, line_dash="dashdot", line_color=_tl_color, line_width=1.5,
-        annotation_text=f"🚀 長期目標<br>${t_l:.2f} ({_tl_pct:+.1f}%)",
-        annotation_font_color=_tl_color, annotation_font_size=10,
-        annotation_position="top left", annotation_align="left",
-        opacity=0.7, layer="above", row=1, col=1,
-    )
-
 # V26.07 S/R 強化線（只畫跟現有 support_line/resist_line 不重疊的）
 if sr_info:
     _sr_supports = sr_info.get("supports", [])
@@ -3311,7 +3544,7 @@ st.plotly_chart(fig, use_container_width=True)
 
 # ──────────────────────────────────────────────────────
 # ──────────────────────────────────────────────────────
-# [V26.11] 事件節點註解面板（走勢圖外、進場燈號上方）
+# [V26.13] 事件節點註解面板（走勢圖外、進場燈號上方）
 # ──────────────────────────────────────────────────────
 _ev_panel_events = st.session_state.get('_events_for_chart_v29', [])
 _ev_panel_drawn  = st.session_state.get('_ev_status_v29', {}).get("drawn_count", 0)
@@ -3616,7 +3849,7 @@ if _launch_signals:
         f"（已套用大盤過濾器 + MA60 上升）。下方顯示最近 {len(recent_signals)} 個訊號的 AI 7 維推演。"
     )
     _market_state = st.session_state.get('_market_state_v27', {})
-    # [V26.11] 基本面快照（一次抓取，傳給所有 context 面板）
+    # [V26.13] 基本面快照（一次抓取，傳給所有 context 面板）
     _funda = fetch_fundamental_snapshot(cur_t, df)
     for sig in reversed(recent_signals):  # 最新的先顯示
         try:
@@ -4758,8 +4991,8 @@ if _REV_AVAILABLE:  # 共用 reversal_scanner 的 generate_monte_carlo_bands
     # 去重（SP100 + extra，保留順序）
     _EXTENDED_TGT_TICKERS = list(dict.fromkeys(_SP100_CORE_TICKERS + _EXTRA_POPULAR_TICKERS))
 
-    # [V26.11] 台股熱門（權值 30 + 安聯台灣大壩成分 + 被動元件 + 封裝 + AI/半導體/航運）
-    # [V26.11] 台股熱門（權值 30 + 安聯大壩 + 被動元件 + 封裝 + 面板 + PCB + 能源 + 電子科技）
+    # [V26.13] 台股熱門（權值 30 + 安聯台灣大壩成分 + 被動元件 + 封裝 + AI/半導體/航運）
+    # [V26.13] 台股熱門（權值 30 + 安聯大壩 + 被動元件 + 封裝 + 面板 + PCB + 能源 + 電子科技）
     _TW_HOT_TICKERS = [
         # ── 台股權值 30 ──
         "2330.TW",  # 台積電
@@ -4890,7 +5123,7 @@ if _REV_AVAILABLE:  # 共用 reversal_scanner 的 generate_monte_carlo_bands
         "2474.TW",   # 可成
         "2312.TW",   # 金寶
         "6591.TW",   # 動力-KY
-        # ── [V26.11] Yahoo 台股成交金額 Top 100 補充（截圖交叉比對）──
+        # ── [V26.13] Yahoo 台股成交金額 Top 100 補充（截圖交叉比對）──
         # 半導體 / IC
         "4958.TW",   # 臻鼎-KY（全球最大 PCB 廠）
         "2337.TW",   # 旺宏（NOR Flash）
@@ -4934,14 +5167,14 @@ if _REV_AVAILABLE:  # 共用 reversal_scanner 的 generate_monte_carlo_bands
         "3167.TW",   # 大量（AOI）
         "3048.TW",   # 益登（IC 通路）
         "6209.TW",   # 今國光（光學鏡頭）
-        # ── [V26.11] Yahoo 上市成交金額 84-100 補充 ──
+        # ── [V26.13] Yahoo 上市成交金額 84-100 補充 ──
         "8039.TW",   # 台虹（PI 膜）
         "7610.TW",   # 聯友金屬-創
         "4722.TW",   # 國精化（特化）
         "2367.TW",   # 燿華（PCB）
         "1582.TW",   # 信錦（機殼）
         "1560.TW",   # 中砂（研磨材料）
-        # ── [V26.11] Yahoo 上櫃成交金額 Top 28 補充（排除 ETF）──
+        # ── [V26.13] Yahoo 上櫃成交金額 Top 28 補充（排除 ETF）──
         "5328.TWO",  # 華容
         "6207.TWO",  # 雷科
         "3707.TWO",  # 漢磊（SiC 碳化矽）
