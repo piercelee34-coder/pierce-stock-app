@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.14", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.15", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1855,8 +1855,36 @@ def format_volume(num):
     return f"{num}"
 
 
+# [V26.15] 隔日預期價：你的公式 + 股性波動權重校正
+_SNAP_DIR_COEF = {"p90": 1.0, "p70": 0.5, "p50": 0.0, "p30": -0.5, "p10": -1.0}
+_SNAP_VOL_WEIGHT = {"trend": 1.0, "momentum": 1.6, "reversal": 2.5}  # 依 bias_limit 5/10/20 等比縮放
+
+
+def _predict_next_day(d, level, engine_type):
+    """隔日預期價 = 現價 × (1 + 方向係數 × 股性權重 × 近5日log報酬均值)。
+    回傳 (隔日預期價, 預測漲跌%)；資料不足時回傳 (現價, 0.0)。"""
+    price = float(d["Close"].iloc[-1])
+    logret = np.log(d["Close"] / d["Close"].shift(1))
+    avg5 = float(logret.tail(5).mean())
+    if np.isnan(avg5):
+        avg5 = 0.0
+    coef = _SNAP_DIR_COEF.get(level, 0.0)
+    volw = _SNAP_VOL_WEIGHT.get(engine_type, 2.5)
+    pred = price * (1 + coef * volw * avg5)
+    return round(pred, 2), round((pred / price - 1) * 100, 2) if price else 0.0
+
+
+def _trading_days_ahead(start_dt, n):
+    """從 start_dt 起算 n 個交易日後的日期（簡化：跳過週六日，不含假日）。"""
+    cnt, cur = 0, start_dt
+    while cnt < n:
+        cur = cur + timedelta(days=1)
+        if cur.weekday() < 5:
+            cnt += 1
+    return cur.strftime("%Y-%m-%d")
+
 def build_snapshot_df(watchlists):
-    """[V26.14] 凍結今日 AI 劇本推演：對所有清單股票各跑一次 scenario + 目標位，
+    """[V26.15] 凍結今日 AI 劇本推演：對所有清單股票各跑一次 scenario + 目標位，
     回傳 (DataFrame 每股一列, 快照日期) 供日後比對實際走勢。
     刻意不跑蒙地卡羅 / 不抓 funda（×數十檔太慢又可能觸發限流），
     劇本核心（趨勢 / RSI / 支撐阻力）不受影響。"""
@@ -1887,19 +1915,32 @@ def build_snapshot_df(watchlists):
                 t_s, t_l, rating, sr_info = predict_target_and_rating(d)  # mc_result=None → fallback
                 sc = classify_scenario(d, sr_info, funda=None)
                 price = float(d["Close"].iloc[-1])
+                # [V26.15] 股性分類 → 隔日預期價（股性校正）+ 短/長期到期日
+                _eng_label, _eng_type = get_stock_engine_mode(tk, d)
+                _nd_price, _nd_pct = _predict_next_day(d, sc["level"], _eng_type)
+                _short_due = _trading_days_ahead(tw_now, 5)
+                _long_due = _trading_days_ahead(tw_now, 30)
                 rows.append({
                     "代碼": tk,
                     "名稱": get_stock_name(tk),
                     "快照日期": snap_date,
                     "現價": round(price, 2),
+                    "股性": _eng_label,
+                    "隔日預期價": _nd_price,
+                    "隔日預測漲跌%": _nd_pct,
+                    "實際隔日價": None,        # 待填：隔天收盤後回補
+                    "隔日誤差%": None,          # 待填：(實際/預期-1)×100
+                    "預測公式版本": "v2",
+                    "短期目標": round(t_s, 2) if t_s else None,
+                    "短期目標%": round((t_s / price - 1) * 100, 1) if t_s and price else None,
+                    "短期到期日": _short_due,
+                    "長期目標": round(t_l, 2) if t_l else None,
+                    "長期目標%": round((t_l / price - 1) * 100, 1) if t_l and price else None,
+                    "長期到期日": _long_due,
                     "劇本等級": sc["level"],
                     "劇本標籤": sc["label"],
                     "劇本分數": sc["score"],
                     "判定理由": " / ".join(sc["reasons"]),
-                    "短期目標": round(t_s, 2) if t_s else None,
-                    "短期目標%": round((t_s / price - 1) * 100, 1) if t_s and price else None,
-                    "長期目標": round(t_l, 2) if t_l else None,
-                    "長期目標%": round((t_l / price - 1) * 100, 1) if t_l and price else None,
                     "評等": rating,
                     "區間位置%": sr_info.get("range_pos"),
                     "錯誤": "",
@@ -2410,7 +2451,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.14")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.15")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
