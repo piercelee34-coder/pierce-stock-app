@@ -545,7 +545,7 @@ def rolling_max_before(df, date, weeks=5, col="Value"):
 # ──────────────────────────────────────────────────────
 # 主要對外函式
 # ──────────────────────────────────────────────────────
-def get_crisis_indices(fred_key="", finmind_token=""):
+def get_crisis_indices(fred_key="", finmind_token="", window=PERCENTILE_WINDOW):
     """
     一次抓所有資料 + 計算 US/TW 兩個指數歷史
     回傳 dict:
@@ -688,7 +688,7 @@ def get_crisis_indices(fred_key="", finmind_token=""):
             past = tw_margin_s[tw_margin_s.index <= date]
             if len(past) >= 30:
                 cur = past.iloc[-1]
-                hist = past.iloc[-PERCENTILE_WINDOW:] if len(past) >= PERCENTILE_WINDOW else past
+                hist = past.iloc[-window:] if len(past) >= window else past
                 s_tw_margin = score_percentile(cur, hist)
 
         s_tw_per = None
@@ -696,7 +696,7 @@ def get_crisis_indices(fred_key="", finmind_token=""):
             past = tw_per_s[tw_per_s.index <= date]
             if len(past) >= 30:
                 cur = past.iloc[-1]
-                hist = past.iloc[-PERCENTILE_WINDOW:] if len(past) >= PERCENTILE_WINDOW else past
+                hist = past.iloc[-window:] if len(past) >= window else past
                 s_tw_per = score_percentile(cur, hist)
 
         tw_components = [
@@ -734,12 +734,14 @@ def get_crisis_indices(fred_key="", finmind_token=""):
         sub_cols=["VIX期限結構", "殖利率倒掛", "HY信用利差",
                   "NAAIM經理人", "AAII散戶", "市場結構"],
         weights=[0.20, 0.20, 0.20, 0.15, 0.10, 0.15],
+        window=window,
     )
     tw_df = apply_percentile_and_topk(
         tw_df_raw,
         sub_cols=["TSM ADR溢價", "台幣20日變化", "台股市場結構",
                   "美股共振", "散戶融資餘額", "台積電PER"],
         weights=[0.30, 0.25, 0.15, 0.20, 0.05, 0.05],
+        window=window,
     )
 
     return {

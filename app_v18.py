@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.15", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.18", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2451,7 +2451,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.15")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.18")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -2627,7 +2627,7 @@ if is_index_or_etf(cur_t):
             f'🚨 大盤崩跌警示 '
             f'<span style="color:{crash["level_color"]}; margin-left:10px;">{crash["level_label"]}</span>'
             f'<span style="font-size:13px; color:#aaa; font-weight:normal; margin-left:10px;">'
-            f'(風險分數：{crash["score"]} / 17)</span></div>'
+            f'(風險分數：{crash["score"]} / 18)</span></div>'
             f'<div style="background:#262730; padding:14px; border-radius:6px; '
             f'border:1px solid {crash["level_color"]}; color:#e5e7eb; font-size:14px;">'
             f'<b style="color:{crash["level_color"]};">📋 行動指南：</b> {crash["summary"]}'
@@ -2639,7 +2639,7 @@ if is_index_or_etf(cur_t):
         st.markdown(
             f'<div style="background:#1a2a1a; padding:10px 18px; border-radius:6px; '
             f'margin-bottom:15px; border-left:5px solid #22c55e; font-size:13px; color:#aaffaa;">'
-            f'🛡️ <b>大盤崩跌警示：</b>{crash["level_label"]}（風險分數：{crash["score"]} / 17）。'
+            f'🛡️ <b>大盤崩跌警示：</b>{crash["level_label"]}（風險分數：{crash["score"]} / 18）。'
             f'{crash["summary"]}</div>',
             unsafe_allow_html=True
         )
@@ -4000,13 +4000,29 @@ if _CRISIS_AVAILABLE:
     except Exception:
         pass
 
+    # [V26.18] 百分位窗口可切換：252=標準(穩、中期) / 120 / 60=快速(敏感、短期)
+    _win_label_map = {
+        "標準 252 日（中期·穩定·歷史可比）": 252,
+        "快速 60 日（短期·敏感·早警報）": 60,
+        "折衷 120 日": 120,
+    }
+    _win_choice = st.radio(
+        "📐 百分位校準窗口",
+        list(_win_label_map.keys()),
+        index=0,
+        horizontal=True,
+        help="縮短窗口讓指數對「近期相對極端」更敏感（反應更快），代價是假警報增加、且分數與其他窗口不可直接比較。預設 252 維持原行為。",
+    )
+    _crisis_window = _win_label_map[_win_choice]
+
     @st.cache_data(ttl=21600, show_spinner="抓取空頭距離指數資料...")
-    def _cached_crisis(fred_key, finmind_token, anchor):
+    def _cached_crisis(fred_key, finmind_token, anchor, window):
         # anchor 是固定時間錨點（台灣時間 05/08/14/20），不同就會重抓
-        return crisis_engine.get_crisis_indices(fred_key, finmind_token)
+        # window 進 cache key：切換窗口會重算（不會回舊快取）
+        return crisis_engine.get_crisis_indices(fred_key, finmind_token, window=window)
 
     try:
-        crisis = _cached_crisis(FRED_KEY, FINMIND_TOKEN, get_cache_anchor())
+        crisis = _cached_crisis(FRED_KEY, FINMIND_TOKEN, get_cache_anchor(), _crisis_window)
     except Exception as e:
         st.error(f"空頭距離指數計算失敗：{e}")
         crisis = None
@@ -4418,13 +4434,27 @@ if _CRISIS_AVAILABLE and _INSIDER_AVAILABLE:
     if _us_score is not None and _ins_score is not None:
         st.markdown("---")
         st.header("💼 資金面綜合風險指數")
-        st.caption(
-            "結合 **空頭距離（60%）+ 內部人賣壓（40%）** 給出單一綜合風險分數。"
-            "**離場比例** = 建議從股市撤出的部位百分比。"
-        )
+        # [V26.16] 指數/ETF 頁有大盤走勢崩跌資料 → 3 構面；個股頁無 → 維持 2 構面
+        _has_crash = ("crash" in dir()) and isinstance(crash, dict) and (crash.get("score") is not None)
+        if _has_crash:
+            st.caption(
+                "結合 **走勢崩跌（40%）+ 空頭距離（35%）+ 內部人賣壓（25%）** 給出單一綜合風險分數。"
+                "**離場比例** = 建議從股市撤出的部位百分比。"
+            )
+        else:
+            st.caption(
+                "結合 **空頭距離（60%）+ 內部人賣壓（40%）** 給出單一綜合風險分數。"
+                "**離場比例** = 建議從股市撤出的部位百分比。"
+            )
 
         # 計算綜合風險
-        combined_us = round(0.6 * _us_score + 0.4 * _ins_score, 1)
+        # [V26.16] 走勢崩跌正規化：原始 0–18 → 0–100（上限 18 已查證）
+        if _has_crash:
+            _crash_norm = round(min(100.0, max(0.0, crash["score"] * 100.0 / 18.0)), 1)
+            combined_us = round(0.40 * _crash_norm + 0.35 * _us_score + 0.25 * _ins_score, 1)
+        else:
+            _crash_norm = None
+            combined_us = round(0.6 * _us_score + 0.4 * _ins_score, 1)
         # TW 沒有 SEC Form 4，只用空頭距離 + 美股共振（已內含）
         combined_tw = round(_tw_score, 1) if _tw_score is not None else None
 
@@ -4468,7 +4498,7 @@ if _CRISIS_AVAILABLE and _INSIDER_AVAILABLE:
                     f'<span style="color:#ddd;font-size:15px;font-weight:bold;">'
                     f'{flag} {market_label}</span>'
                     f'<span style="color:#888;font-size:11px;">'
-                    f'{"空頭+內部人" if has_insider else "僅空頭距離"}</span>'
+                    f'{("走勢+空頭+內部人" if (has_insider and _has_crash) else ("空頭+內部人" if has_insider else "僅空頭距離"))}</span>'
                     f'</div>'
                     # 大數字
                     f'<div style="text-align:center;margin:10px 0 6px;">'
@@ -4501,13 +4531,20 @@ if _CRISIS_AVAILABLE and _INSIDER_AVAILABLE:
         _render_combined(c_us, combined_us, "美股綜合風險", "🇺🇸", has_insider=True)
         _render_combined(c_tw, combined_tw, "台股綜合風險", "🇹🇼", has_insider=False)
 
+        # [V26.16] 公式說明文字依構面數切換
+        if _has_crash:
+            _us_formula_label = "綜合風險 = 0.40 × 走勢崩跌 + 0.35 × 空頭距離 + 0.25 × 內部人賣壓"
+            _us_formula_now = f"0.40 × {_crash_norm:.1f} + 0.35 × {_us_score:.1f} + 0.25 × {_ins_score:.1f} = {combined_us:.1f}"
+        else:
+            _us_formula_label = "綜合風險 = 0.6 × 空頭距離 + 0.4 × 內部人賣壓"
+            _us_formula_now = f"0.6 × {_us_score:.1f} + 0.4 × {_ins_score:.1f} = {combined_us:.1f}"
         with st.expander("💡 綜合風險指數怎麼算？", expanded=False):
             st.markdown(f"""
             #### 計算公式
             
-            **美股**：`綜合風險 = 0.6 × 空頭距離 + 0.4 × 內部人賣壓`
+            **美股**：`{_us_formula_label}`
             
-            目前：`0.6 × {_us_score:.1f} + 0.4 × {_ins_score:.1f} = {combined_us:.1f}`
+            目前：`{_us_formula_now}`
             
             **台股**：直接用空頭距離分數（台股無 SEC Form 4 資料）
             
