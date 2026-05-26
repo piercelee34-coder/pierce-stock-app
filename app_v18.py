@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.18", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.19", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2451,7 +2451,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.18")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.19")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -4009,7 +4009,7 @@ if _CRISIS_AVAILABLE:
     _win_choice = st.radio(
         "📐 百分位校準窗口",
         list(_win_label_map.keys()),
-        index=0,
+        index=1,
         horizontal=True,
         help="縮短窗口讓指數對「近期相對極端」更敏感（反應更快），代價是假警報增加、且分數與其他窗口不可直接比較。預設 252 維持原行為。",
     )
@@ -4530,6 +4530,28 @@ if _CRISIS_AVAILABLE and _INSIDER_AVAILABLE:
 
         _render_combined(c_us, combined_us, "美股綜合風險", "🇺🇸", has_insider=True)
         _render_combined(c_tw, combined_tw, "台股綜合風險", "🇹🇼", has_insider=False)
+
+        # [V26.19] 危險分項提示：列出當前 >=75 分的子指標，避免被平穩的綜合分埋沒
+        # 純顯示：只讀既有 components，不碰任何計算/權重/合成邏輯
+        def _danger_hint(market_key):
+            comps = (crisis.get(market_key) or {}).get("components") or []
+            hot = [c for c in comps
+                   if isinstance(c.get("score"), (int, float)) and c["score"] >= 75]
+            hot.sort(key=lambda c: c["score"], reverse=True)
+            if hot:
+                items = "、".join(f'{c["name"]} {c["score"]:.1f}' for c in hot)
+                return (f'<div style="background:#2a1518;border-left:3px solid #f97316;'
+                        f'padding:8px 12px;border-radius:6px;font-size:13px;color:#fca5a5;">'
+                        f'⚠️ <b>危險分項（≥75）：</b>{items}</div>')
+            return ('<div style="background:#152a18;border-left:3px solid #22c55e;'
+                    'padding:8px 12px;border-radius:6px;font-size:13px;color:#86efac;">'
+                    '✅ 無危險分項（所有子指標 &lt;75）</div>')
+
+        _h_us, _h_tw = st.columns(2)
+        with _h_us:
+            st.markdown(_danger_hint("us"), unsafe_allow_html=True)
+        with _h_tw:
+            st.markdown(_danger_hint("tw"), unsafe_allow_html=True)
 
         # [V26.16] 公式說明文字依構面數切換
         if _has_crash:
