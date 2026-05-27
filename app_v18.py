@@ -537,12 +537,73 @@ def json_save(f_name, data):
     except Exception:
         pass
 
+# ──────────────────────────────────────────────────────
+# [V26.20] 自選股清單雲端持久化 — GitHub Gist 後端
+# 設計：Gist = 唯一真相來源（本機/雲端共用）；本地檔降級為離線備援。
+# 安全不變式：只有「本 session 成功讀過 Gist」才允許回寫 Gist，
+#   避免用 fallback（本地/DEFAULT）資料覆蓋雲端真相。
+# ──────────────────────────────────────────────────────
+GIST_TOKEN = _get_secret("GIST_TOKEN", "")
+GIST_ID = _get_secret("GIST_ID", "")
+_GIST_API = "https://api.github.com/gists"
+
+if not (GIST_TOKEN and GIST_ID):
+    print("⚠️  警告：未設定 GIST_TOKEN / GIST_ID，自選股清單將以本機模式運作（不同步雲端）。")
+
+def _gist_headers():
+    return {
+        "Authorization": f"Bearer {GIST_TOKEN}",
+        "Accept": "application/vnd.github+json",
+    }
+
+def _gist_read():
+    """從 Gist 讀回 watchlists dict。成功回 dict；未設定或任何失敗一律回 None。"""
+    if not (GIST_TOKEN and GIST_ID):
+        return None
+    try:
+        res = requests.get(f"{_GIST_API}/{GIST_ID}", headers=_gist_headers(), timeout=8)
+        if res.status_code != 200:
+            return None
+        f = res.json().get("files", {}).get(WATCHLIST_FILE)
+        if not f or "content" not in f:
+            return None
+        return json.loads(f["content"])
+    except Exception:
+        return None
+
+def _gist_write(data):
+    """寫回 Gist。成功回 True；未設定或失敗回 False。"""
+    if not (GIST_TOKEN and GIST_ID):
+        return False
+    try:
+        body = {"files": {WATCHLIST_FILE: {"content": json.dumps(data, ensure_ascii=False, indent=2)}}}
+        res = requests.patch(f"{_GIST_API}/{GIST_ID}", headers=_gist_headers(), json=body, timeout=8)
+        return res.status_code == 200
+    except Exception:
+        return False
+
 def load_watchlists():
+    """讀順序：Gist（雲端真相）→ 本地檔（離線備援）→ DEFAULT。
+    設 st.session_state['gist_synced'] / ['gist_status'] 供 save 與 UI 判斷。
+    """
+    remote = _gist_read()
+    if remote is not None:
+        st.session_state['gist_synced'] = True
+        st.session_state['gist_status'] = "ok"
+        json_save(WATCHLIST_FILE, remote)  # 同步刷新本地離線備援
+        return remote
+    # 讀不到 Gist → 備援模式，禁止本 session 回寫 Gist（決策 #3）
+    st.session_state['gist_synced'] = False
+    st.session_state['gist_status'] = "unconfigured" if not (GIST_TOKEN and GIST_ID) else "error"
     return json_load(WATCHLIST_FILE, DEFAULT_WATCHLISTS)
 
 def save_watchlists(data):
+    """一律寫本地 + session_state；僅在本 session 成功讀過 Gist 時才回寫 Gist
+    （資料來源為 Gist+編輯，回寫安全；fallback 來源則不回寫，避免覆蓋雲端）。"""
     json_save(WATCHLIST_FILE, data)
     st.session_state.watchlists = data
+    if st.session_state.get('gist_synced'):
+        st.session_state['gist_status'] = "ok" if _gist_write(data) else "write_error"
 
 
 # [修復 #7 v2] cache 只包住 API 網路查詢，file I/O 移到外層 get_stock_name 處理
@@ -2098,7 +2159,9 @@ with st.sidebar:
     # ── [V26.14] 一鍵記錄今日劇本快照（凍結推演供日後比對）──
     if st.button("📸 記錄今日劇本快照", use_container_width=True,
                  help="對左側所有清單股票凍結今日 AI 劇本判定與目標價，輸出 Excel 供日後比對實際走勢"):
-        _wl_snap = st.session_state.get("watchlists", load_watchlists())
+        _wl_snap = st.session_state.get("watchlists")
+        if not _wl_snap:
+            _wl_snap = load_watchlists()
         with st.spinner("正在記錄所有清單股票的劇本快照（約 1-2 分鐘）..."):
             _snap_df, _snap_date = build_snapshot_df(_wl_snap)
         from io import BytesIO
@@ -2140,6 +2203,17 @@ with st.sidebar:
             st.caption(st.session_state["_snap_msg"])
 
     st.header("📌 多維度自選股清單")
+    # [V26.20] Gist 雲端同步狀態（fail loud）
+    _gs = st.session_state.get('gist_status', 'unconfigured')
+    if _gs == "ok":
+        st.caption("🟢 雲端已同步（GitHub Gist）")
+    elif _gs == "unconfigured":
+        st.caption("🟡 本機模式：未設定 GIST_TOKEN / GIST_ID，編輯不會同步雲端")
+    elif _gs == "error":
+        st.warning("🔴 雲端同步失敗：本次讀不到 Gist，**本次編輯僅暫存於本機、不會寫回雲端**"
+                   "（避免覆蓋雲端資料）。請重新整理頁面重試。")
+    elif _gs == "write_error":
+        st.warning("🟠 上次儲存未能同步到雲端 Gist（本機已存）。再編輯一次即會自動重試。")
     cur_t = st.session_state.get('current_ticker', "^NDX")
     act_l = st.session_state.get('active_list')
     wls = st.session_state['watchlists']
