@@ -3232,6 +3232,43 @@ if _mc is not None:
 # [v28] 規則式劇本（黃色虛線+菱形）已移除，預測完全交給蒙地卡羅雲帶
 
 # ──────────────────────────────────────────────────────
+# [V26.21] V17.67 規則式推演線（青色第二參考）
+# 用途：在 MC 雲帶之外，提供「一眼可讀」的接手點 / 目標頂參考。
+# 演算法沿用 generate_projection_points（L1411），不取代 MC。
+# ──────────────────────────────────────────────────────
+try:
+    _v17_ph_s = sr_info.get("nearest_support") if sr_info else None
+    _v17_ph_r = sr_info.get("nearest_resist") if sr_info else None
+    _v17_x, _v17_y, _v17_scenario = generate_projection_points(
+        df, trend_txt, close_v, iron_price, is_breaking, _v17_ph_s, _v17_ph_r
+    )
+    if len(_v17_x) > 1:
+        fig.add_trace(go.Scatter(
+            x=_v17_x, y=_v17_y,
+            mode='lines+markers',
+            line=dict(color='#06b6d4', width=2, dash='dash'),
+            marker=dict(size=8, symbol='diamond', color='#06b6d4'),
+            name='📐 V17 規則推演',
+            hovertemplate='V17 參考: $%{y:.2f}<extra></extra>',
+        ), row=1, col=1)
+        # 標出 2~3 個關鍵價位（接手點 / 目標頂）
+        for _i in range(1, len(_v17_x)):
+            _p = _v17_y[_i]
+            _pct = (_p / close_v - 1) * 100
+            fig.add_annotation(
+                x=_v17_x[_i], y=_p,
+                text=f"${_p:.2f} ({_pct:+.1f}%)",
+                showarrow=False,
+                font=dict(color='#06b6d4', size=10),
+                bgcolor="rgba(20,20,22,0.85)", bordercolor='#06b6d4', borderwidth=1,
+                yshift=12,
+                row=1, col=1,
+            )
+except Exception as _v17_e:
+    # [Rule 12] 不靜默失敗
+    st.session_state['_v17_proj_err'] = str(_v17_e)
+
+# ──────────────────────────────────────────────────────
 # [v29] 事件節點垂直虛線（財報日 + FOMC/CPI/PPI/非農）
 # ──────────────────────────────────────────────────────
 _ev_status = {"drawn_count": 0, "reason": ""}
