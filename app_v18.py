@@ -1408,7 +1408,41 @@ def find_structural_box_bottom(df, current_price):
     return p['Low'].min(), p.index[0], p.index[-1], True
 
 
-def generate_projection_points(df, trend_text, cur_p, iron_p, is_brk, ph_support, ph_resist):
+def compute_zigzag_pivots(df, n=5):
+    """[V26.22] Fractal ZigZag: 找出近期高低轉折點。
+    定義：第 i 根高點 = High[i] 嚴格大於左右各 n 根的 High（低點同理）。
+    高低點需交替出現（避免連續兩個高點）。
+    回傳 list of (index, price, kind) 其中 kind ∈ {'H', 'L'}。
+    """
+    if df is None or len(df) < 2 * n + 1:
+        return []
+    highs = df['High'].values
+    lows = df['Low'].values
+    pivots = []  # (i, price, kind)
+    for i in range(n, len(df) - n):
+        left_h = highs[i - n:i]
+        right_h = highs[i + 1:i + n + 1]
+        if highs[i] > left_h.max() and highs[i] > right_h.max():
+            pivots.append((i, highs[i], 'H'))
+            continue
+        left_l = lows[i - n:i]
+        right_l = lows[i + 1:i + n + 1]
+        if lows[i] < left_l.min() and lows[i] < right_l.min():
+            pivots.append((i, lows[i], 'L'))
+    # 強制高低交替：相鄰同類取較極端者
+    cleaned = []
+    for p in pivots:
+        if not cleaned or cleaned[-1][2] != p[2]:
+            cleaned.append(p)
+        else:
+            # 同類連續：高取更高、低取更低
+            if (p[2] == 'H' and p[1] > cleaned[-1][1]) or \
+               (p[2] == 'L' and p[1] < cleaned[-1][1]):
+                cleaned[-1] = p
+    return cleaned
+
+
+
     last_d = df.index[-1]
     f_d = []
     d = last_d
@@ -3267,6 +3301,55 @@ try:
 except Exception as _v17_e:
     # [Rule 12] 不靜默失敗
     st.session_state['_v17_proj_err'] = str(_v17_e)
+
+
+# ──────────────────────────────────────────────────────
+# [V26.22] 之字走勢 ZigZag（HH/HL/LH/LL 趨勢結構）
+# 用途：一眼讀懂趨勢結構（高點是否更高、低點是否更低）
+# 純 fractal 演算法，N=5 K棒
+# ──────────────────────────────────────────────────────
+try:
+    _zz_pivots = compute_zigzag_pivots(df, n=5)
+    if len(_zz_pivots) >= 2:
+        _zz_x = [df.index[p[0]] for p in _zz_pivots]
+        _zz_y = [p[1] for p in _zz_pivots]
+        # 折線
+        fig.add_trace(go.Scatter(
+            x=_zz_x, y=_zz_y,
+            mode='lines+markers',
+            line=dict(color='#a855f7', width=2.5, dash='solid'),
+            marker=dict(size=5, color='#a855f7'),
+            name='⚡ 之字走勢',
+            hoverinfo='skip',
+            opacity=1.0,
+        ), row=1, col=1)
+        # 只標最近 6 個轉折（避免擠）
+        _recent = _zz_pivots[-6:]
+        for _idx, (_i, _p, _kind) in enumerate(_recent):
+            # 判定 HH/HL/LH/LL：跟同類的前一個比
+            _label = _kind
+            # 找上一個同類
+            _prev_same = None
+            for _j in range(_zz_pivots.index((_i, _p, _kind)) - 1, -1, -1):
+                if _zz_pivots[_j][2] == _kind:
+                    _prev_same = _zz_pivots[_j]
+                    break
+            if _prev_same is not None:
+                if _kind == 'H':
+                    _label = 'HH' if _p > _prev_same[1] else 'LH'
+                else:
+                    _label = 'HL' if _p > _prev_same[1] else 'LL'
+            _yshift = 16 if _kind == 'H' else -16
+            fig.add_annotation(
+                x=df.index[_i], y=_p,
+                text=_label,
+                showarrow=False,
+                font=dict(color='#a855f7', size=10, family='Arial Black'),
+                yshift=_yshift,
+                row=1, col=1,
+            )
+except Exception as _zz_e:
+    st.session_state['_zigzag_err'] = str(_zz_e)
 
 # ──────────────────────────────────────────────────────
 # [v29] 事件節點垂直虛線（財報日 + FOMC/CPI/PPI/非農）
