@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.22", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.23", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1408,8 +1408,92 @@ def find_structural_box_bottom(df, current_price):
     return p['Low'].min(), p.index[0], p.index[-1], True
 
 
+def generate_projection_points(df, trend_text, cur_p, iron_p, is_brk, ph_support, ph_resist):
+    last_d = df.index[-1]
+    f_d = []
+    d = last_d
+    while len(f_d) < 30:
+        d += pd.Timedelta(days=1)
+        if d.weekday() < 5:
+            f_d.append(d)
+    x = [last_d]
+    y = [cur_p]
+    ma20 = df['SMA_20'].iloc[-1] if not pd.isna(df['SMA_20'].iloc[-1]) else cur_p
+    rsi = df['RSI'].iloc[-1] if not pd.isna(df['RSI'].iloc[-1]) else 50
+    td_sell_cur = df['TD_Sell_Seq'].iloc[-1]
+    recent_high_20 = df['High'].tail(20).max()
+    is_relief_rally = (rsi < 60 and trend_text == "🐻 熊市") or (rsi > 70)
+    support_level = ph_support if ph_support is not None else iron_p
+    resist_level = ph_resist if ph_resist is not None else float('inf')
+
+    range_percent = (resist_level - support_level) / cur_p * 100 if resist_level != float('inf') and support_level > 0 else 100.0
+    is_squeezed = range_percent < 5.0
+    scenario_name = ""
+
+    if is_squeezed:
+        if cur_p > ma20 or "牛市" in trend_text:
+            scenario_name = "🚀 極限壓縮<br>N字噴發"
+            up_1 = max(cur_p * 1.03, resist_level * 1.025)
+            dip = max(cur_p * 1.01, resist_level)
+            up_2 = max(up_1 * 1.05, recent_high_20 * 1.03)
+            x.extend([f_d[4], f_d[9], f_d[18]])
+            y.extend([up_1, dip, up_2])
+        else:
+            scenario_name = "💥 極限壓縮<br>倒N崩盤"
+            down_1 = min(cur_p * 0.97, support_level * 0.975)
+            bounce = min(cur_p * 0.99, support_level)
+            down_2 = max(iron_p, down_1 * 0.92)
+            x.extend([f_d[4], f_d[9], f_d[18]])
+            y.extend([down_1, bounce, down_2])
+    else:
+        if "牛市" in trend_text:
+            scenario_name = "🐂 牛市格局<br>N字突破"
+            dip = max(cur_p * 0.96, ma20, support_level)
+            rally = min(cur_p * 1.05, resist_level * 0.99) if resist_level != float('inf') else max(cur_p * 1.05, recent_high_20 * 1.02)
+            x.extend([f_d[4], f_d[14]])
+            y.extend([dip, rally])
+        elif "熊市" in trend_text:
+            if is_brk:
+                scenario_name = "🕳️ 熊市格局<br>無底洞墜落"
+                bounce = min(cur_p * 1.03, ma20, resist_level)
+                drop = cur_p * 0.92
+                x.extend([f_d[4], f_d[14]])
+                y.extend([bounce, drop])
+            elif is_relief_rally:
+                days_to_peak = max(1, (9 - td_sell_cur) if (0 < td_sell_cur < 9) else 3)
+                scenario_name = f"🐻 熊市打底<br>遇壓測底" if (0 < td_sell_cur < 9) else "🐻 熊市打底<br>二次測底"
+                exhaustion_p = min(max(cur_p * 1.01, ma20), resist_level * 0.99 if resist_level != float('inf') else float('inf'))
+                w_dip = max(iron_p, iron_p * 1.015, support_level, cur_p * 0.93) if iron_p > 0 else cur_p * 0.9
+                breakout_p = max(exhaustion_p * 1.05, recent_high_20 * 1.02, cur_p * 1.1)
+                x.extend([f_d[days_to_peak], f_d[days_to_peak + 5], f_d[days_to_peak + 15]])
+                y.extend([exhaustion_p, w_dip, breakout_p])
+            else:
+                scenario_name = "🐻 熊市格局<br>下降通道"
+                bounce = min(cur_p * 1.06, ma20, resist_level)
+                drop = max(iron_p, cur_p * 0.9)
+                x.extend([f_d[4], f_d[14]])
+                y.extend([bounce, drop])
+        else:
+            if ph_support and cur_p > ph_support:
+                scenario_name = "⚖️ 區間突破<br>回測支撐"
+                up_1 = min(cur_p * 1.04, resist_level * 0.99 if resist_level != float('inf') else float('inf'))
+                dip = max(cur_p * 0.96, support_level)
+                up_2 = max(up_1, dip * 1.05)
+                x.extend([f_d[5], f_d[12], f_d[18]])
+                y.extend([up_1, dip, up_2])
+            else:
+                scenario_name = "⚖️ 區間震盪<br>挑戰壓力"
+                up_1 = min(cur_p * 1.04, resist_level * 0.99 if resist_level != float('inf') else float('inf'))
+                dip = max(cur_p * 0.96, iron_p, support_level)
+                up_2 = resist_level * 1.01 if resist_level != float('inf') else cur_p * 1.05
+                x.extend([f_d[5], f_d[12], f_d[18]])
+                y.extend([up_1, dip, up_2])
+    return x, y, scenario_name
+
+
+
 def compute_zigzag_pivots(df, n=5):
-    """[V26.22] Fractal ZigZag: 找出近期高低轉折點。
+    """[V26.23] Fractal ZigZag: 找出近期高低轉折點。
     定義：第 i 根高點 = High[i] 嚴格大於左右各 n 根的 High（低點同理）。
     高低點需交替出現（避免連續兩個高點）。
     回傳 list of (index, price, kind) 其中 kind ∈ {'H', 'L'}。
@@ -2559,7 +2643,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.22")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.23")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -3304,7 +3388,7 @@ except Exception as _v17_e:
 
 
 # ──────────────────────────────────────────────────────
-# [V26.22] 之字走勢 ZigZag（HH/HL/LH/LL 趨勢結構）
+# [V26.23] 之字走勢 ZigZag（HH/HL/LH/LL 趨勢結構）
 # 用途：一眼讀懂趨勢結構（高點是否更高、低點是否更低）
 # 純 fractal 演算法，N=5 K棒
 # ──────────────────────────────────────────────────────
