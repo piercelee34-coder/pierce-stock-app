@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.25", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.26", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1493,7 +1493,7 @@ def generate_projection_points(df, trend_text, cur_p, iron_p, is_brk, ph_support
 
 
 def compute_zigzag_pivots(df, n=5):
-    """[V26.25] Fractal ZigZag: 找出近期高低轉折點。
+    """[V26.26] Fractal ZigZag: 找出近期高低轉折點。
     定義：第 i 根高點 = High[i] 嚴格大於左右各 n 根的 High（低點同理）。
     高低點需交替出現（避免連續兩個高點）。
     回傳 list of (index, price, kind) 其中 kind ∈ {'H', 'L'}。
@@ -2643,7 +2643,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.25")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.26")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -3388,7 +3388,7 @@ except Exception as _v17_e:
 
 
 # ──────────────────────────────────────────────────────
-# [V26.25] 之字走勢 ZigZag（HH/HL/LH/LL 趨勢結構）
+# [V26.26] 之字走勢 ZigZag（HH/HL/LH/LL 趨勢結構）
 # 用途：一眼讀懂趨勢結構（高點是否更高、低點是否更低）
 # 純 fractal 演算法，N=5 K棒
 # ──────────────────────────────────────────────────────
@@ -3499,6 +3499,10 @@ else:
                 else:
                     other_labels = " + ".join(e["label"].split()[0] for e in evs if e is not primary)
                     label = f'{primary["label"]} + {other_labels}'
+
+                # [V26.26] 標籤附上日期（M/D），例如 "🏛️ FOMC 6/5"
+                _md = f"{primary['date'].month}/{primary['date'].day}"
+                label = f"{label} {_md}"
 
                 # 用 add_vline（與 last_d 灰線同模式，已驗證可運作）
                 fig.add_vline(
@@ -5364,12 +5368,12 @@ if _REV_AVAILABLE:  # 共用 reversal_scanner 的 generate_monte_carlo_bands
         "UBER", "LYFT", "DAL", "UAL", "AAL", "CCL", "RCL", "MAR", "HLT",
         # 其他熱門
         "SE", "GRAB",
-        # [V26.25] 軟體（資安 / 設計 / EDA）
+        # [V26.26] 軟體（資安 / 設計 / EDA）
         "FTNT", "S", "CYBR",           # 資安軟體
         "ADSK",                          # 設計軟體
         "CDNS", "SNPS",                  # EDA / 晶片設計軟體
         "VEEV",                          # 生命科學 SaaS
-        # [V26.25] 大型企業應用軟體
+        # [V26.26] 大型企業應用軟體
         "SAP",                           # SAP — 企業 ERP
         "ANSS",                          # Ansys — 模擬軟體
         "PTC",                           # PTC — 工業 / CAD 軟體
@@ -5377,13 +5381,13 @@ if _REV_AVAILABLE:  # 共用 reversal_scanner 的 generate_monte_carlo_bands
         "MANH",                          # Manhattan Associates — 供應鏈軟體
         "DSGX",                          # Descartes Systems — 物流軟體
         "PEGA",                          # Pegasystems — 流程自動化軟體
-        # [V26.25] AI 周邊（散熱 / 封裝 / 先進製程 / AI 晶片）
+        # [V26.26] AI 周邊（散熱 / 封裝 / 先進製程 / AI 晶片）
         "VRT",                           # Vertiv — AI 資料中心散熱 / 電源
         "AMKR", "KLIC",                  # 先進封裝 / 封裝設備
         "AMBA",                          # Ambarella — AI 視覺 / 邊緣 AI 晶片
         "WOLF",                          # Wolfspeed — 碳化矽 SiC
         "ONTO", "ACLS",                  # 半導體量測 / 離子植入設備
-        # [V26.25] 火箭 / 太空
+        # [V26.26] 火箭 / 太空
         "RKLB", "LUNR",                  # Rocket Lab / Intuitive Machines
         "ASTS",                          # AST SpaceMobile — 太空基地衛星通訊
         "RDW",                           # Redwire Space
