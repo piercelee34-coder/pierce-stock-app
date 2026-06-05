@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.26", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.27", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1493,7 +1493,7 @@ def generate_projection_points(df, trend_text, cur_p, iron_p, is_brk, ph_support
 
 
 def compute_zigzag_pivots(df, n=5):
-    """[V26.26] Fractal ZigZag: 找出近期高低轉折點。
+    """[V26.27] Fractal ZigZag: 找出近期高低轉折點。
     定義：第 i 根高點 = High[i] 嚴格大於左右各 n 根的 High（低點同理）。
     高低點需交替出現（避免連續兩個高點）。
     回傳 list of (index, price, kind) 其中 kind ∈ {'H', 'L'}。
@@ -2099,6 +2099,23 @@ def build_snapshot_df(watchlists):
                 _nd_price, _nd_pct = _predict_next_day(d, sc["level"], _eng_type)
                 _short_due = _trading_days_ahead(tw_now, 5)
                 _long_due = _trading_days_ahead(tw_now, 30)
+                # [V26.27] 同時凍結 V17 規則式推演（青線）點位，供日後與蒙地卡羅對比
+                _v17_entry = _v17_mid = _v17_peak = None
+                try:
+                    _v17_trend, _, _ = analyze_market_trend(d)
+                    _v17_iron, _, _, _v17_brk = find_structural_box_bottom(d, price)
+                    _v17_sr = find_key_sr_levels(d)
+                    _vx, _vy, _ = generate_projection_points(
+                        d, _v17_trend, price, _v17_iron, _v17_brk,
+                        _v17_sr.get("nearest_support"), _v17_sr.get("nearest_resist"),
+                    )
+                    # _vy[0]=現價起點；後續為推演點。取前 3 個推演點當 接手/中段/頂
+                    _pts = [round(v, 2) for v in _vy[1:4]]
+                    if len(_pts) >= 1: _v17_entry = _pts[0]
+                    if len(_pts) >= 2: _v17_mid = _pts[1]
+                    if len(_pts) >= 3: _v17_peak = _pts[2]
+                except Exception:
+                    pass  # V17 算不出不影響整批快照（Rule 12：該列填 None）
                 rows.append({
                     "代碼": tk,
                     "名稱": get_stock_name(tk),
@@ -2122,6 +2139,9 @@ def build_snapshot_df(watchlists):
                     "判定理由": " / ".join(sc["reasons"]),
                     "評等": rating,
                     "區間位置%": sr_info.get("range_pos"),
+                    "V17接手點": _v17_entry,
+                    "V17中段": _v17_mid,
+                    "V17目標頂": _v17_peak,
                     "錯誤": "",
                 })
             except Exception as _e:
@@ -2643,7 +2663,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.26")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.27")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -3388,7 +3408,7 @@ except Exception as _v17_e:
 
 
 # ──────────────────────────────────────────────────────
-# [V26.26] 之字走勢 ZigZag（HH/HL/LH/LL 趨勢結構）
+# [V26.27] 之字走勢 ZigZag（HH/HL/LH/LL 趨勢結構）
 # 用途：一眼讀懂趨勢結構（高點是否更高、低點是否更低）
 # 純 fractal 演算法，N=5 K棒
 # ──────────────────────────────────────────────────────
@@ -3500,7 +3520,7 @@ else:
                     other_labels = " + ".join(e["label"].split()[0] for e in evs if e is not primary)
                     label = f'{primary["label"]} + {other_labels}'
 
-                # [V26.26] 標籤附上日期（M/D），例如 "🏛️ FOMC 6/5"
+                # [V26.27] 標籤附上日期（M/D），例如 "🏛️ FOMC 6/5"
                 _md = f"{primary['date'].month}/{primary['date'].day}"
                 label = f"{label} {_md}"
 
@@ -5368,12 +5388,12 @@ if _REV_AVAILABLE:  # 共用 reversal_scanner 的 generate_monte_carlo_bands
         "UBER", "LYFT", "DAL", "UAL", "AAL", "CCL", "RCL", "MAR", "HLT",
         # 其他熱門
         "SE", "GRAB",
-        # [V26.26] 軟體（資安 / 設計 / EDA）
+        # [V26.27] 軟體（資安 / 設計 / EDA）
         "FTNT", "S", "CYBR",           # 資安軟體
         "ADSK",                          # 設計軟體
         "CDNS", "SNPS",                  # EDA / 晶片設計軟體
         "VEEV",                          # 生命科學 SaaS
-        # [V26.26] 大型企業應用軟體
+        # [V26.27] 大型企業應用軟體
         "SAP",                           # SAP — 企業 ERP
         "ANSS",                          # Ansys — 模擬軟體
         "PTC",                           # PTC — 工業 / CAD 軟體
@@ -5381,13 +5401,13 @@ if _REV_AVAILABLE:  # 共用 reversal_scanner 的 generate_monte_carlo_bands
         "MANH",                          # Manhattan Associates — 供應鏈軟體
         "DSGX",                          # Descartes Systems — 物流軟體
         "PEGA",                          # Pegasystems — 流程自動化軟體
-        # [V26.26] AI 周邊（散熱 / 封裝 / 先進製程 / AI 晶片）
+        # [V26.27] AI 周邊（散熱 / 封裝 / 先進製程 / AI 晶片）
         "VRT",                           # Vertiv — AI 資料中心散熱 / 電源
         "AMKR", "KLIC",                  # 先進封裝 / 封裝設備
         "AMBA",                          # Ambarella — AI 視覺 / 邊緣 AI 晶片
         "WOLF",                          # Wolfspeed — 碳化矽 SiC
         "ONTO", "ACLS",                  # 半導體量測 / 離子植入設備
-        # [V26.26] 火箭 / 太空
+        # [V26.27] 火箭 / 太空
         "RKLB", "LUNR",                  # Rocket Lab / Intuitive Machines
         "ASTS",                          # AST SpaceMobile — 太空基地衛星通訊
         "RDW",                           # Redwire Space
