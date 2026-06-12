@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.27", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.19", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -521,6 +521,53 @@ FRED_KEY = _get_secret("FRED_API_KEY", "")
 if not FRED_KEY:
     print("⚠️  警告：未設定 FRED_API_KEY，空頭距離指數的殖利率/信用利差將無法使用。")
 
+# [V26.28] 共用股票池（提到頂層，AI 目標掃描器 + 個人訊號掃描器共用，避免兩份分歧）
+_SP100_CORE_TICKERS = [
+    "NVDA", "MSFT", "AAPL", "GOOG", "GOOGL", "AMZN", "META", "TSLA", "BRK-B",
+    "AVGO", "JPM", "V", "WMT", "LLY", "MA", "ORCL", "XOM", "JNJ", "HD", "ABBV",
+    "PG", "BAC", "COST", "KO", "TMUS", "PLTR", "CVX", "CSCO", "NFLX", "ABT",
+    "WFC", "PEP", "CRM", "MRK", "ACN", "TMO", "AMD", "MCD", "GE", "ADBE",
+    "DIS", "AXP", "LIN", "IBM", "CAT", "PM", "QCOM", "MS", "VZ", "GS",
+    "INTU", "T", "ISRG", "RTX", "TXN", "NEE", "BX", "AMGN", "BKNG", "PFE",
+    "C", "SCHW", "UPS", "LOW", "BLK", "DHR", "NOW", "UNH", "HON", "ELV",
+    "SPGI", "ADP", "TJX", "SYK", "ETN", "DE", "GILD", "VRTX", "MMC", "PGR",
+    "MDT", "PANW", "REGN", "MU", "ADI", "SBUX", "LMT", "BSX", "CMCSA", "BMY",
+    "MO", "PYPL", "FI", "ICE", "DUK", "AMAT", "TGT", "MDLZ", "INTC", "USB",
+]
+
+# [V26.02] 額外熱門股票（補齊 SP100 之外的散戶熱門股，含 SNDK）
+_EXTRA_POPULAR_TICKERS = [
+    # 半導體 / 記憶體 / AI 硬體
+    "SNDK", "WDC", "MRVL", "ON", "MCHP", "KLAC", "LRCX", "ASML", "TSM", "ARM",
+    "NXPI", "SMCI", "ANET", "ALAB", "ENTG", "SWKS", "QRVO", "TER", "MPWR",
+    # 雲端 / SaaS
+    "SNOW", "NET", "DDOG", "MDB", "CRWD", "ZS", "OKTA", "ZM", "TEAM", "WDAY",
+    "SHOP", "TWLO", "NTNX", "ESTC", "HUBS", "DOCU", "DBX", "ASAN", "MNDY", "GTLB",
+    # AI / 量子 / 數據
+    "AI", "PATH", "SOUN", "IONQ", "RGTI", "QBTS", "BBAI",
+    # 消費 / 網路 / 媒體
+    "ROKU", "PINS", "SPOT", "ABNB", "DASH", "U", "RBLX", "EA", "TTWO", "ETSY",
+    "EBAY", "W", "CHWY", "DKNG", "BMBL", "MTCH", "WBD", "PARA",
+    # 金融科技
+    "COIN", "HOOD", "AFRM", "UPST", "SOFI", "NU", "MELI",
+    # 電動車 / 汽車
+    "RIVN", "LCID", "NIO", "XPEV", "LI", "F", "GM",
+    # 中概股
+    "BABA", "JD", "PDD", "BIDU", "BILI", "TME", "VIPS",
+    # 醫療 / 生技
+    "MRNA", "BNTX", "BIIB", "ILMN", "DXCM", "EW", "ZTS", "ALGN", "IDXX", "GH",
+    # 能源
+    "SLB", "OXY", "EOG", "MPC", "VLO", "PSX", "DVN", "FANG", "COP",
+    # 旅遊 / 航空 / 服務
+    "UBER", "LYFT", "DAL", "UAL", "AAL", "CCL", "RCL", "MAR", "HLT",
+    # 其他熱門
+    "SE", "GRAB",
+]
+
+# 去重（SP100 + extra，保留順序）
+_EXTENDED_TGT_TICKERS = list(dict.fromkeys(_SP100_CORE_TICKERS + _EXTRA_POPULAR_TICKERS))
+
+
 def json_load(f_name, default):
     if os.path.exists(f_name):
         try:
@@ -537,73 +584,12 @@ def json_save(f_name, data):
     except Exception:
         pass
 
-# ──────────────────────────────────────────────────────
-# [V26.20] 自選股清單雲端持久化 — GitHub Gist 後端
-# 設計：Gist = 唯一真相來源（本機/雲端共用）；本地檔降級為離線備援。
-# 安全不變式：只有「本 session 成功讀過 Gist」才允許回寫 Gist，
-#   避免用 fallback（本地/DEFAULT）資料覆蓋雲端真相。
-# ──────────────────────────────────────────────────────
-GIST_TOKEN = _get_secret("GIST_TOKEN", "")
-GIST_ID = _get_secret("GIST_ID", "")
-_GIST_API = "https://api.github.com/gists"
-
-if not (GIST_TOKEN and GIST_ID):
-    print("⚠️  警告：未設定 GIST_TOKEN / GIST_ID，自選股清單將以本機模式運作（不同步雲端）。")
-
-def _gist_headers():
-    return {
-        "Authorization": f"Bearer {GIST_TOKEN}",
-        "Accept": "application/vnd.github+json",
-    }
-
-def _gist_read():
-    """從 Gist 讀回 watchlists dict。成功回 dict；未設定或任何失敗一律回 None。"""
-    if not (GIST_TOKEN and GIST_ID):
-        return None
-    try:
-        res = requests.get(f"{_GIST_API}/{GIST_ID}", headers=_gist_headers(), timeout=8)
-        if res.status_code != 200:
-            return None
-        f = res.json().get("files", {}).get(WATCHLIST_FILE)
-        if not f or "content" not in f:
-            return None
-        return json.loads(f["content"])
-    except Exception:
-        return None
-
-def _gist_write(data):
-    """寫回 Gist。成功回 True；未設定或失敗回 False。"""
-    if not (GIST_TOKEN and GIST_ID):
-        return False
-    try:
-        body = {"files": {WATCHLIST_FILE: {"content": json.dumps(data, ensure_ascii=False, indent=2)}}}
-        res = requests.patch(f"{_GIST_API}/{GIST_ID}", headers=_gist_headers(), json=body, timeout=8)
-        return res.status_code == 200
-    except Exception:
-        return False
-
 def load_watchlists():
-    """讀順序：Gist（雲端真相）→ 本地檔（離線備援）→ DEFAULT。
-    設 st.session_state['gist_synced'] / ['gist_status'] 供 save 與 UI 判斷。
-    """
-    remote = _gist_read()
-    if remote is not None:
-        st.session_state['gist_synced'] = True
-        st.session_state['gist_status'] = "ok"
-        json_save(WATCHLIST_FILE, remote)  # 同步刷新本地離線備援
-        return remote
-    # 讀不到 Gist → 備援模式，禁止本 session 回寫 Gist（決策 #3）
-    st.session_state['gist_synced'] = False
-    st.session_state['gist_status'] = "unconfigured" if not (GIST_TOKEN and GIST_ID) else "error"
     return json_load(WATCHLIST_FILE, DEFAULT_WATCHLISTS)
 
 def save_watchlists(data):
-    """一律寫本地 + session_state；僅在本 session 成功讀過 Gist 時才回寫 Gist
-    （資料來源為 Gist+編輯，回寫安全；fallback 來源則不回寫，避免覆蓋雲端）。"""
     json_save(WATCHLIST_FILE, data)
     st.session_state.watchlists = data
-    if st.session_state.get('gist_synced'):
-        st.session_state['gist_status'] = "ok" if _gist_write(data) else "write_error"
 
 
 # [修復 #7 v2] cache 只包住 API 網路查詢，file I/O 移到外層 get_stock_name 處理
@@ -1491,124 +1477,6 @@ def generate_projection_points(df, trend_text, cur_p, iron_p, is_brk, ph_support
     return x, y, scenario_name
 
 
-
-def compute_zigzag_pivots(df, n=5):
-    """[V26.27] Fractal ZigZag: 找出近期高低轉折點。
-    定義：第 i 根高點 = High[i] 嚴格大於左右各 n 根的 High（低點同理）。
-    高低點需交替出現（避免連續兩個高點）。
-    回傳 list of (index, price, kind) 其中 kind ∈ {'H', 'L'}。
-    """
-    if df is None or len(df) < 2 * n + 1:
-        return []
-    highs = df['High'].values
-    lows = df['Low'].values
-    pivots = []  # (i, price, kind)
-    for i in range(n, len(df) - n):
-        left_h = highs[i - n:i]
-        right_h = highs[i + 1:i + n + 1]
-        if highs[i] > left_h.max() and highs[i] > right_h.max():
-            pivots.append((i, highs[i], 'H'))
-            continue
-        left_l = lows[i - n:i]
-        right_l = lows[i + 1:i + n + 1]
-        if lows[i] < left_l.min() and lows[i] < right_l.min():
-            pivots.append((i, lows[i], 'L'))
-    # 強制高低交替：相鄰同類取較極端者
-    cleaned = []
-    for p in pivots:
-        if not cleaned or cleaned[-1][2] != p[2]:
-            cleaned.append(p)
-        else:
-            # 同類連續：高取更高、低取更低
-            if (p[2] == 'H' and p[1] > cleaned[-1][1]) or \
-               (p[2] == 'L' and p[1] < cleaned[-1][1]):
-                cleaned[-1] = p
-    return cleaned
-
-
-
-    last_d = df.index[-1]
-    f_d = []
-    d = last_d
-    while len(f_d) < 30:
-        d += pd.Timedelta(days=1)
-        if d.weekday() < 5:
-            f_d.append(d)
-    x = [last_d]
-    y = [cur_p]
-    ma20 = df['SMA_20'].iloc[-1] if not pd.isna(df['SMA_20'].iloc[-1]) else cur_p
-    rsi = df['RSI'].iloc[-1] if not pd.isna(df['RSI'].iloc[-1]) else 50
-    td_sell_cur = df['TD_Sell_Seq'].iloc[-1]
-    recent_high_20 = df['High'].tail(20).max()
-    is_relief_rally = (rsi < 60 and trend_text == "🐻 熊市") or (rsi > 70)
-    support_level = ph_support if ph_support is not None else iron_p
-    resist_level = ph_resist if ph_resist is not None else float('inf')
-
-    range_percent = (resist_level - support_level) / cur_p * 100 if resist_level != float('inf') and support_level > 0 else 100.0
-    is_squeezed = range_percent < 5.0
-    scenario_name = ""
-
-    if is_squeezed:
-        if cur_p > ma20 or "牛市" in trend_text:
-            scenario_name = "🚀 極限壓縮<br>N字噴發"
-            up_1 = max(cur_p * 1.03, resist_level * 1.025)
-            dip = max(cur_p * 1.01, resist_level)
-            up_2 = max(up_1 * 1.05, recent_high_20 * 1.03)
-            x.extend([f_d[4], f_d[9], f_d[18]])
-            y.extend([up_1, dip, up_2])
-        else:
-            scenario_name = "💥 極限壓縮<br>倒N崩盤"
-            down_1 = min(cur_p * 0.97, support_level * 0.975)
-            bounce = min(cur_p * 0.99, support_level)
-            down_2 = max(iron_p, down_1 * 0.92)
-            x.extend([f_d[4], f_d[9], f_d[18]])
-            y.extend([down_1, bounce, down_2])
-    else:
-        if "牛市" in trend_text:
-            scenario_name = "🐂 牛市格局<br>N字突破"
-            dip = max(cur_p * 0.96, ma20, support_level)
-            rally = min(cur_p * 1.05, resist_level * 0.99) if resist_level != float('inf') else max(cur_p * 1.05, recent_high_20 * 1.02)
-            x.extend([f_d[4], f_d[14]])
-            y.extend([dip, rally])
-        elif "熊市" in trend_text:
-            if is_brk:
-                scenario_name = "🕳️ 熊市格局<br>無底洞墜落"
-                bounce = min(cur_p * 1.03, ma20, resist_level)
-                drop = cur_p * 0.92
-                x.extend([f_d[4], f_d[14]])
-                y.extend([bounce, drop])
-            elif is_relief_rally:
-                days_to_peak = max(1, (9 - td_sell_cur) if (0 < td_sell_cur < 9) else 3)
-                scenario_name = f"🐻 熊市打底<br>遇壓測底" if (0 < td_sell_cur < 9) else "🐻 熊市打底<br>二次測底"
-                exhaustion_p = min(max(cur_p * 1.01, ma20), resist_level * 0.99 if resist_level != float('inf') else float('inf'))
-                w_dip = max(iron_p, iron_p * 1.015, support_level, cur_p * 0.93) if iron_p > 0 else cur_p * 0.9
-                breakout_p = max(exhaustion_p * 1.05, recent_high_20 * 1.02, cur_p * 1.1)
-                x.extend([f_d[days_to_peak], f_d[days_to_peak + 5], f_d[days_to_peak + 15]])
-                y.extend([exhaustion_p, w_dip, breakout_p])
-            else:
-                scenario_name = "🐻 熊市格局<br>下降通道"
-                bounce = min(cur_p * 1.06, ma20, resist_level)
-                drop = max(iron_p, cur_p * 0.9)
-                x.extend([f_d[4], f_d[14]])
-                y.extend([bounce, drop])
-        else:
-            if ph_support and cur_p > ph_support:
-                scenario_name = "⚖️ 區間突破<br>回測支撐"
-                up_1 = min(cur_p * 1.04, resist_level * 0.99 if resist_level != float('inf') else float('inf'))
-                dip = max(cur_p * 0.96, support_level)
-                up_2 = max(up_1, dip * 1.05)
-                x.extend([f_d[5], f_d[12], f_d[18]])
-                y.extend([up_1, dip, up_2])
-            else:
-                scenario_name = "⚖️ 區間震盪<br>挑戰壓力"
-                up_1 = min(cur_p * 1.04, resist_level * 0.99 if resist_level != float('inf') else float('inf'))
-                dip = max(cur_p * 0.96, iron_p, support_level)
-                up_2 = resist_level * 1.01 if resist_level != float('inf') else cur_p * 1.05
-                x.extend([f_d[5], f_d[12], f_d[18]])
-                y.extend([up_1, dip, up_2])
-    return x, y, scenario_name
-
-
 def analyze_market_trend(df):
     c, m20, m60 = df['Close'].iloc[-1], df['SMA_20'].iloc[-1], df['SMA_60'].iloc[-1]
     if c > m20 > m60:
@@ -1675,6 +1543,76 @@ def detect_smart_money_status(df):
     if rsi < 30 and latest['Volume'] > latest['Vol_SMA5']:
         return "⚡ 恐慌殺盤"
     return None
+
+
+def scan_personal_signals(tickers, lookback_days=3):
+    """[V26.28] 掃描指定清單在『最近 lookback_days 個交易日』內出現的
+    達標 / 吸籌 / 乖離抄底訊號。回傳 list of dict（一檔可多訊號合併一列）。
+
+    復用既有判定：
+      - 達標 = High >= get_technical_target_threshold(df)
+      - 吸籌 / 乖離 = detect_smart_money_status(df)（對逐日切片各跑一次）
+    批次下載（沿用 AI 目標掃描器作法），對 ~242 檔約 2-4 分鐘。
+    """
+    tickers = list(dict.fromkeys(tickers))
+    try:
+        batch = yf.download(tickers, period="1y", auto_adjust=False,
+                            group_by="ticker", progress=False, threads=True)
+    except Exception:
+        batch = None
+
+    out = []
+    for tk in tickers:
+        try:
+            if batch is not None and isinstance(batch.columns, pd.MultiIndex) \
+                    and tk in batch.columns.get_level_values(0):
+                d = batch[tk].dropna(how="all").copy()
+            else:
+                d = yf.Ticker(tk).history(period="1y", auto_adjust=False)
+            if d is None or d.empty or len(d) < 80:
+                continue
+            if isinstance(d.columns, pd.MultiIndex):
+                d.columns = d.columns.get_level_values(0)
+            d = calculate_indicators(d)
+            if pd.isna(d["SMA_20"].iloc[-1]):
+                continue
+            threshold = get_technical_target_threshold(d)
+            price = float(d["Close"].iloc[-1])
+            hits = []   # (訊號, 日期, 金額)
+
+            # 對最近 lookback_days 天，各自模擬「那天是最後一根」的狀態
+            for back in range(lookback_days):
+                end = len(d) - back
+                if end < 60:
+                    break
+                slice_df = d.iloc[:end]
+                row = slice_df.iloc[-1]
+                dt = slice_df.index[-1]
+                md = f"{dt.month}/{dt.day}"
+                # 達標（最高價觸及技術目標）
+                if threshold and row["High"] >= threshold:
+                    hits.append(("💰 達標", md, round(float(row["Close"]), 2)))
+                # 吸籌 / 乖離抄底 / 破底翻（復用 detect_smart_money_status）
+                status = detect_smart_money_status(slice_df)
+                if status:
+                    if "吸籌" in status:
+                        hits.append(("🤫 吸籌", md, round(float(row["Close"]), 2)))
+                    elif "抄底" in status or "破底翻" in status:
+                        hits.append(("💎 乖離抄底", md, round(float(row["Close"]), 2)))
+
+            if not hits:
+                continue
+            # 去重（同訊號同日只留一筆），日期新到舊
+            uniq = list(dict.fromkeys(hits))
+            out.append({
+                "代碼": tk,
+                "名稱": get_stock_name(tk),
+                "現價": round(price, 2),
+                "訊號": uniq,
+            })
+        except Exception:
+            continue
+    return out
 
 
 def get_compre_color_class(text):
@@ -2099,23 +2037,6 @@ def build_snapshot_df(watchlists):
                 _nd_price, _nd_pct = _predict_next_day(d, sc["level"], _eng_type)
                 _short_due = _trading_days_ahead(tw_now, 5)
                 _long_due = _trading_days_ahead(tw_now, 30)
-                # [V26.27] 同時凍結 V17 規則式推演（青線）點位，供日後與蒙地卡羅對比
-                _v17_entry = _v17_mid = _v17_peak = None
-                try:
-                    _v17_trend, _, _ = analyze_market_trend(d)
-                    _v17_iron, _, _, _v17_brk = find_structural_box_bottom(d, price)
-                    _v17_sr = find_key_sr_levels(d)
-                    _vx, _vy, _ = generate_projection_points(
-                        d, _v17_trend, price, _v17_iron, _v17_brk,
-                        _v17_sr.get("nearest_support"), _v17_sr.get("nearest_resist"),
-                    )
-                    # _vy[0]=現價起點；後續為推演點。取前 3 個推演點當 接手/中段/頂
-                    _pts = [round(v, 2) for v in _vy[1:4]]
-                    if len(_pts) >= 1: _v17_entry = _pts[0]
-                    if len(_pts) >= 2: _v17_mid = _pts[1]
-                    if len(_pts) >= 3: _v17_peak = _pts[2]
-                except Exception:
-                    pass  # V17 算不出不影響整批快照（Rule 12：該列填 None）
                 rows.append({
                     "代碼": tk,
                     "名稱": get_stock_name(tk),
@@ -2139,9 +2060,6 @@ def build_snapshot_df(watchlists):
                     "判定理由": " / ".join(sc["reasons"]),
                     "評等": rating,
                     "區間位置%": sr_info.get("range_pos"),
-                    "V17接手點": _v17_entry,
-                    "V17中段": _v17_mid,
-                    "V17目標頂": _v17_peak,
                     "錯誤": "",
                 })
             except Exception as _e:
@@ -2297,9 +2215,7 @@ with st.sidebar:
     # ── [V26.14] 一鍵記錄今日劇本快照（凍結推演供日後比對）──
     if st.button("📸 記錄今日劇本快照", use_container_width=True,
                  help="對左側所有清單股票凍結今日 AI 劇本判定與目標價，輸出 Excel 供日後比對實際走勢"):
-        _wl_snap = st.session_state.get("watchlists")
-        if not _wl_snap:
-            _wl_snap = load_watchlists()
+        _wl_snap = st.session_state.get("watchlists", load_watchlists())
         with st.spinner("正在記錄所有清單股票的劇本快照（約 1-2 分鐘）..."):
             _snap_df, _snap_date = build_snapshot_df(_wl_snap)
         from io import BytesIO
@@ -2341,17 +2257,6 @@ with st.sidebar:
             st.caption(st.session_state["_snap_msg"])
 
     st.header("📌 多維度自選股清單")
-    # [V26.20] Gist 雲端同步狀態（fail loud）
-    _gs = st.session_state.get('gist_status', 'unconfigured')
-    if _gs == "ok":
-        st.caption("🟢 雲端已同步（GitHub Gist）")
-    elif _gs == "unconfigured":
-        st.caption("🟡 本機模式：未設定 GIST_TOKEN / GIST_ID，編輯不會同步雲端")
-    elif _gs == "error":
-        st.warning("🔴 雲端同步失敗：本次讀不到 Gist，**本次編輯僅暫存於本機、不會寫回雲端**"
-                   "（避免覆蓋雲端資料）。請重新整理頁面重試。")
-    elif _gs == "write_error":
-        st.warning("🟠 上次儲存未能同步到雲端 Gist（本機已存）。再編輯一次即會自動重試。")
     cur_t = st.session_state.get('current_ticker', "^NDX")
     act_l = st.session_state.get('active_list')
     wls = st.session_state['watchlists']
@@ -2663,7 +2568,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.27")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.19")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -3370,92 +3275,6 @@ if _mc is not None:
 # [v28] 規則式劇本（黃色虛線+菱形）已移除，預測完全交給蒙地卡羅雲帶
 
 # ──────────────────────────────────────────────────────
-# [V26.21] V17.67 規則式推演線（青色第二參考）
-# 用途：在 MC 雲帶之外，提供「一眼可讀」的接手點 / 目標頂參考。
-# 演算法沿用 generate_projection_points（L1411），不取代 MC。
-# ──────────────────────────────────────────────────────
-try:
-    _v17_ph_s = sr_info.get("nearest_support") if sr_info else None
-    _v17_ph_r = sr_info.get("nearest_resist") if sr_info else None
-    _v17_x, _v17_y, _v17_scenario = generate_projection_points(
-        df, trend_txt, close_v, iron_price, is_breaking, _v17_ph_s, _v17_ph_r
-    )
-    if len(_v17_x) > 1:
-        fig.add_trace(go.Scatter(
-            x=_v17_x, y=_v17_y,
-            mode='lines+markers',
-            line=dict(color='#06b6d4', width=2, dash='dash'),
-            marker=dict(size=8, symbol='diamond', color='#06b6d4'),
-            name='📐 V17 規則推演',
-            hovertemplate='V17 參考: $%{y:.2f}<extra></extra>',
-        ), row=1, col=1)
-        # 標出 2~3 個關鍵價位（接手點 / 目標頂）
-        for _i in range(1, len(_v17_x)):
-            _p = _v17_y[_i]
-            _pct = (_p / close_v - 1) * 100
-            fig.add_annotation(
-                x=_v17_x[_i], y=_p,
-                text=f"${_p:.2f} ({_pct:+.1f}%)",
-                showarrow=False,
-                font=dict(color='#06b6d4', size=10),
-                bgcolor="rgba(20,20,22,0.85)", bordercolor='#06b6d4', borderwidth=1,
-                yshift=12,
-                row=1, col=1,
-            )
-except Exception as _v17_e:
-    # [Rule 12] 不靜默失敗
-    st.session_state['_v17_proj_err'] = str(_v17_e)
-
-
-# ──────────────────────────────────────────────────────
-# [V26.27] 之字走勢 ZigZag（HH/HL/LH/LL 趨勢結構）
-# 用途：一眼讀懂趨勢結構（高點是否更高、低點是否更低）
-# 純 fractal 演算法，N=5 K棒
-# ──────────────────────────────────────────────────────
-try:
-    _zz_pivots = compute_zigzag_pivots(df, n=5)
-    if len(_zz_pivots) >= 2:
-        _zz_x = [df.index[p[0]] for p in _zz_pivots]
-        _zz_y = [p[1] for p in _zz_pivots]
-        # 折線
-        fig.add_trace(go.Scatter(
-            x=_zz_x, y=_zz_y,
-            mode='lines+markers',
-            line=dict(color='#a855f7', width=2.5, dash='solid'),
-            marker=dict(size=5, color='#a855f7'),
-            name='⚡ 之字走勢',
-            hoverinfo='skip',
-            opacity=1.0,
-        ), row=1, col=1)
-        # 只標最近 6 個轉折（避免擠）
-        _recent = _zz_pivots[-6:]
-        for _idx, (_i, _p, _kind) in enumerate(_recent):
-            # 判定 HH/HL/LH/LL：跟同類的前一個比
-            _label = _kind
-            # 找上一個同類
-            _prev_same = None
-            for _j in range(_zz_pivots.index((_i, _p, _kind)) - 1, -1, -1):
-                if _zz_pivots[_j][2] == _kind:
-                    _prev_same = _zz_pivots[_j]
-                    break
-            if _prev_same is not None:
-                if _kind == 'H':
-                    _label = 'HH' if _p > _prev_same[1] else 'LH'
-                else:
-                    _label = 'HL' if _p > _prev_same[1] else 'LL'
-            _yshift = 16 if _kind == 'H' else -16
-            fig.add_annotation(
-                x=df.index[_i], y=_p,
-                text=_label,
-                showarrow=False,
-                font=dict(color='#a855f7', size=10, family='Arial Black'),
-                yshift=_yshift,
-                row=1, col=1,
-            )
-except Exception as _zz_e:
-    st.session_state['_zigzag_err'] = str(_zz_e)
-
-# ──────────────────────────────────────────────────────
 # [v29] 事件節點垂直虛線（財報日 + FOMC/CPI/PPI/非農）
 # ──────────────────────────────────────────────────────
 _ev_status = {"drawn_count": 0, "reason": ""}
@@ -3519,10 +3338,6 @@ else:
                 else:
                     other_labels = " + ".join(e["label"].split()[0] for e in evs if e is not primary)
                     label = f'{primary["label"]} + {other_labels}'
-
-                # [V26.27] 標籤附上日期（M/D），例如 "🏛️ FOMC 6/5"
-                _md = f"{primary['date'].month}/{primary['date'].day}"
-                label = f"{label} {_md}"
 
                 # 用 add_vline（與 last_d 灰線同模式，已驗證可運作）
                 fig.add_vline(
@@ -4895,7 +4710,61 @@ if _CRISIS_AVAILABLE and _INSIDER_AVAILABLE:
 
 
 # ==========================================
+# 🎯 [V26.28] 個人清單訊號掃描器（按鈕觸發，掃自選股 / AI 目標）
+# ==========================================
+st.markdown("---")
+_sig_top1, _sig_top2 = st.columns([5, 1])
+_sig_top1.header("🎯 個人清單訊號掃描")
+# toggle：新掃描器 / 舊悄悄吸籌探測器
+_show_old_accum = _sig_top2.toggle("切換舊探測器", value=False, key="toggle_old_accum",
+                                    help="開啟改顯示『悄悄吸籌探測器』（全市場掃描）")
+
+if not _show_old_accum:
+    st.caption("掃描你的清單中，最近 3 個交易日出現 💰達標 / 🤫吸籌 / 💎乖離抄底 的個股")
+    _scan_scope = st.radio(
+        "掃描範圍",
+        ["📌 自選股清單", "🎯 AI 目標清單（242 檔，約 2-4 分鐘）"],
+        horizontal=True, key="sig_scan_scope",
+    )
+    if st.button("🔍 開始掃描", use_container_width=True, key="sig_scan_btn"):
+        # 組掃描清單
+        if _scan_scope.startswith("📌"):
+            _wls = st.session_state.get("watchlists", {})
+            _scan_tickers = [t for lst in _wls.values() for t in lst]
+        else:
+            # AI 目標清單：與 AI 目標掃描器同一份來源（去重）
+            _scan_tickers = list(dict.fromkeys(_SP100_CORE_TICKERS + _EXTRA_POPULAR_TICKERS))
+
+        if not _scan_tickers:
+            st.warning("清單為空，無可掃描的股票。")
+        else:
+            with st.spinner(f"正在掃描 {len(_scan_tickers)} 檔（批次下載中）..."):
+                _sig_results = scan_personal_signals(_scan_tickers, lookback_days=3)
+            st.session_state["_sig_scan_results"] = _sig_results
+            st.session_state["_sig_scan_scope_done"] = _scan_scope
+
+    # 顯示上次掃描結果
+    _res = st.session_state.get("_sig_scan_results")
+    if _res is not None:
+        if not _res:
+            st.info("最近 3 個交易日，清單中沒有出現達標 / 吸籌 / 乖離抄底訊號。")
+        else:
+            st.success(f"找到 {len(_res)} 檔有訊號（範圍：{st.session_state.get('_sig_scan_scope_done','')}）")
+            _table_rows = []
+            for r in _res:
+                _sig_txt = "、".join(
+                    f"{s[0]} {s[1]} ${s[2]}" for s in r["訊號"]
+                )
+                _table_rows.append({
+                    "代碼": r["代碼"], "名稱": r["名稱"],
+                    "現價": r["現價"], "訊號（類型 日期 金額）": _sig_txt,
+                })
+            st.dataframe(pd.DataFrame(_table_rows), use_container_width=True, hide_index=True)
+
+
+# ==========================================
 # 🤫 悄悄吸籌探測器（找尚未大漲但有徵兆的股票）
+# [V26.28] 改為切換後才顯示（_show_old_accum 由上方 toggle 控制）
 # ==========================================
 try:
     import accumulation_screener as _accum
@@ -4903,7 +4772,7 @@ try:
 except ImportError:
     _ACCUM_AVAILABLE = False
 
-if _ACCUM_AVAILABLE:
+if _ACCUM_AVAILABLE and _show_old_accum:
     st.markdown("---")
     accum_col1, accum_col2 = st.columns([5, 1])
     accum_col1.header("🤫 悄悄吸籌探測器")
@@ -5348,75 +5217,10 @@ if _REV_AVAILABLE:  # 共用 reversal_scanner 的 generate_monte_carlo_bands
 
     # ── 股票池定義 ──
     # S&P 100 核心（與 insider_sentiment 的 SP100_TICKERS 對齊）
-    _SP100_CORE_TICKERS = [
-        "NVDA", "MSFT", "AAPL", "GOOG", "GOOGL", "AMZN", "META", "TSLA", "BRK-B",
-        "AVGO", "JPM", "V", "WMT", "LLY", "MA", "ORCL", "XOM", "JNJ", "HD", "ABBV",
-        "PG", "BAC", "COST", "KO", "TMUS", "PLTR", "CVX", "CSCO", "NFLX", "ABT",
-        "WFC", "PEP", "CRM", "MRK", "ACN", "TMO", "AMD", "MCD", "GE", "ADBE",
-        "DIS", "AXP", "LIN", "IBM", "CAT", "PM", "QCOM", "MS", "VZ", "GS",
-        "INTU", "T", "ISRG", "RTX", "TXN", "NEE", "BX", "AMGN", "BKNG", "PFE",
-        "C", "SCHW", "UPS", "LOW", "BLK", "DHR", "NOW", "UNH", "HON", "ELV",
-        "SPGI", "ADP", "TJX", "SYK", "ETN", "DE", "GILD", "VRTX", "MMC", "PGR",
-        "MDT", "PANW", "REGN", "MU", "ADI", "SBUX", "LMT", "BSX", "CMCSA", "BMY",
-        "MO", "PYPL", "FI", "ICE", "DUK", "AMAT", "TGT", "MDLZ", "INTC", "USB",
-    ]
-
-    # [V26.02] 額外熱門股票（補齊 SP100 之外的散戶熱門股，含 SNDK）
-    _EXTRA_POPULAR_TICKERS = [
-        # 半導體 / 記憶體 / AI 硬體
-        "SNDK", "WDC", "MRVL", "ON", "MCHP", "KLAC", "LRCX", "ASML", "TSM", "ARM",
-        "NXPI", "SMCI", "ANET", "ALAB", "ENTG", "SWKS", "QRVO", "TER", "MPWR",
-        # 雲端 / SaaS
-        "SNOW", "NET", "DDOG", "MDB", "CRWD", "ZS", "OKTA", "ZM", "TEAM", "WDAY",
-        "SHOP", "TWLO", "NTNX", "ESTC", "HUBS", "DOCU", "DBX", "ASAN", "MNDY", "GTLB",
-        # AI / 量子 / 數據
-        "AI", "PATH", "SOUN", "IONQ", "RGTI", "QBTS", "BBAI",
-        # 消費 / 網路 / 媒體
-        "ROKU", "PINS", "SPOT", "ABNB", "DASH", "U", "RBLX", "EA", "TTWO", "ETSY",
-        "EBAY", "W", "CHWY", "DKNG", "BMBL", "MTCH", "WBD", "PARA",
-        # 金融科技
-        "COIN", "HOOD", "AFRM", "UPST", "SOFI", "NU", "MELI",
-        # 電動車 / 汽車
-        "RIVN", "LCID", "NIO", "XPEV", "LI", "F", "GM",
-        # 中概股
-        "BABA", "JD", "PDD", "BIDU", "BILI", "TME", "VIPS",
-        # 醫療 / 生技
-        "MRNA", "BNTX", "BIIB", "ILMN", "DXCM", "EW", "ZTS", "ALGN", "IDXX", "GH",
-        # 能源
-        "SLB", "OXY", "EOG", "MPC", "VLO", "PSX", "DVN", "FANG", "COP",
-        # 旅遊 / 航空 / 服務
-        "UBER", "LYFT", "DAL", "UAL", "AAL", "CCL", "RCL", "MAR", "HLT",
-        # 其他熱門
-        "SE", "GRAB",
-        # [V26.27] 軟體（資安 / 設計 / EDA）
-        "FTNT", "S", "CYBR",           # 資安軟體
-        "ADSK",                          # 設計軟體
-        "CDNS", "SNPS",                  # EDA / 晶片設計軟體
-        "VEEV",                          # 生命科學 SaaS
-        # [V26.27] 大型企業應用軟體
-        "SAP",                           # SAP — 企業 ERP
-        "ANSS",                          # Ansys — 模擬軟體
-        "PTC",                           # PTC — 工業 / CAD 軟體
-        "TYL",                           # Tyler Technologies — 政府軟體
-        "MANH",                          # Manhattan Associates — 供應鏈軟體
-        "DSGX",                          # Descartes Systems — 物流軟體
-        "PEGA",                          # Pegasystems — 流程自動化軟體
-        # [V26.27] AI 周邊（散熱 / 封裝 / 先進製程 / AI 晶片）
-        "VRT",                           # Vertiv — AI 資料中心散熱 / 電源
-        "AMKR", "KLIC",                  # 先進封裝 / 封裝設備
-        "AMBA",                          # Ambarella — AI 視覺 / 邊緣 AI 晶片
-        "WOLF",                          # Wolfspeed — 碳化矽 SiC
-        "ONTO", "ACLS",                  # 半導體量測 / 離子植入設備
-        # [V26.27] 火箭 / 太空
-        "RKLB", "LUNR",                  # Rocket Lab / Intuitive Machines
-        "ASTS",                          # AST SpaceMobile — 太空基地衛星通訊
-        "RDW",                           # Redwire Space
-        "KTOS",                          # Kratos Defense — 無人機 / 衛星
-        "NOC",                           # Northrop Grumman — 國防 / 太空
-    ]
-
-    # 去重（SP100 + extra，保留順序）
-    _EXTENDED_TGT_TICKERS = list(dict.fromkeys(_SP100_CORE_TICKERS + _EXTRA_POPULAR_TICKERS))
+    # ── 股票池定義（沿用頂層共用清單，V26.28 起去重）──
+    _SP100_CORE_TICKERS = _SP100_CORE_TICKERS  # 頂層已定義
+    _EXTRA_POPULAR_TICKERS = _EXTRA_POPULAR_TICKERS
+    _EXTENDED_TGT_TICKERS = _EXTENDED_TGT_TICKERS
 
     # [V26.13] 台股熱門（權值 30 + 安聯台灣大壩成分 + 被動元件 + 封裝 + AI/半導體/航運）
     # [V26.13] 台股熱門（權值 30 + 安聯大壩 + 被動元件 + 封裝 + 面板 + PCB + 能源 + 電子科技）
