@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.31", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.32", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2963,7 +2963,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.31")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.32")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -3627,9 +3627,12 @@ if _mc is not None:
         _skeleton = _band_map.get(_level)
 
         if _skeleton is not None and len(_skeleton) > 1:
+            # [V26.32] 縮短 AI 劇本路徑至 10 個交易日（原本跟 MC 一樣畫滿 30 天太長）
+            _AI_PATH_DAYS = 10
+            _skeleton = _skeleton[:_AI_PATH_DAYS]
             # 疊加鋸齒：用 sigma 控制幅度，製造「之字」震盪視覺
             _sigma = _mc.get('sigma', 0.02)
-            _dates_path = list(_mc['dates'])
+            _dates_path = list(_mc['dates'])[:_AI_PATH_DAYS]
             _n = len(_skeleton)
             # 鋸齒：每 2-3 天一個轉折，幅度 = sigma × price × 係數
             _base_price = float(df['Close'].iloc[-1])
