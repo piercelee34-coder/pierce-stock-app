@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.29", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.31", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1876,6 +1876,68 @@ def scan_personal_signals(tickers, lookback_days=3):
             continue
     return out
 
+def compute_calibrated_projection(ticker, cur_price, raw_short_target, horizon_days=5):
+    """[V26.30] 資料驅動校準推演：從 Gist 歷史快照學該檔『AI 預測偏差』特性，
+    用『隔日方向命中率』校準最新短期目標，回傳一條未來路徑點。
+
+    校準邏輯（資料驅動，非預設參數）：
+      - 讀回該檔所有歷史快照，用相鄰兩天現價還原『實際次日報酬』
+      - 命中率 conf = AI 隔日預測方向 與 實際方向 相符的比例（0~1）
+      - 校準目標 = 現價 + (原目標 - 現價) × conf
+        （命中率越低 → 越不信任 AI 目標，越往現價拉回）
+      - 樣本 < 5 天 → 回 None（不畫，避免樣本太少誤導）
+
+    回傳 dict: {x_dates, y_prices, calib_target, hit_rate, samples} 或 None
+    """
+    try:
+        hist = load_snapshot_history()  # {date: [records]}
+        if not hist or pd.isna(cur_price) or pd.isna(raw_short_target):
+            return None
+        # 收集該檔每天的 (日期, 現價, 隔日預測漲跌%)
+        recs = []
+        for d in sorted(hist.keys()):
+            for row in hist[d]:
+                if row.get("代碼") == ticker:
+                    recs.append({
+                        "date": d,
+                        "price": row.get("現價"),
+                        "pred_pct": row.get("隔日預測漲跌%"),
+                    })
+                    break
+        if len(recs) < 6:  # 需 >=6 天才有 >=5 個次日對照
+            return None
+        df = pd.DataFrame(recs).dropna(subset=["price"])
+        df["next_price"] = df["price"].shift(-1)
+        df = df.dropna(subset=["next_price", "pred_pct"])
+        if len(df) < 5:
+            return None
+        pred = df["pred_pct"].astype(float)
+        act = (df["next_price"] / df["price"] - 1) * 100
+        hit = (((pred > 0) & (act > 0)) | ((pred < 0) & (act < 0))).mean()
+        conf = max(0.0, min(1.0, float(hit)))
+        calib_target = cur_price + (raw_short_target - cur_price) * conf
+        # 產生未來路徑：從現價平滑連到校準目標（horizon 個交易日）
+        future_dates = []
+        d0 = datetime.now()
+        cnt = 0
+        while len(future_dates) < horizon_days:
+            d0 = d0 + timedelta(days=1)
+            if d0.weekday() < 5:  # 跳過週末
+                future_dates.append(d0)
+            cnt += 1
+            if cnt > 30:
+                break
+        ys = [cur_price + (calib_target - cur_price) * ((i + 1) / horizon_days)
+              for i in range(len(future_dates))]
+        return {
+            "x_dates": future_dates, "y_prices": ys,
+            "calib_target": round(calib_target, 2),
+            "hit_rate": round(conf * 100), "samples": len(df),
+        }
+    except Exception:
+        return None
+
+
 def get_compre_color_class(text):
     tl = text.lower()
     if any(w in tl for w in ['突破', '回測支撐', 'n字', '看漲']):
@@ -2341,6 +2403,9 @@ def build_snapshot_df(watchlists):
                     "V17接手點": _v17_entry,
                     "V17中段": _v17_mid,
                     "V17目標頂": _v17_peak,
+                    "校準目標": (lambda: (
+                        _c["calib_target"] if (_c := compute_calibrated_projection(tk, price, t_s, 5)) else None
+                    ))(),
                     "錯誤": "",
                 })
             except Exception as _e:
@@ -2494,8 +2559,33 @@ with st.sidebar:
     st.markdown("---")
 
     # ── [V26.14] 一鍵記錄今日劇本快照（凍結推演供日後比對）──
+    # [V26.31] 自動記錄：開啟若今天 Gist 還沒有快照 → 本 session 自動記一次
+    _auto_snap = st.toggle(
+        "🤖 每日自動記錄快照",
+        value=st.session_state.get("auto_snap_enabled", True),
+        key="auto_snap_enabled",
+        help="開啟後，每天首次打開 app 且今天還沒記過時，自動記錄一次（約 1-2 分鐘）。",
+    )
+    _auto_trigger = False
+    if _auto_snap and not st.session_state.get("_auto_snap_checked"):
+        st.session_state["_auto_snap_checked"] = True  # 本 session 只檢查一次，避免每次 rerun 重記
+        try:
+            from datetime import datetime as _dtn
+            import pytz as _pytz
+            _today = _dtn.now(_pytz.timezone("Asia/Taipei")).strftime("%Y-%m-%d")
+        except Exception:
+            _today = datetime.now().strftime("%Y-%m-%d")
+        try:
+            _hist_dates = set(load_snapshot_history().keys())
+        except Exception:
+            _hist_dates = set()
+        if _today not in _hist_dates:
+            _auto_trigger = True  # 今天還沒記 → 觸發自動記錄
+
     if st.button("📸 記錄今日劇本快照", use_container_width=True,
-                 help="對左側所有清單股票凍結今日 AI 劇本判定與目標價，輸出 Excel 供日後比對實際走勢"):
+                 help="對左側所有清單股票凍結今日 AI 劇本判定與目標價，輸出 Excel 供日後比對實際走勢") or _auto_trigger:
+        if _auto_trigger:
+            st.info("🤖 偵測到今天尚未記錄，自動記錄中…")
         _wl_snap = st.session_state.get("watchlists")
         if not _wl_snap:
             _wl_snap = load_watchlists()
@@ -2873,7 +2963,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.29")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.31")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -3620,6 +3710,38 @@ try:
 except Exception as _v17_e:
     # [Rule 12] 不靜默失敗
     st.session_state['_v17_proj_err'] = str(_v17_e)
+
+
+# ──────────────────────────────────────────────────────
+# [V26.30] 快照校準推演線（洋紅）— 從 Gist 歷史快照學每檔預測偏差後校準
+# 不取代舊 AI 劇本，並存供日後比準確度
+# ──────────────────────────────────────────────────────
+try:
+    _cal = compute_calibrated_projection(cur_t, close_v, t_s, horizon_days=5)
+    if _cal is not None:
+        # 起點接現價，讓線從今天連出去
+        _cal_x = [df.index[-1]] + _cal["x_dates"]
+        _cal_y = [close_v] + _cal["y_prices"]
+        fig.add_trace(go.Scatter(
+            x=_cal_x, y=_cal_y,
+            mode='lines+markers',
+            line=dict(color='#ec4899', width=2.5, dash='dash'),
+            marker=dict(size=6, symbol='star', color='#ec4899'),
+            name=f'🌸 校準推演（學{_cal["samples"]}天·命中{_cal["hit_rate"]}%）',
+            hovertemplate='校準: $%{y:.2f}<extra></extra>',
+        ), row=1, col=1)
+        _cal_pct = (_cal["calib_target"] / close_v - 1) * 100
+        fig.add_annotation(
+            x=_cal_x[-1], y=_cal["calib_target"],
+            text=f"🌸 ${_cal['calib_target']:.2f} ({_cal_pct:+.1f}%)",
+            showarrow=False,
+            font=dict(color='#ec4899', size=10, family='Arial Black'),
+            bgcolor="rgba(20,20,22,0.85)", bordercolor='#ec4899', borderwidth=1,
+            yshift=-14,
+            row=1, col=1,
+        )
+except Exception as _cal_e:
+    st.session_state['_cal_proj_err'] = str(_cal_e)
 
 
 # ──────────────────────────────────────────────────────
