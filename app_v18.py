@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.28", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.29", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -653,6 +653,64 @@ def _gist_write(data):
         return res.status_code == 200
     except Exception:
         return False
+
+# ──────────────────────────────────────────────────────
+# [V26.29] 通用 Gist 檔案讀寫（指定檔名），供快照雲端持久化用
+# 與上方 watchlist 專用函式並存，不互相影響。
+# ──────────────────────────────────────────────────────
+SNAPSHOT_FILE = "snapshots.json"
+
+def _gist_read_file(filename):
+    """讀 Gist 中指定檔名的 JSON 內容。成功回 物件；未設定或失敗回 None。"""
+    if not (GIST_TOKEN and GIST_ID):
+        return None
+    try:
+        res = requests.get(f"{_GIST_API}/{GIST_ID}", headers=_gist_headers(), timeout=10)
+        if res.status_code != 200:
+            return None
+        f = res.json().get("files", {}).get(filename)
+        if not f or "content" not in f:
+            return None
+        # Gist 對大檔會 truncated=True 並提供 raw_url
+        if f.get("truncated") and f.get("raw_url"):
+            raw = requests.get(f["raw_url"], headers=_gist_headers(), timeout=10)
+            return json.loads(raw.text) if raw.status_code == 200 else None
+        return json.loads(f["content"])
+    except Exception:
+        return None
+
+def _gist_write_file(filename, data):
+    """寫指定檔名的 JSON 到 Gist。成功回 True；未設定或失敗回 False。"""
+    if not (GIST_TOKEN and GIST_ID):
+        return False
+    try:
+        body = {"files": {filename: {"content": json.dumps(data, ensure_ascii=False)}}}
+        res = requests.patch(f"{_GIST_API}/{GIST_ID}", headers=_gist_headers(), json=body, timeout=12)
+        return res.status_code == 200
+    except Exception:
+        return False
+
+def load_snapshot_history():
+    """從 Gist 讀回所有歷史快照。回傳 dict：{ '2026-06-18': [ {row}, ... ], ... }。
+    未設定 / 讀不到 → 回空 dict（不報錯）。"""
+    data = _gist_read_file(SNAPSHOT_FILE)
+    return data if isinstance(data, dict) else {}
+
+def save_snapshot_to_gist(snap_date, records):
+    """把當天快照（list of dict）併入 Gist 的歷史庫。
+    同日期覆蓋（last-write-wins）。回傳 (成功與否, 訊息)。
+    """
+    if not (GIST_TOKEN and GIST_ID):
+        return False, "未設定 Gist"
+    hist = load_snapshot_history()
+    hist[str(snap_date)] = records
+    # 控制大小：只保留最近 120 天，避免 Gist 無限膨脹
+    if len(hist) > 120:
+        for k in sorted(hist.keys())[:-120]:
+            del hist[k]
+    ok = _gist_write_file(SNAPSHOT_FILE, hist)
+    return ok, (f"已同步 {len(hist)} 天歷史快照" if ok else "Gist 寫入失敗")
+
 
 def load_watchlists():
     """讀順序：Gist（雲端真相）→ 本地檔（離線備援）→ DEFAULT。
@@ -2471,6 +2529,15 @@ with st.sidebar:
         st.session_state["_snap_mime"] = _mime
         st.session_state["_snap_msg"] = _msg
         st.session_state["_snap_preview"] = _snap_df
+        # 雙保險③：[V26.29] 自動同步到 Gist 雲端歷史庫（之後校準推演線要用）
+        try:
+            _recs = json.loads(_snap_df.to_json(orient="records", date_format="iso"))
+            _gok, _gmsg = save_snapshot_to_gist(_snap_date, _recs)
+            st.session_state["_snap_gist_msg"] = (
+                f"☁️ {_gmsg}" if _gok else f"⚠️ 雲端同步未成功：{_gmsg}（本機/下載仍可用）"
+            )
+        except Exception as _ge:
+            st.session_state["_snap_gist_msg"] = f"⚠️ 雲端同步例外：{str(_ge)[:40]}"
 
     # 雙保險②：下載鈕（從 session_state 渲染，點擊後不消失）
     if st.session_state.get("_snap_bytes"):
@@ -2480,6 +2547,8 @@ with st.sidebar:
                            use_container_width=True)
         if st.session_state.get("_snap_msg"):
             st.caption(st.session_state["_snap_msg"])
+        if st.session_state.get("_snap_gist_msg"):
+            st.caption(st.session_state["_snap_gist_msg"])
 
     st.header("📌 多維度自選股清單")
     # [V26.20] Gist 雲端同步狀態（fail loud）
@@ -2804,7 +2873,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.28")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.29")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -3410,8 +3479,11 @@ for i in range(5, len(p_data)):
 
 # ──────────────────────────────────────────────────────
 # [v28] 蒙地卡羅雲帶繪圖（計算已在卡片區之前完成，這裡只負責畫到 fig）
+# [V26.29] 圖上 MC 三元素（中位線 + 兩條信心帶）已關閉；背後計算 _mc 仍保留
+#          （快照短/長期目標、AI 目標卡片仍用 MC 結果）。改回顯示：設 _SHOW_MC_BANDS = True
 # ──────────────────────────────────────────────────────
-if _mc is not None:
+_SHOW_MC_BANDS = False
+if _mc is not None and _SHOW_MC_BANDS:
     # 80% 信心帶（p10-p90）
     fig.add_trace(go.Scatter(
         x=list(_mc['dates']) + list(reversed(_mc['dates'])),
@@ -3443,6 +3515,8 @@ if _mc is not None:
         name='🔮 MC 中位數路徑',
         hovertemplate='中位數: $%{y:.2f}<extra></extra>'
     ), row=1, col=1)
+
+if _mc is not None:
 
     # ──────────────────────────────────────────────────────
     # [V26.13] AI 劇本路徑（看數據判定 5 級 → 畫對應 percentile 的鋸齒路徑）
