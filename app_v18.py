@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.36", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.37", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2297,7 +2297,8 @@ def classify_scenario(df, sr_info, funda=None):
     }
 
 
-def compute_eps_valuation(ticker, cur_price):
+@st.cache_data(ttl=21600, show_spinner=False)  # [V26.37] 6小時快取，避免每次 rerun 重打 yahoo 被限流
+def compute_eps_valuation(ticker):
     """[V26.35] 基本面 EPS 估值：用分析師共識 EPS × P/E 推三個目標。
     純唯讀，抓 yfinance .info，不影響任何技術面計算。
 
@@ -3092,7 +3093,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.36")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.37")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -3393,7 +3394,7 @@ with c4:
 # [V26.35] 基本面 EPS 估值卡片（獨立區塊，技術面 vs 基本面對照）
 # ──────────────────────────────────────────────────────
 try:
-    _eps = compute_eps_valuation(cur_t, close_v)
+    _eps = compute_eps_valuation(cur_t)
     if _eps and _eps.get("ok"):
         def _pct(v):
             return (v / close_v - 1) * 100 if close_v else 0
