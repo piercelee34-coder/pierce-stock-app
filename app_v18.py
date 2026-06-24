@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.33", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.34", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2670,6 +2670,44 @@ with st.sidebar:
         if st.session_state.get("_snap_gist_msg"):
             st.caption(st.session_state["_snap_gist_msg"])
 
+    # ── [V26.34] 匯出自選股分析包 CSV（手動，含 Gist 全部歷史 + 今日）──
+    if st.button("⬇️ 匯出自選股分析包 CSV", use_container_width=True,
+                 help="把雲端所有歷史快照中，屬於你自選股清單的資料合併成一份 CSV（給日後分析用）"):
+        with st.spinner("正在從雲端整理歷史快照..."):
+            try:
+                _exp_hist = load_snapshot_history()  # {date: [records]}
+                # 自選股清單（全部美股+台股，去重）
+                _exp_wls = st.session_state.get("watchlists", {})
+                _exp_codes = set(t for lst in _exp_wls.values() for t in lst)
+                _exp_rows = []
+                for _d in sorted(_exp_hist.keys()):
+                    for _rec in _exp_hist[_d]:
+                        if _rec.get("代碼") in _exp_codes:
+                            _exp_rows.append(_rec)
+                if not _exp_rows:
+                    st.session_state["_exp_csv"] = None
+                    st.session_state["_exp_msg"] = "雲端尚無自選股快照資料（先記錄幾天快照）。"
+                else:
+                    _exp_df = pd.DataFrame(_exp_rows)
+                    _exp_df = _exp_df.sort_values(["代碼", "快照日期"]) if "快照日期" in _exp_df.columns else _exp_df
+                    st.session_state["_exp_csv"] = _exp_df.to_csv(index=False).encode("utf-8-sig")
+                    st.session_state["_exp_msg"] = f"已整理 {len(_exp_rows)} 列（{len(_exp_hist)} 天 × 自選股）"
+            except Exception as _exp_e:
+                st.session_state["_exp_csv"] = None
+                st.session_state["_exp_msg"] = f"匯出失敗：{str(_exp_e)[:50]}"
+
+    if st.session_state.get("_exp_csv"):
+        from datetime import datetime as _dt_exp
+        st.download_button(
+            "💾 下載 CSV",
+            st.session_state["_exp_csv"],
+            file_name=f"watchlist_analysis_{_dt_exp.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    if st.session_state.get("_exp_msg"):
+        st.caption(st.session_state["_exp_msg"])
+
     st.header("📌 多維度自選股清單")
     # [V26.20] Gist 雲端同步狀態（fail loud）
     _gs = st.session_state.get('gist_status', 'unconfigured')
@@ -2993,7 +3031,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.33")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.34")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
