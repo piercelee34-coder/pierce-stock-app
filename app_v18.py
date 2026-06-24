@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.32", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.33", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2108,6 +2108,36 @@ def find_key_sr_levels(df, n_levels=3):
     }
 
 
+def price_level_strength(df, level_price, band_pct=0.02):
+    """[V26.33] 計算某價位的『籌碼強度』— 純唯讀，只回字串標籤，不影響任何計算。
+    方法：統計歷史上『最高低價區間涵蓋 level_price ±band_pct』的那些 K 棒成交量，
+    占全期總量的比例 → 比例越高代表該價位附近成交越密集（套牢/成本盤越多）= 越強。
+    回傳: '🔥強' / '中' / '弱'（或 '' 若資料不足）。
+    """
+    try:
+        if df is None or len(df) < 30 or not level_price or level_price <= 0:
+            return ""
+        lo = level_price * (1 - band_pct)
+        hi = level_price * (1 + band_pct)
+        # 該 K 棒的高低區間若與 [lo, hi] 有交集，視為「在這個價位有成交」
+        mask = (df['Low'] <= hi) & (df['High'] >= lo)
+        vol_at_level = float(df.loc[mask, 'Volume'].sum())
+        vol_total = float(df['Volume'].sum())
+        if vol_total <= 0:
+            return ""
+        ratio = vol_at_level / vol_total
+        # 門檻：以「均勻分布」為基準。若全期 N 根、±2% 區間約覆蓋少數價格帶，
+        # ratio 高於基準數倍即算密集。用經驗門檻分三級。
+        if ratio >= 0.15:
+            return "🔥強"
+        elif ratio >= 0.06:
+            return "中"
+        else:
+            return "弱"
+    except Exception:
+        return ""
+
+
 def predict_target_and_rating(df, mc_result=None):
     """
     [V26.13] 短/長期目標 + 強弱評等 + 技術目標位。
@@ -2963,7 +2993,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.32")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.33")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -3901,12 +3931,16 @@ st.session_state['_events_for_chart_v29'] = events_for_chart if events_for_chart
 
 
 fig.add_hline(y=abs_high, line_dash="dot", line_color="#ef4444", annotation_text=f"🔴 波段最高<br>${abs_high:.2f}", annotation_font_color="#ef4444", annotation_position="top right", annotation_align="right", opacity=1.0, layer="above", row=1, col=1)
+# [V26.33] 籌碼強度標註（純標籤；y 值與計算完全不變）
+_str_resist = price_level_strength(df, resist_line) if resist_line else ""
+_str_support = price_level_strength(df, support_line) if support_line else ""
+_str_iron = price_level_strength(df, iron_price) if (not is_breaking and iron_price > 0) else ""
 if resist_line:
-    fig.add_hline(y=resist_line, line_dash="dot", line_color="#f97316", annotation_text=f"🟠 前高壓力<br>${resist_line:.2f}", annotation_font_color="#f97316", annotation_position="top right", annotation_align="right", opacity=1.0, layer="above", row=1, col=1)
+    fig.add_hline(y=resist_line, line_dash="dot", line_color="#f97316", annotation_text=f"🟠 前高壓力 {_str_resist}<br>${resist_line:.2f}", annotation_font_color="#f97316", annotation_position="top right", annotation_align="right", opacity=1.0, layer="above", row=1, col=1)
 if support_line:
-    fig.add_hline(y=support_line, line_dash="dot", line_color="#3b82f6", annotation_text=f"🔵 前高支撐<br>${support_line:.2f}", annotation_font_color="#3b82f6", annotation_position="bottom right", annotation_align="right", opacity=1.0, layer="above", row=1, col=1)
+    fig.add_hline(y=support_line, line_dash="dot", line_color="#3b82f6", annotation_text=f"🔵 前高支撐 {_str_support}<br>${support_line:.2f}", annotation_font_color="#3b82f6", annotation_position="bottom right", annotation_align="right", opacity=1.0, layer="above", row=1, col=1)
 if not is_breaking and iron_price > 0:
-    fig.add_hline(y=iron_price, line_dash="dash", line_color="#20c997", annotation_text=f"🧱 鐵板 ${iron_price:.2f}", annotation_font_color="#20c997", annotation_position="bottom right", opacity=1.0, layer="above", row=1, col=1)
+    fig.add_hline(y=iron_price, line_dash="dash", line_color="#20c997", annotation_text=f"🧱 鐵板 {_str_iron} ${iron_price:.2f}", annotation_font_color="#20c997", annotation_position="bottom right", opacity=1.0, layer="above", row=1, col=1)
 
 # ──────────────────────────────────────────────────────
 # [V26.13] S/R 強化線（目標價線已改為 AI 劇本路徑，畫在 MC 雲帶區）
