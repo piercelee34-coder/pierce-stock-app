@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.35", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.36", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2313,7 +2313,8 @@ def compute_eps_valuation(ticker, cur_price):
         feps = info.get("forwardEps")
         cur_pe = info.get("forwardPE") or info.get("trailingPE")
         if not feps or feps <= 0 or not cur_pe or cur_pe <= 0:
-            return None  # 沒有預估 EPS 或 P/E（台股常見）→ 不顯示
+            # [V26.36] 不靜默 None，回傳診斷原因（fail loud）
+            return {"ok": False, "reason": f"forwardEps={feps}, P/E={cur_pe}（資料源未提供）"}
 
         # EPS 成長動能
         growth_pct = None
@@ -2347,13 +2348,14 @@ def compute_eps_valuation(ticker, cur_price):
             pass
 
         return {
+            "ok": True,
             "trailing_eps": teps, "forward_eps": feps,
             "eps_growth_pct": growth_pct, "cur_pe": cur_pe, "hist_pe": hist_pe,
             "conservative": conservative, "growth": growth, "historical": historical,
             "growth_pe": growth_pe,
         }
-    except Exception:
-        return None
+    except Exception as _e:
+        return {"ok": False, "reason": f"抓取例外：{str(_e)[:60]}"}
 
 
 def get_technical_target_threshold(df):
@@ -3090,7 +3092,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.35")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.36")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -3392,7 +3394,7 @@ with c4:
 # ──────────────────────────────────────────────────────
 try:
     _eps = compute_eps_valuation(cur_t, close_v)
-    if _eps is not None:
+    if _eps and _eps.get("ok"):
         def _pct(v):
             return (v / close_v - 1) * 100 if close_v else 0
         _g_txt = (f"{_eps['eps_growth_pct']:+.0f}%"
@@ -3427,8 +3429,12 @@ try:
             '</div>'
         )
         st.markdown(_eps_html, unsafe_allow_html=True)
+    elif _eps and not _eps.get("ok"):
+        # [V26.36] 抓不到 EPS 時顯示原因（fail loud），而非默默消失
+        st.caption(f"📊 基本面 EPS 估值：暫無資料（{_eps.get('reason', '未知')}）")
 except Exception as _eps_e:
     st.session_state['_eps_val_err'] = str(_eps_e)
+    st.caption(f"📊 基本面 EPS 估值：計算例外（{str(_eps_e)[:50]}）")
 
 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
 
