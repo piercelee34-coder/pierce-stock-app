@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.34", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.35", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2297,6 +2297,65 @@ def classify_scenario(df, sr_info, funda=None):
     }
 
 
+def compute_eps_valuation(ticker, cur_price):
+    """[V26.35] 基本面 EPS 估值：用分析師共識 EPS × P/E 推三個目標。
+    純唯讀，抓 yfinance .info，不影響任何技術面計算。
+
+    回傳 dict 或 None（抓不到資料時）：
+      trailing_eps, forward_eps, eps_growth_pct, cur_pe, hist_pe,
+      conservative（forwardEps × 當前P/E）,
+      growth（固定倍率：成長越快倍數越高）,
+      historical（forwardEps × 歷史均P/E）
+    """
+    try:
+        info = yf.Ticker(ticker).info
+        teps = info.get("trailingEps")
+        feps = info.get("forwardEps")
+        cur_pe = info.get("forwardPE") or info.get("trailingPE")
+        if not feps or feps <= 0 or not cur_pe or cur_pe <= 0:
+            return None  # 沒有預估 EPS 或 P/E（台股常見）→ 不顯示
+
+        # EPS 成長動能
+        growth_pct = None
+        if teps and teps > 0:
+            growth_pct = (feps / teps - 1) * 100
+
+        # 目標1：保守 = forwardEps × 當前 P/E（維持現在倍數）
+        conservative = feps * cur_pe
+
+        # 目標2：成長 = 固定倍率（成長越快給越高，設上限避免爆炸）
+        if growth_pct is None:
+            growth_pe = cur_pe
+        elif growth_pct < 10:
+            growth_pe = cur_pe
+        elif growth_pct < 30:
+            growth_pe = cur_pe * 1.15
+        else:
+            growth_pe = cur_pe * 1.3
+        growth = feps * growth_pe
+
+        # 目標3：歷史均 P/E = 過去一年 收盤價 ÷ 當期 trailingEps（粗略歷史 P/E）
+        hist_pe = None
+        historical = None
+        try:
+            hist = yf.Ticker(ticker).history(period="1y")
+            if not hist.empty and teps and teps > 0:
+                hist_pe = float((hist["Close"] / teps).mean())
+                if hist_pe > 0:
+                    historical = feps * hist_pe
+        except Exception:
+            pass
+
+        return {
+            "trailing_eps": teps, "forward_eps": feps,
+            "eps_growth_pct": growth_pct, "cur_pe": cur_pe, "hist_pe": hist_pe,
+            "conservative": conservative, "growth": growth, "historical": historical,
+            "growth_pe": growth_pe,
+        }
+    except Exception:
+        return None
+
+
 def get_technical_target_threshold(df):
     """技術面「達標」閾值（給走勢圖標籤用，與 AI 目標 t_s 分離）
     
@@ -3031,7 +3090,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.34")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.35")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -3327,6 +3386,49 @@ with c4:
         '</div>'
     )
     st.markdown(c4_html, unsafe_allow_html=True)
+
+# ──────────────────────────────────────────────────────
+# [V26.35] 基本面 EPS 估值卡片（獨立區塊，技術面 vs 基本面對照）
+# ──────────────────────────────────────────────────────
+try:
+    _eps = compute_eps_valuation(cur_t, close_v)
+    if _eps is not None:
+        def _pct(v):
+            return (v / close_v - 1) * 100 if close_v else 0
+        _g_txt = (f"{_eps['eps_growth_pct']:+.0f}%"
+                  if _eps['eps_growth_pct'] is not None else "N/A")
+        _hist_row = ""
+        if _eps['historical'] is not None and _eps['hist_pe']:
+            _hist_row = (
+                f'歷史目標 <b>${_eps["historical"]:.2f}</b> '
+                f'<span style="color:#888;font-size:11px;">({_pct(_eps["historical"]):+.1f}%，歷史均 {_eps["hist_pe"]:.0f}x)</span><br>'
+            )
+        _eps_html = (
+            '<div style="border:1px solid #a855f7; border-radius:8px; padding:12px 16px; '
+            'margin-bottom:15px; background:rgba(168,85,247,0.06);">'
+            '<h5 style="color:#c084fc; margin:0 0 8px 0;">📊 基本面 EPS 估值（分析師共識）</h5>'
+            f'<div style="font-size:12px; color:#bbb; margin-bottom:8px;">'
+            f'前期 EPS ${_eps["trailing_eps"] if _eps["trailing_eps"] else "N/A"} → '
+            f'本期預估 EPS <b style="color:#ddd;">${_eps["forward_eps"]:.2f}</b> '
+            f'<span style="color:#a855f7;">({_g_txt})</span>'
+            f'　｜　當前 P/E {_eps["cur_pe"]:.0f}x'
+            f'{"｜歷史均 " + format(_eps["hist_pe"], ".0f") + "x" if _eps["hist_pe"] else ""}'
+            f'</div>'
+            f'<div style="font-size:13px; color:#ddd; line-height:1.7;">'
+            f'保守目標 <b>${_eps["conservative"]:.2f}</b> '
+            f'<span style="color:#888;font-size:11px;">({_pct(_eps["conservative"]):+.1f}%，維持 {_eps["cur_pe"]:.0f}x)</span><br>'
+            f'成長目標 <b>${_eps["growth"]:.2f}</b> '
+            f'<span style="color:#888;font-size:11px;">({_pct(_eps["growth"]):+.1f}%，給 {_eps["growth_pe"]:.0f}x)</span><br>'
+            f'{_hist_row}'
+            f'</div>'
+            '<div style="font-size:10px; color:#777; margin-top:6px;">'
+            '※ 基於分析師共識 EPS，非技術面。目標 = 預估EPS × P/E 倍數，僅供參考。'
+            '</div>'
+            '</div>'
+        )
+        st.markdown(_eps_html, unsafe_allow_html=True)
+except Exception as _eps_e:
+    st.session_state['_eps_val_err'] = str(_eps_e)
 
 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
 
