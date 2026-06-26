@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.37", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.38", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2297,27 +2297,65 @@ def classify_scenario(df, sr_info, funda=None):
     }
 
 
-@st.cache_data(ttl=21600, show_spinner=False)  # [V26.37] 6小時快取，避免每次 rerun 重打 yahoo 被限流
+@st.cache_data(ttl=21600, show_spinner=False)  # [V26.37] 6小時快取
 def compute_eps_valuation(ticker):
     """[V26.35] 基本面 EPS 估值：用分析師共識 EPS × P/E 推三個目標。
-    純唯讀，抓 yfinance .info，不影響任何技術面計算。
+    純唯讀，不影響任何技術面計算。
 
-    回傳 dict 或 None（抓不到資料時）：
-      trailing_eps, forward_eps, eps_growth_pct, cur_pe, hist_pe,
-      conservative（forwardEps × 當前P/E）,
-      growth（固定倍率：成長越快倍數越高）,
-      historical（forwardEps × 歷史均P/E）
+    [V26.38] 抗限流：.info 端點易被 yahoo 限流，故加
+      (1) 重試 + 退避  (2) 成功存 disk  (3) 限流時讀 disk 舊值備援。
     """
-    try:
-        info = yf.Ticker(ticker).info
-        teps = info.get("trailingEps")
-        feps = info.get("forwardEps")
-        cur_pe = info.get("forwardPE") or info.get("trailingPE")
-        if not feps or feps <= 0 or not cur_pe or cur_pe <= 0:
-            # [V26.36] 不靜默 None，回傳診斷原因（fail loud）
-            return {"ok": False, "reason": f"forwardEps={feps}, P/E={cur_pe}（資料源未提供）"}
+    import os as _os
+    import time as _t
+    _cache_dir = ".eps_cache"
+    _cache_f = f"{_cache_dir}/{ticker.replace('/', '_')}.json"
 
-        # EPS 成長動能
+    def _save_disk(d):
+        try:
+            _os.makedirs(_cache_dir, exist_ok=True)
+            with open(_cache_f, "w") as _fh:
+                json.dump(d, _fh)
+        except Exception:
+            pass
+
+    def _load_disk():
+        try:
+            if _os.path.exists(_cache_f):
+                with open(_cache_f) as _fh:
+                    return json.load(_fh)
+        except Exception:
+            pass
+        return None
+
+    # 抓 .info，限流就重試（最多 3 次，退避 1/2/4 秒）
+    info = None
+    last_err = ""
+    for _attempt in range(3):
+        try:
+            info = yf.Ticker(ticker).info
+            if info and (info.get("forwardEps") or info.get("trailingEps")):
+                break
+        except Exception as _e:
+            last_err = str(_e)
+            if "Too Many Requests" in last_err or "Rate limit" in last_err:
+                _t.sleep(2 ** _attempt)  # 1, 2, 4 秒退避
+                continue
+            break
+
+    teps = info.get("trailingEps") if info else None
+    feps = info.get("forwardEps") if info else None
+    cur_pe = (info.get("forwardPE") or info.get("trailingPE")) if info else None
+
+    if not feps or feps <= 0 or not cur_pe or cur_pe <= 0:
+        # 抓不到 → 試讀 disk 舊值（限流時至少給上次的）
+        _old = _load_disk()
+        if _old:
+            _old["_stale"] = True  # 標記為舊資料
+            return _old
+        _reason = "限流中，且無歷史快取" if last_err else f"forwardEps={feps}, P/E={cur_pe}"
+        return {"ok": False, "reason": _reason}
+
+    try:
         growth_pct = None
         if teps and teps > 0:
             growth_pct = (feps / teps - 1) * 100
@@ -2348,13 +2386,15 @@ def compute_eps_valuation(ticker):
         except Exception:
             pass
 
-        return {
+        _result = {
             "ok": True,
             "trailing_eps": teps, "forward_eps": feps,
             "eps_growth_pct": growth_pct, "cur_pe": cur_pe, "hist_pe": hist_pe,
             "conservative": conservative, "growth": growth, "historical": historical,
             "growth_pe": growth_pe,
         }
+        _save_disk(_result)  # [V26.38] 存 disk，限流時當備援
+        return _result
     except Exception as _e:
         return {"ok": False, "reason": f"抓取例外：{str(_e)[:60]}"}
 
@@ -3093,7 +3133,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.37")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.38")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -3426,6 +3466,7 @@ try:
             f'</div>'
             '<div style="font-size:10px; color:#777; margin-top:6px;">'
             '※ 基於分析師共識 EPS，非技術面。目標 = 預估EPS × P/E 倍數，僅供參考。'
+            f'{" ⚠️ 限流中，顯示上次資料" if _eps.get("_stale") else ""}'
             '</div>'
             '</div>'
         )
