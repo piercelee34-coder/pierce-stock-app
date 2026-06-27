@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.38", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.39", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1876,6 +1876,82 @@ def scan_personal_signals(tickers, lookback_days=3):
             continue
     return out
 
+
+def scan_watchlist_icons(tickers, chaodi_lookback=60):
+    """[V26.39] 掃描自選股清單，產生掛在清單按鈕上的圖示。
+    每檔回傳一組 emoji 字串，複用現有判定：
+      - 主力進出：Money Flow 近 5 日趨勢（複用個股頁 Money Flow 邏輯）
+        🟢⬆ 吸籌 / 🔴⬇ 出貨
+      - 炒底次數：60 天內第 N 次乖離抄底/破底翻 → 💎N
+      - 達標：High >= 技術目標 → 💰
+    回傳 dict: { ticker: "🟢⬆ 💎2" , ... }
+    批次下載（穩定端點，不易限流）。
+    """
+    tickers = list(dict.fromkeys(tickers))
+    try:
+        batch = yf.download(tickers, period="1y", auto_adjust=False,
+                            group_by="ticker", progress=False, threads=True)
+    except Exception:
+        batch = None
+
+    icons = {}
+    for tk in tickers:
+        try:
+            if batch is not None and isinstance(batch.columns, pd.MultiIndex) \
+                    and tk in batch.columns.get_level_values(0):
+                d = batch[tk].dropna(how="all").copy()
+            else:
+                d = yf.Ticker(tk).history(period="1y", auto_adjust=False)
+            if d is None or d.empty or len(d) < 60:
+                continue
+            if isinstance(d.columns, pd.MultiIndex):
+                d.columns = d.columns.get_level_values(0)
+            d = calculate_indicators(d)
+            if pd.isna(d["SMA_20"].iloc[-1]):
+                continue
+
+            parts = []
+
+            # 1) 主力進出（複用 Money Flow：(收-開)/(高-低)×量 的累計，近5日趨勢）
+            try:
+                mf = ((d['Close'] - d['Open']) / (d['High'] - d['Low']) * d['Volume']).fillna(0).cumsum()
+                if len(mf) > 5:
+                    trend = mf.iloc[-1] - mf.iloc[-5]
+                    parts.append("🟢⬆" if trend > 0 else "🔴⬇")
+            except Exception:
+                pass
+
+            # 2) 炒底次數（60 天內第幾次 乖離抄底/破底翻）
+            try:
+                window = d.tail(chaodi_lookback)
+                chaodi_count = 0
+                for i in range(len(window)):
+                    sub = d.iloc[:len(d) - len(window) + i + 1]
+                    if len(sub) < 60:
+                        continue
+                    stt = detect_smart_money_status(sub)
+                    if stt and ("抄底" in stt or "破底翻" in stt):
+                        chaodi_count += 1
+                if chaodi_count > 0:
+                    parts.append(f"💎{chaodi_count}")
+            except Exception:
+                pass
+
+            # 3) 達標（最高價觸及技術目標）
+            try:
+                threshold = get_technical_target_threshold(d)
+                if threshold and float(d["High"].iloc[-1]) >= threshold:
+                    parts.append("💰")
+            except Exception:
+                pass
+
+            if parts:
+                icons[tk] = " ".join(parts)
+        except Exception:
+            continue
+    return icons
+
+
 def compute_calibrated_projection(ticker, cur_price, raw_short_target, horizon_days=5):
     """[V26.30] 資料驅動校準推演：從 Gist 歷史快照學該檔『AI 預測偏差』特性，
     用『隔日方向命中率』校準最新短期目標，回傳一條未來路徑點。
@@ -2826,6 +2902,42 @@ with st.sidebar:
     act_l = st.session_state.get('active_list')
     wls = st.session_state['watchlists']
 
+    # ── [V26.39] 掃描清單訊號（主力進出/炒底/達標 → 掛在清單按鈕上）──
+    import os as _os_wl
+    from datetime import datetime as _dt_wl
+    _wl_icon_dir = ".wl_icon_cache"
+    _wl_icon_today = _dt_wl.now().strftime("%Y-%m-%d")
+    _wl_icon_file = f"{_wl_icon_dir}/icons_{_wl_icon_today}.json"
+    # 啟動時若 session 沒有、但今天 disk 有快取 → 載入
+    if "_wl_icons" not in st.session_state:
+        try:
+            if _os_wl.path.exists(_wl_icon_file):
+                with open(_wl_icon_file) as _fh:
+                    st.session_state["_wl_icons"] = json.load(_fh)
+            else:
+                st.session_state["_wl_icons"] = {}
+        except Exception:
+            st.session_state["_wl_icons"] = {}
+
+    if st.button("🔍 掃描清單訊號", use_container_width=True,
+                 help="掃描全部自選股，在清單按鈕後顯示：🟢⬆吸籌/🔴⬇出貨、💎N炒底次數、💰達標（約 1-2 分鐘，當天有效）"):
+        _all_wl_tickers = [t for lst in wls.values() for t in lst]
+        with st.spinner(f"掃描 {len(set(_all_wl_tickers))} 檔自選股訊號中..."):
+            _icons = scan_watchlist_icons(_all_wl_tickers, chaodi_lookback=60)
+        st.session_state["_wl_icons"] = _icons
+        # 存 disk（當天有效）
+        try:
+            _os_wl.makedirs(_wl_icon_dir, exist_ok=True)
+            with open(_wl_icon_file, "w") as _fh:
+                json.dump(_icons, _fh)
+        except Exception:
+            pass
+        st.success(f"掃描完成，{len(_icons)} 檔有訊號")
+        st.rerun()
+
+    if st.session_state.get("_wl_icons"):
+        st.caption("🟢⬆吸籌 🔴⬇出貨 💎N炒底(60天第N次) 💰達標")
+
     # ── 多選模式 toggle ─────────────────────────────────
     multi_mode = st.toggle(
         "☑️ 多選編輯模式",
@@ -2865,8 +2977,11 @@ with st.sidebar:
                     key = (wl_name, t)
                     s_name = get_stock_name(t)
                     disp = f"{s_name} ({t})" if s_name != t else t
+                    # [V26.39] 掛上掃描的訊號圖示
+                    _ic = st.session_state.get("_wl_icons", {}).get(t, "")
+                    _disp_full = f"{disp} {_ic}" if _ic else disp
                     is_checked = key in st.session_state['selected_stocks']
-                    new_val = st.checkbox(disp, value=is_checked,
+                    new_val = st.checkbox(_disp_full, value=is_checked,
                                             key=f"cb_{wl_name}_{t}")
                     if new_val and not is_checked:
                         st.session_state['selected_stocks'].add(key)
@@ -2999,8 +3114,11 @@ with st.sidebar:
                     is_sel = (t == cur_t and wl_name == act_l)
                     s_name = get_stock_name(t)
                     disp = f"{s_name} ({t})" if s_name != t else t
+                    # [V26.39] 掛上掃描的訊號圖示（主力進出/炒底/達標）
+                    _ic = st.session_state.get("_wl_icons", {}).get(t, "")
+                    _disp_full = f"{disp} {_ic}" if _ic else disp
                     if st.button(
-                        f"{'▶ ' if is_sel else ''}{disp}",
+                        f"{'▶ ' if is_sel else ''}{_disp_full}",
                         key=f"btn_{wl_name}_{t}",
                         type="primary" if is_sel else "secondary",
                         use_container_width=True,
@@ -3133,7 +3251,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.38")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.39")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
