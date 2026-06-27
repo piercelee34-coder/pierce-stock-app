@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.43", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.44", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1924,13 +1924,21 @@ def scan_watchlist_icons(tickers, lookback_days=5):
             except Exception:
                 pass
 
-            # 最近 lookback_days 天內掃描各訊號（只標有觸發的，去重）
-            _flags = set()
-            _chaodi_count = 0
-            _buy_idx = -1   # [V26.42] 記錄 BUY/SELL 最後出現的索引，只顯示較新的
-            _sell_idx = -1
+            # [V26.44] 訊號保鮮期：每個訊號記錄「觸發在第幾根K棒」，
+            #          只顯示「距最後交易日 < FRESH 根交易日」的（自動跳過休假/未開盤日，
+            #          因為 K 線本身只含交易日）。FRESH=3 → 觸發當根 + 後續共 3 個交易日內有效。
+            FRESH = 3
             n = len(d)
-            for i in range(max(1, n - lookback_days), n):
+            last_idx = n - 1  # 最後一根 K 棒 = 最近交易日（視為「今天」）
+            # 掃描範圍：往回看足夠長（保鮮期 + 緩衝），逐根判定並記錄觸發索引
+            scan_start = max(1, n - (FRESH + 8))
+            _buy_idx = -1
+            _sell_idx = -1
+            _dabiao_idx = -1
+            _guore_idx = -1
+            _xichou_idx = -1
+            _chaodi_idxs = []   # 炒底每次觸發的索引（計次用）
+            for i in range(scan_start, n):
                 curr = d.iloc[i]
                 prior = d.iloc[i - 1]
                 # BUY：MACD 金叉 + 價格低於均線
@@ -1948,9 +1956,9 @@ def scan_watchlist_icons(tickers, lookback_days=5):
                 try:
                     thr = get_technical_target_threshold(d)
                     if thr and curr['High'] >= thr and not (prior['High'] >= thr):
-                        _flags.add("💰")
+                        _dabiao_idx = i
                     elif curr.get('RSI', 0) > 75 and not (prior.get('RSI', 0) > 75):
-                        _flags.add("🔥")
+                        _guore_idx = i
                 except Exception:
                     pass
                 # 吸籌 / 乖離炒底（逐日切片判定）
@@ -1960,32 +1968,45 @@ def scan_watchlist_icons(tickers, lookback_days=5):
                         stt = detect_smart_money_status(sub)
                         if stt:
                             if "吸籌" in stt:
-                                _flags.add("🤫")
+                                _xichou_idx = i
                             if "抄底" in stt or "破底翻" in stt:
-                                _chaodi_count += 1
+                                _chaodi_idxs.append(i)
                 except Exception:
                     pass
 
-            # [V26.42] 色點前綴：🟡達標 / 🟣炒底（放最前面當色標）
-            # [V26.43] 用 | 分隔色點與其他訊號，讓按鈕能把色點放到「股名之前」
+            # 保鮮期判定：距最後交易日 < FRESH 根才算有效
+            def _fresh(idx):
+                return idx >= 0 and (last_idx - idx) < FRESH
+            _buy_ok = _fresh(_buy_idx)
+            _sell_ok = _fresh(_sell_idx)
+            _dabiao_ok = _fresh(_dabiao_idx)
+            _guore_ok = _fresh(_guore_idx)
+            _xichou_ok = _fresh(_xichou_idx)
+            # 炒底次數：只計保鮮期內的觸發
+            _chaodi_count = sum(1 for ix in _chaodi_idxs if _fresh(ix))
+
+            # 色點前綴：🟡達標 / 🟣炒底（用 | 分隔，按鈕會移到股名前）
             _prefix = ""
-            if "💰" in _flags:
+            if _dabiao_ok:
                 _prefix += "🟡"
             if _chaodi_count > 0:
                 _prefix += "🟣"
 
-            # BUY/SELL 只顯示最新那個（互斥方向，不被舊的蓋過）
-            if _buy_idx >= 0 or _sell_idx >= 0:
-                parts.append("BUY" if _buy_idx >= _sell_idx else "SELL")
+            # BUY/SELL 只顯示最新且在保鮮期內的那個
+            if _buy_ok or _sell_ok:
+                if _buy_ok and (not _sell_ok or _buy_idx >= _sell_idx):
+                    parts.append("BUY")
+                elif _sell_ok:
+                    parts.append("SELL")
 
             # 其餘訊號（順序：吸籌 → 炒底 → 達標/過熱）
-            if "🤫" in _flags:
+            if _xichou_ok:
                 parts.append("🤫")
             if _chaodi_count > 0:
                 parts.append(f"💎{_chaodi_count}")
-            if "💰" in _flags:
+            if _dabiao_ok:
                 parts.append("💰")
-            if "🔥" in _flags:
+            if _guore_ok:
                 parts.append("🔥")
 
             if parts or _prefix:
@@ -2993,7 +3014,7 @@ with st.sidebar:
         st.rerun()
 
     if st.session_state.get("_wl_icons"):
-        st.caption("🟡達標 🟣炒底（色標）｜🟢⬆吸籌 🔴⬇出貨 BUY SELL 🤫吸籌 💎N炒底 💰達標 🔥過熱（近5天）")
+        st.caption("🟡達標 🟣炒底（色標）｜🟢⬆吸籌 🔴⬇出貨 BUY SELL 🤫吸籌 💎N炒底 💰達標 🔥過熱（保鮮3交易日）")
 
     # ── 多選模式 toggle ─────────────────────────────────
     multi_mode = st.toggle(
@@ -3318,7 +3339,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.43")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.44")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
