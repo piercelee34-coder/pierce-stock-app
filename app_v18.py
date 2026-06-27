@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.40", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.41", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1877,89 +1877,114 @@ def scan_personal_signals(tickers, lookback_days=3):
     return out
 
 
-def scan_watchlist_icons(tickers, chaodi_lookback=60):
-    """[V26.39] 掃描自選股清單，產生掛在清單按鈕上的圖示。
-    每檔回傳一組 emoji 字串，複用現有判定：
-      - 主力進出：Money Flow 近 5 日趨勢（複用個股頁 Money Flow 邏輯）
-        🟢⬆ 吸籌 / 🔴⬇ 出貨
-      - 炒底次數：60 天內第 N 次乖離抄底/破底翻 → 💎N
-      - 達標：High >= 技術目標 → 💰
-    回傳 dict: { ticker: "🟢⬆ 💎2" , ... }
-    批次下載（穩定端點，不易限流）。
+def scan_watchlist_icons(tickers, lookback_days=5):
+    """[V26.41] 掃描自選股清單，產生掛在清單按鈕上的訊號圖示。
+    逐檔抓取（套用個股頁同款欄位清理，美股/台股都可靠），偵測『最近 lookback_days 天內』
+    觸發的訊號，複用走勢圖既有判定：
+      - 主力進出：Money Flow 近5日趨勢 → 🟢⬆吸籌 / 🔴⬇出貨
+      - BUY：MACD 金叉 + 價格低於均線（trend用SMA60/momentum用SMA20）
+      - SELL：MACD 死叉
+      - 💎 乖離炒底/破底翻：detect_smart_money_status
+      - 🤫 吸籌：detect_smart_money_status
+      - 💰 達標：High >= 技術目標
+      - 🔥 過熱：RSI > 75
+    回傳 dict: { ticker: "🟢⬆ BUY 💎1", ..., "_errors": {tk: reason} }
     """
     tickers = list(dict.fromkeys(tickers))
-    try:
-        batch = yf.download(tickers, period="1y", auto_adjust=False,
-                            group_by="ticker", progress=False, threads=True)
-    except Exception:
-        batch = None
-
     icons = {}
     for tk in tickers:
         try:
-            d = None
-            # 先試批次結果
-            if batch is not None and isinstance(batch.columns, pd.MultiIndex) \
-                    and tk in batch.columns.get_level_values(0):
-                d = batch[tk].dropna(how="all").copy()
-            # [V26.40] 批次抓不到或資料不足 → fallback 單檔 yf.download（與個股頁同一套，美股可靠）
-            if d is None or d.empty or len(d) < 60:
-                d = yf.download(tk, period="1y", interval="1d",
-                                auto_adjust=False, progress=False)
-            if d is None or d.empty or len(d) < 60:
+            # 逐檔抓 + 個股頁同款清理（美股關鍵：去重複欄/清inf/dropna）
+            d = yf.download(tk, period="1y", interval="1d",
+                            auto_adjust=False, progress=False)
+            if d is None or d.empty:
+                icons.setdefault("_errors", {})[tk] = "下載空資料"
                 continue
             if isinstance(d.columns, pd.MultiIndex):
                 d.columns = d.columns.get_level_values(0)
-            # [V26.40] 驗證 OHLCV 欄位齊全（批次對某些市場可能缺欄）
-            _need = {"Open", "High", "Low", "Close", "Volume"}
-            if not _need.issubset(set(d.columns)):
+            d = d.loc[:, ~d.columns.duplicated()]
+            d = d.replace([np.inf, -np.inf], np.nan)
+            d = d.dropna(subset=['Open', 'High', 'Low', 'Close'])
+            if len(d) < 60:
+                icons.setdefault("_errors", {})[tk] = f"資料不足({len(d)}天)"
                 continue
             d = calculate_indicators(d)
             if pd.isna(d["SMA_20"].iloc[-1]):
+                icons.setdefault("_errors", {})[tk] = "指標 NaN"
                 continue
 
+            engine_type = get_engine_type_v27(tk)
             parts = []
 
-            # 1) 主力進出（複用 Money Flow：(收-開)/(高-低)×量 的累計，近5日趨勢）
+            # 1) 主力進出（Money Flow 近5日趨勢）
             try:
                 mf = ((d['Close'] - d['Open']) / (d['High'] - d['Low']) * d['Volume']).fillna(0).cumsum()
                 if len(mf) > 5:
-                    trend = mf.iloc[-1] - mf.iloc[-5]
-                    parts.append("🟢⬆" if trend > 0 else "🔴⬇")
+                    parts.append("🟢⬆" if (mf.iloc[-1] - mf.iloc[-5]) > 0 else "🔴⬇")
             except Exception:
                 pass
 
-            # 2) 炒底次數（60 天內第幾次 乖離抄底/破底翻）
-            try:
-                window = d.tail(chaodi_lookback)
-                chaodi_count = 0
-                for i in range(len(window)):
-                    sub = d.iloc[:len(d) - len(window) + i + 1]
-                    if len(sub) < 60:
-                        continue
-                    stt = detect_smart_money_status(sub)
-                    if stt and ("抄底" in stt or "破底翻" in stt):
-                        chaodi_count += 1
-                if chaodi_count > 0:
-                    parts.append(f"💎{chaodi_count}")
-            except Exception:
-                pass
+            # 最近 lookback_days 天內掃描各訊號（只標有觸發的，去重）
+            _flags = set()
+            _chaodi_count = 0
+            n = len(d)
+            for i in range(max(1, n - lookback_days), n):
+                curr = d.iloc[i]
+                prior = d.iloc[i - 1]
+                # BUY：MACD 金叉 + 價格低於均線
+                try:
+                    macd_buy = (curr['MACD'] > curr['Signal_Line']) and (prior['MACD'] <= prior['Signal_Line'])
+                    if macd_buy and ((engine_type == "trend" and curr['Close'] < curr.get('SMA_60', 0)) or
+                                     (engine_type == "momentum" and curr['Close'] < curr.get('SMA_20', 0))):
+                        _flags.add("BUY")
+                    macd_sell = (curr['MACD'] < curr['Signal_Line']) and (prior['MACD'] >= prior['Signal_Line'])
+                    if macd_sell:
+                        _flags.add("SELL")
+                except Exception:
+                    pass
+                # 達標 / 過熱
+                try:
+                    thr = get_technical_target_threshold(d)
+                    if thr and curr['High'] >= thr and not (prior['High'] >= thr):
+                        _flags.add("💰")
+                    elif curr.get('RSI', 0) > 75 and not (prior.get('RSI', 0) > 75):
+                        _flags.add("🔥")
+                except Exception:
+                    pass
+                # 吸籌 / 乖離炒底（逐日切片判定）
+                try:
+                    sub = d.iloc[:i + 1]
+                    if len(sub) >= 60:
+                        stt = detect_smart_money_status(sub)
+                        if stt:
+                            if "吸籌" in stt:
+                                _flags.add("🤫")
+                            if "抄底" in stt or "破底翻" in stt:
+                                _chaodi_count += 1
+                except Exception:
+                    pass
 
-            # 3) 達標（最高價觸及技術目標）
-            try:
-                threshold = get_technical_target_threshold(d)
-                if threshold and float(d["High"].iloc[-1]) >= threshold:
-                    parts.append("💰")
-            except Exception:
-                pass
+            # 組裝（順序：BUY/SELL → 吸籌 → 炒底 → 達標/過熱）
+            if "BUY" in _flags:
+                parts.append("BUY")
+            if "SELL" in _flags:
+                parts.append("SELL")
+            if "🤫" in _flags:
+                parts.append("🤫")
+            if _chaodi_count > 0:
+                parts.append(f"💎{_chaodi_count}")
+            if "💰" in _flags:
+                parts.append("💰")
+            if "🔥" in _flags:
+                parts.append("🔥")
 
             if parts:
                 icons[tk] = " ".join(parts)
         except Exception as _e:
-            # [V26.40] 記錄失敗原因供診斷
             icons.setdefault("_errors", {})[tk] = str(_e)[:60]
             continue
     return icons
+
 
 
 def compute_calibrated_projection(ticker, cur_price, raw_short_target, horizon_days=5):
@@ -2930,10 +2955,10 @@ with st.sidebar:
             st.session_state["_wl_icons"] = {}
 
     if st.button("🔍 掃描清單訊號", use_container_width=True,
-                 help="掃描全部自選股，在清單按鈕後顯示：🟢⬆吸籌/🔴⬇出貨、💎N炒底次數、💰達標（約 1-2 分鐘，當天有效）"):
+                 help="掃描全部自選股，在清單按鈕後顯示近5天訊號：🟢⬆吸籌/🔴⬇出貨、BUY/SELL、🤫吸籌、💎N炒底、💰達標、🔥過熱（約 2-4 分鐘，當天有效）"):
         _all_wl_tickers = [t for lst in wls.values() for t in lst]
         with st.spinner(f"掃描 {len(set(_all_wl_tickers))} 檔自選股訊號中..."):
-            _icons = scan_watchlist_icons(_all_wl_tickers, chaodi_lookback=60)
+            _icons = scan_watchlist_icons(_all_wl_tickers, lookback_days=5)
         # [V26.40] 分離診斷資訊
         _scan_errors = _icons.pop("_errors", {}) if isinstance(_icons, dict) else {}
         st.session_state["_wl_icons"] = _icons
@@ -2957,7 +2982,7 @@ with st.sidebar:
         st.rerun()
 
     if st.session_state.get("_wl_icons"):
-        st.caption("🟢⬆吸籌 🔴⬇出貨 💎N炒底(60天第N次) 💰達標")
+        st.caption("🟢⬆吸籌 🔴⬇出貨 BUY SELL 🤫吸籌 💎N炒底 💰達標 🔥過熱（近5天）")
 
     # ── 多選模式 toggle ─────────────────────────────────
     multi_mode = st.toggle(
@@ -3272,7 +3297,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.40")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.41")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
