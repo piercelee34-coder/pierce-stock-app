@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.39", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.40", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1897,15 +1897,23 @@ def scan_watchlist_icons(tickers, chaodi_lookback=60):
     icons = {}
     for tk in tickers:
         try:
+            d = None
+            # 先試批次結果
             if batch is not None and isinstance(batch.columns, pd.MultiIndex) \
                     and tk in batch.columns.get_level_values(0):
                 d = batch[tk].dropna(how="all").copy()
-            else:
-                d = yf.Ticker(tk).history(period="1y", auto_adjust=False)
+            # [V26.40] 批次抓不到或資料不足 → fallback 單檔 yf.download（與個股頁同一套，美股可靠）
+            if d is None or d.empty or len(d) < 60:
+                d = yf.download(tk, period="1y", interval="1d",
+                                auto_adjust=False, progress=False)
             if d is None or d.empty or len(d) < 60:
                 continue
             if isinstance(d.columns, pd.MultiIndex):
                 d.columns = d.columns.get_level_values(0)
+            # [V26.40] 驗證 OHLCV 欄位齊全（批次對某些市場可能缺欄）
+            _need = {"Open", "High", "Low", "Close", "Volume"}
+            if not _need.issubset(set(d.columns)):
+                continue
             d = calculate_indicators(d)
             if pd.isna(d["SMA_20"].iloc[-1]):
                 continue
@@ -1947,7 +1955,9 @@ def scan_watchlist_icons(tickers, chaodi_lookback=60):
 
             if parts:
                 icons[tk] = " ".join(parts)
-        except Exception:
+        except Exception as _e:
+            # [V26.40] 記錄失敗原因供診斷
+            icons.setdefault("_errors", {})[tk] = str(_e)[:60]
             continue
     return icons
 
@@ -2924,6 +2934,8 @@ with st.sidebar:
         _all_wl_tickers = [t for lst in wls.values() for t in lst]
         with st.spinner(f"掃描 {len(set(_all_wl_tickers))} 檔自選股訊號中..."):
             _icons = scan_watchlist_icons(_all_wl_tickers, chaodi_lookback=60)
+        # [V26.40] 分離診斷資訊
+        _scan_errors = _icons.pop("_errors", {}) if isinstance(_icons, dict) else {}
         st.session_state["_wl_icons"] = _icons
         # 存 disk（當天有效）
         try:
@@ -2932,7 +2944,16 @@ with st.sidebar:
                 json.dump(_icons, _fh)
         except Exception:
             pass
-        st.success(f"掃描完成，{len(_icons)} 檔有訊號")
+        _all_set = set(_all_wl_tickers)
+        _got = set(_icons.keys())
+        _missing = _all_set - _got
+        st.success(f"掃描完成：{len(_icons)} 檔有訊號 / 共 {len(_all_set)} 檔")
+        if _missing:
+            st.warning(f"⚠️ {len(_missing)} 檔無訊號或抓取失敗：{', '.join(sorted(_missing)[:15])}")
+        if _scan_errors:
+            with st.expander(f"🔍 失敗診斷（{len(_scan_errors)} 檔）"):
+                for _tk, _er in list(_scan_errors.items())[:20]:
+                    st.caption(f"{_tk}: {_er}")
         st.rerun()
 
     if st.session_state.get("_wl_icons"):
@@ -3251,7 +3272,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.39")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.40")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
