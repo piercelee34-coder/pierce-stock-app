@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.42", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.43", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1967,15 +1967,14 @@ def scan_watchlist_icons(tickers, lookback_days=5):
                     pass
 
             # [V26.42] 色點前綴：🟡達標 / 🟣炒底（放最前面當色標）
+            # [V26.43] 用 | 分隔色點與其他訊號，讓按鈕能把色點放到「股名之前」
             _prefix = ""
             if "💰" in _flags:
                 _prefix += "🟡"
             if _chaodi_count > 0:
                 _prefix += "🟣"
-            if _prefix:
-                parts.insert(0, _prefix)
 
-            # [V26.42] BUY/SELL 只顯示最新那個（互斥方向，不被舊的蓋過）
+            # BUY/SELL 只顯示最新那個（互斥方向，不被舊的蓋過）
             if _buy_idx >= 0 or _sell_idx >= 0:
                 parts.append("BUY" if _buy_idx >= _sell_idx else "SELL")
 
@@ -1989,8 +1988,9 @@ def scan_watchlist_icons(tickers, lookback_days=5):
             if "🔥" in _flags:
                 parts.append("🔥")
 
-            if parts:
-                icons[tk] = " ".join(parts)
+            if parts or _prefix:
+                # 格式："色點|其他訊號"（按鈕會把色點移到股名前）
+                icons[tk] = f"{_prefix}|{' '.join(parts)}"
         except Exception as _e:
             icons.setdefault("_errors", {})[tk] = str(_e)[:60]
             continue
@@ -3036,7 +3036,12 @@ with st.sidebar:
                     disp = f"{s_name} ({t})" if s_name != t else t
                     # [V26.39] 掛上掃描的訊號圖示
                     _ic = st.session_state.get("_wl_icons", {}).get(t, "")
-                    _disp_full = f"{disp} {_ic}" if _ic else disp
+                    # [V26.43] 色點移到股名前："色點|其他訊號" → 🟡 股名 其他訊號
+                    if "|" in _ic:
+                        _dot, _rest = _ic.split("|", 1)
+                        _disp_full = f"{_dot}{' ' if _dot else ''}{disp}{' ' + _rest if _rest else ''}"
+                    else:
+                        _disp_full = f"{disp} {_ic}" if _ic else disp
                     is_checked = key in st.session_state['selected_stocks']
                     new_val = st.checkbox(_disp_full, value=is_checked,
                                             key=f"cb_{wl_name}_{t}")
@@ -3173,7 +3178,12 @@ with st.sidebar:
                     disp = f"{s_name} ({t})" if s_name != t else t
                     # [V26.39] 掛上掃描的訊號圖示（主力進出/炒底/達標）
                     _ic = st.session_state.get("_wl_icons", {}).get(t, "")
-                    _disp_full = f"{disp} {_ic}" if _ic else disp
+                    # [V26.43] 色點移到股名前："色點|其他訊號" → 🟡 股名 其他訊號
+                    if "|" in _ic:
+                        _dot, _rest = _ic.split("|", 1)
+                        _disp_full = f"{_dot}{' ' if _dot else ''}{disp}{' ' + _rest if _rest else ''}"
+                    else:
+                        _disp_full = f"{disp} {_ic}" if _ic else disp
                     if st.button(
                         f"{'▶ ' if is_sel else ''}{_disp_full}",
                         key=f"btn_{wl_name}_{t}",
@@ -3308,7 +3318,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.42")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.43")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
