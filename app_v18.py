@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.41", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.42", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1927,6 +1927,8 @@ def scan_watchlist_icons(tickers, lookback_days=5):
             # 最近 lookback_days 天內掃描各訊號（只標有觸發的，去重）
             _flags = set()
             _chaodi_count = 0
+            _buy_idx = -1   # [V26.42] 記錄 BUY/SELL 最後出現的索引，只顯示較新的
+            _sell_idx = -1
             n = len(d)
             for i in range(max(1, n - lookback_days), n):
                 curr = d.iloc[i]
@@ -1936,10 +1938,10 @@ def scan_watchlist_icons(tickers, lookback_days=5):
                     macd_buy = (curr['MACD'] > curr['Signal_Line']) and (prior['MACD'] <= prior['Signal_Line'])
                     if macd_buy and ((engine_type == "trend" and curr['Close'] < curr.get('SMA_60', 0)) or
                                      (engine_type == "momentum" and curr['Close'] < curr.get('SMA_20', 0))):
-                        _flags.add("BUY")
+                        _buy_idx = i
                     macd_sell = (curr['MACD'] < curr['Signal_Line']) and (prior['MACD'] >= prior['Signal_Line'])
                     if macd_sell:
-                        _flags.add("SELL")
+                        _sell_idx = i
                 except Exception:
                     pass
                 # 達標 / 過熱
@@ -1964,11 +1966,20 @@ def scan_watchlist_icons(tickers, lookback_days=5):
                 except Exception:
                     pass
 
-            # 組裝（順序：BUY/SELL → 吸籌 → 炒底 → 達標/過熱）
-            if "BUY" in _flags:
-                parts.append("BUY")
-            if "SELL" in _flags:
-                parts.append("SELL")
+            # [V26.42] 色點前綴：🟡達標 / 🟣炒底（放最前面當色標）
+            _prefix = ""
+            if "💰" in _flags:
+                _prefix += "🟡"
+            if _chaodi_count > 0:
+                _prefix += "🟣"
+            if _prefix:
+                parts.insert(0, _prefix)
+
+            # [V26.42] BUY/SELL 只顯示最新那個（互斥方向，不被舊的蓋過）
+            if _buy_idx >= 0 or _sell_idx >= 0:
+                parts.append("BUY" if _buy_idx >= _sell_idx else "SELL")
+
+            # 其餘訊號（順序：吸籌 → 炒底 → 達標/過熱）
             if "🤫" in _flags:
                 parts.append("🤫")
             if _chaodi_count > 0:
@@ -2982,7 +2993,7 @@ with st.sidebar:
         st.rerun()
 
     if st.session_state.get("_wl_icons"):
-        st.caption("🟢⬆吸籌 🔴⬇出貨 BUY SELL 🤫吸籌 💎N炒底 💰達標 🔥過熱（近5天）")
+        st.caption("🟡達標 🟣炒底（色標）｜🟢⬆吸籌 🔴⬇出貨 BUY SELL 🤫吸籌 💎N炒底 💰達標 🔥過熱（近5天）")
 
     # ── 多選模式 toggle ─────────────────────────────────
     multi_mode = st.toggle(
@@ -3297,7 +3308,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.41")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.42")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
