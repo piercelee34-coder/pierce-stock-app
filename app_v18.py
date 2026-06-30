@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.51", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.52", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3313,6 +3313,12 @@ with st.sidebar:
 
     else:
         # ── 點按模式（既有 UI） ─────────────────────────
+        # [V26.52] 清單頂部「📊 總表」項目（點它看持倉總表）
+        _dash_sel = (cur_t == "__DASHBOARD__")
+        if st.button("📊 持倉總表", key="btn_dashboard", use_container_width=True,
+                     type="primary" if _dash_sel else "secondary"):
+            st.session_state['current_ticker'] = "__DASHBOARD__"
+            st.rerun()
         for wl_name, tickers in wls.items():
             is_exp = (wl_name == st.session_state.get('user_opened_list'))
             with st.expander(f"{wl_name} ({len(tickers)})", expanded=is_exp):
@@ -3413,45 +3419,6 @@ with st.sidebar:
                 st.rerun()
 
         st.markdown("---")
-        # ── [V26.48] 持倉編輯（成本 + 股數，存 Gist）──
-        st.markdown(f"**💼 編輯「{cur_t}」持倉成本**")
-        _hold = st.session_state.get("_holdings", {})
-        _cur_hold = _hold.get(cur_t, {})
-        _is_tw = ".TW" in cur_t
-        _ccy = "TWD" if _is_tw else "USD"
-        hc1, hc2 = st.columns(2)
-        _in_cost = hc1.number_input(
-            f"成本價（{_ccy}）", min_value=0.0,
-            value=float(_cur_hold.get("cost", 0.0)),
-            step=0.01, format="%.2f", key=f"hold_cost_{cur_t}",
-        )
-        _in_shares = hc2.number_input(
-            "股數", min_value=0, step=1,
-            value=int(_cur_hold.get("shares", 0)),
-            key=f"hold_shares_{cur_t}",
-            help="美股填股數；台股 1 張 = 1000 股，請自行換算後輸入",
-        )
-        hb1, hb2 = st.columns(2)
-        if hb1.button("💾 儲存持倉", use_container_width=True, key=f"save_hold_{cur_t}"):
-            if _in_cost > 0 and _in_shares > 0:
-                _hold[cur_t] = {"cost": round(float(_in_cost), 2), "shares": int(_in_shares)}
-            else:
-                # 成本或股數為 0 → 視為刪除持倉
-                _hold.pop(cur_t, None)
-            _ok, _msg = save_holdings(_hold)
-            st.session_state["_holdings"] = _hold
-            st.success(f"已儲存（{_msg}）" if _ok else f"⚠️ {_msg}")
-            st.rerun()
-        if _cur_hold and hb2.button("🗑️ 清除持倉", use_container_width=True, key=f"del_hold_{cur_t}"):
-            _hold.pop(cur_t, None)
-            _ok, _msg = save_holdings(_hold)
-            st.session_state["_holdings"] = _hold
-            st.info(f"已清除「{cur_t}」持倉")
-            st.rerun()
-        if _cur_hold:
-            st.caption(f"目前記錄：成本 ${_cur_hold.get('cost')} × {_cur_hold.get('shares')} 股")
-
-        st.markdown("---")
         st.markdown(f"**🔀 移動「{cur_t}」到其他清單**")
         move_target = st.selectbox(
             "移到", [k for k in wls.keys() if k != act_l],
@@ -3505,17 +3472,14 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.51")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.52" if cur_t != "__DASHBOARD__"
+         else "📊 持倉戰情總表 V26.52")
 
 # ══════════════════════════════════════════════════════════
-# [V26.51] 視圖切換：📊 持倉總表 / 📈 個股戰情（預設停在總表）
+# [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
+#          點清單頂部「📊 總表」→ 顯示儀表板；點個股 → 顯示個股戰情。
 # ══════════════════════════════════════════════════════════
-_view = st.radio(
-    "檢視模式", ["📊 持倉總表", "📈 個股戰情"],
-    horizontal=True, label_visibility="collapsed", key="_main_view",
-)
-
-if _view == "📊 持倉總表":
+if cur_t == "__DASHBOARD__":
     st.markdown("## 📊 持倉戰情總表")
     _hold = st.session_state.get("_holdings", {})
     _prices = st.session_state.get("_wl_prices", {})
@@ -3526,53 +3490,82 @@ if _view == "📊 持倉總表":
     if not _prices:
         st.info("尚未掃描現價。請先到左側控制台按「🔍 掃描清單訊號」，總表才有現價與訊號資料。")
     else:
-        # 組總表資料
-        _rows = []
-        _us_pl_usd = 0.0
-        _tw_pl_twd = 0.0
+        # 組可編輯表格資料
+        _editor_rows = []
         for tk in _all_tk:
             px = _prices.get(tk)
             ic_raw = _icons_map.get(tk, "")
-            # 圖示去掉分隔符，合併顯示
             ic = ic_raw.replace("|", " ").strip() if ic_raw else ""
             s_name = get_stock_name(tk)
             disp_name = s_name if s_name != tk else ""
-            is_tw = ".TW" in tk
+            h = _hold.get(tk, {})
+            _editor_rows.append({
+                "代碼": tk,
+                "名稱": disp_name,
+                "現價": px if px else None,
+                "訊號": ic,
+                "成本": float(h["cost"]) if h.get("cost") else None,
+                "股數": int(h["shares"]) if h.get("shares") else None,
+            })
+        _edit_df = pd.DataFrame(_editor_rows)
+
+        st.caption("💡 直接在「成本」「股數」欄輸入你的買進成本與持有股數，改完按下方「💾 儲存持倉」。台股 1 張＝1000 股。")
+        _edited = st.data_editor(
+            _edit_df,
+            use_container_width=True, hide_index=True, key="_holdings_editor",
+            column_config={
+                "代碼": st.column_config.TextColumn("代碼", disabled=True),
+                "名稱": st.column_config.TextColumn("名稱", disabled=True),
+                "現價": st.column_config.NumberColumn("現價", disabled=True, format="%.2f"),
+                "訊號": st.column_config.TextColumn("訊號", disabled=True),
+                "成本": st.column_config.NumberColumn("成本", min_value=0.0, format="%.2f"),
+                "股數": st.column_config.NumberColumn("股數", min_value=0, format="%d"),
+            },
+        )
+
+        if st.button("💾 儲存持倉", use_container_width=True, type="primary"):
+            _new_hold = {}
+            for _, r in _edited.iterrows():
+                tk = r["代碼"]
+                cost = r["成本"]; shares = r["股數"]
+                if cost and shares and cost > 0 and shares > 0:
+                    _new_hold[tk] = {"cost": round(float(cost), 2), "shares": int(shares)}
+            _ok, _msg = save_holdings(_new_hold)
+            st.session_state["_holdings"] = _new_hold
+            st.success(f"已儲存 {len(_new_hold)} 檔持倉（{_msg}）" if _ok else f"⚠️ {_msg}")
+            st.rerun()
+
+        # 損益總計（用已儲存的持倉算）
+        _us_pl_usd = 0.0
+        _tw_pl_twd = 0.0
+        _pl_rows = []
+        for tk in _all_tk:
+            px = _prices.get(tk)
             h = _hold.get(tk)
-            row = {"代碼": tk, "名稱": disp_name, "現價": px if px else "—", "訊號": ic}
             if h and px:
                 cost = h["cost"]; shares = h["shares"]
                 pl_pct = (px / cost - 1) * 100
+                is_tw = ".TW" in tk
                 if is_tw:
-                    pl_twd = (px - cost) * shares
-                    _tw_pl_twd += pl_twd
-                    row["成本"] = cost
-                    row["損益%"] = round(pl_pct, 1)
-                    row["損益"] = f"NT${pl_twd:,.0f}"
+                    pl = (px - cost) * shares
+                    _tw_pl_twd += pl
+                    _pl_rows.append({"代碼": tk, "損益%": round(pl_pct, 1), "損益": f"NT${pl:,.0f}"})
                 else:
-                    pl_usd = (px - cost) * shares
-                    _us_pl_usd += pl_usd
-                    row["成本"] = cost
-                    row["損益%"] = round(pl_pct, 1)
-                    row["損益"] = f"${pl_usd:,.0f} / NT${pl_usd*USD_TWD:,.0f}"
-            else:
-                row["成本"] = "—"; row["損益%"] = "—"; row["損益"] = "—"
-            _rows.append(row)
-
-        _df_table = pd.DataFrame(_rows)
-        st.dataframe(_df_table, use_container_width=True, hide_index=True)
-
-        # 分幣別總計
-        st.markdown("### 💰 總損益（持倉部分）")
-        _c1, _c2 = st.columns(2)
-        _c1.metric("美股總損益 (USD)", f"${_us_pl_usd:,.0f}",
-                   delta=f"≈ NT${_us_pl_usd*USD_TWD:,.0f}")
-        _c2.metric("台股總損益 (TWD)", f"NT${_tw_pl_twd:,.0f}")
-        st.caption(f"※ 美股以固定匯率 {USD_TWD:.0f} 換算台幣；幣別不同故分開計算。訊號/現價來自最近一次掃描。")
+                    pl = (px - cost) * shares
+                    _us_pl_usd += pl
+                    _pl_rows.append({"代碼": tk, "損益%": round(pl_pct, 1),
+                                     "損益": f"${pl:,.0f} / NT${pl*USD_TWD:,.0f}"})
+        if _pl_rows:
+            st.markdown("### 📈 已持倉損益")
+            st.dataframe(pd.DataFrame(_pl_rows), use_container_width=True, hide_index=True)
+            _c1, _c2 = st.columns(2)
+            _c1.metric("美股總損益 (USD)", f"${_us_pl_usd:,.0f}", delta=f"≈ NT${_us_pl_usd*USD_TWD:,.0f}")
+            _c2.metric("台股總損益 (TWD)", f"NT${_tw_pl_twd:,.0f}")
+            st.caption(f"※ 美股以固定匯率 {USD_TWD:.0f} 換算台幣；訊號/現價來自最近一次掃描。")
 
     st.stop()  # 總表視圖：不渲染下方個股戰情
 
-# ── 以下為「📈 個股戰情」視圖（原有內容）──
+# ── 以下為個股戰情視圖 ──
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
 if df.empty:
