@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.47", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.48", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -660,6 +660,9 @@ def _gist_write(data):
 # ──────────────────────────────────────────────────────
 SNAPSHOT_FILE = "snapshots.json"
 
+# [V26.48] 美元兌台幣固定匯率（持倉損益換算用；匯率變動時改這個數字即可）
+USD_TWD = 32.0
+
 def _gist_read_file(filename):
     """讀 Gist 中指定檔名的 JSON 內容。成功回 物件；未設定或失敗回 None。"""
     if not (GIST_TOKEN and GIST_ID):
@@ -710,6 +713,50 @@ def save_snapshot_to_gist(snap_date, records):
             del hist[k]
     ok = _gist_write_file(SNAPSHOT_FILE, hist)
     return ok, (f"已同步 {len(hist)} 天歷史快照" if ok else "Gist 寫入失敗")
+
+
+# ──────────────────────────────────────────────────────
+# [V26.48] 持倉管理（成本 + 股數）— 存 Gist 跨裝置同步
+# 結構：{ "NVDA": {"cost": 150.0, "shares": 100}, ... }
+# 含三層 fallback：Gist → 本機 .holdings_cache.json → 空 dict
+# ──────────────────────────────────────────────────────
+HOLDINGS_FILE = "holdings.json"
+_HOLDINGS_LOCAL = ".holdings_cache.json"
+
+def load_holdings():
+    """讀回持倉。優先 Gist，失敗退本機快取，再失敗回空 dict（不報錯）。"""
+    data = _gist_read_file(HOLDINGS_FILE)
+    if isinstance(data, dict):
+        # 成功讀 Gist → 同步寫一份本機備份
+        try:
+            with open(_HOLDINGS_LOCAL, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+        except Exception:
+            pass
+        return data
+    # Gist 讀不到 → 退本機
+    try:
+        import os as _os
+        if _os.path.exists(_HOLDINGS_LOCAL):
+            with open(_HOLDINGS_LOCAL, encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+def save_holdings(holdings):
+    """寫入持倉。Gist + 本機都寫（雙保險）。回傳 (成功, 訊息)。"""
+    # 本機一定寫（不依賴 Gist）
+    try:
+        with open(_HOLDINGS_LOCAL, "w", encoding="utf-8") as f:
+            json.dump(holdings, f, ensure_ascii=False)
+    except Exception:
+        pass
+    # Gist（跨裝置）
+    if not (GIST_TOKEN and GIST_ID):
+        return False, "已存本機（未設定 Gist，不同步雲端）"
+    ok = _gist_write_file(HOLDINGS_FILE, holdings)
+    return ok, ("已同步雲端" if ok else "雲端寫入失敗（已存本機）")
 
 
 def load_watchlists():
@@ -836,6 +883,9 @@ def get_stock_name(ticker: str) -> str:
 
 if 'watchlists' not in st.session_state:
     st.session_state['watchlists'] = load_watchlists()
+# [V26.48] 載入持倉（成本+股數）
+if '_holdings' not in st.session_state:
+    st.session_state['_holdings'] = load_holdings()
 if 'active_list' not in st.session_state:
     st.session_state['active_list'] = list(st.session_state['watchlists'].keys())[0]
 if 'user_opened_list' not in st.session_state:
@@ -3310,6 +3360,45 @@ with st.sidebar:
                 st.rerun()
 
         st.markdown("---")
+        # ── [V26.48] 持倉編輯（成本 + 股數，存 Gist）──
+        st.markdown(f"**💼 編輯「{cur_t}」持倉成本**")
+        _hold = st.session_state.get("_holdings", {})
+        _cur_hold = _hold.get(cur_t, {})
+        _is_tw = ".TW" in cur_t
+        _ccy = "TWD" if _is_tw else "USD"
+        hc1, hc2 = st.columns(2)
+        _in_cost = hc1.number_input(
+            f"成本價（{_ccy}）", min_value=0.0,
+            value=float(_cur_hold.get("cost", 0.0)),
+            step=0.01, format="%.2f", key=f"hold_cost_{cur_t}",
+        )
+        _in_shares = hc2.number_input(
+            "股數", min_value=0, step=1,
+            value=int(_cur_hold.get("shares", 0)),
+            key=f"hold_shares_{cur_t}",
+            help="美股填股數；台股 1 張 = 1000 股，請自行換算後輸入",
+        )
+        hb1, hb2 = st.columns(2)
+        if hb1.button("💾 儲存持倉", use_container_width=True, key=f"save_hold_{cur_t}"):
+            if _in_cost > 0 and _in_shares > 0:
+                _hold[cur_t] = {"cost": round(float(_in_cost), 2), "shares": int(_in_shares)}
+            else:
+                # 成本或股數為 0 → 視為刪除持倉
+                _hold.pop(cur_t, None)
+            _ok, _msg = save_holdings(_hold)
+            st.session_state["_holdings"] = _hold
+            st.success(f"已儲存（{_msg}）" if _ok else f"⚠️ {_msg}")
+            st.rerun()
+        if _cur_hold and hb2.button("🗑️ 清除持倉", use_container_width=True, key=f"del_hold_{cur_t}"):
+            _hold.pop(cur_t, None)
+            _ok, _msg = save_holdings(_hold)
+            st.session_state["_holdings"] = _hold
+            st.info(f"已清除「{cur_t}」持倉")
+            st.rerun()
+        if _cur_hold:
+            st.caption(f"目前記錄：成本 ${_cur_hold.get('cost')} × {_cur_hold.get('shares')} 股")
+
+        st.markdown("---")
         st.markdown(f"**🔀 移動「{cur_t}」到其他清單**")
         move_target = st.selectbox(
             "移到", [k for k in wls.keys() if k != act_l],
@@ -3363,7 +3452,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.47")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.48")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
