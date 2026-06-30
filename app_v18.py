@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.45", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.47", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -783,6 +783,26 @@ def _query_tw_name_api(ticker: str) -> str | None:
     if name and not any(bad in name.upper() for bad in _TW_NAME_BAD_WORDS):
         return name
     return None
+
+
+# [V26.46] 台股中文名 → 代碼對照（226 檔，含 ETF；用於中文搜尋輸入）
+_TW_NAME_TO_CODE = {"台泥":"1101.TW", "亞泥":"1102.TW", "嘉泥":"1103.TW", "環泥":"1104.TW", "幸福":"1108.TW", "信大":"1109.TW", "東泥":"1110.TW", "味全":"1201.TW", "味王":"1203.TW", "大成":"1210.TW", "大飲":"1213.TW", "卜蜂":"1215.TW", "統一":"1216.TW", "愛之味":"1217.TW", "泰山":"1218.TW", "福壽":"1219.TW", "台榮":"1220.TW", "福懋油":"1225.TW", "佳格":"1227.TW", "聯華":"1229.TW", "聯華食":"1231.TW", "大統益":"1232.TW", "天仁":"1233.TW", "黑松":"1234.TW", "宏亞":"1236.TW", "台塑":"1301.TW", "南亞":"1303.TW", "台聚":"1304.TW", "華夏":"1305.TW", "亞聚":"1308.TW", "台達化":"1309.TW", "台苯":"1310.TW", "國喬":"1312.TW", "聯成":"1313.TW", "中石化":"1314.TW", "達新":"1315.TW", "東陽":"1319.TW", "台化":"1326.TW", "遠東新":"1402.TW", "新纖":"1409.TW", "新紡":"1419.TW", "福懋":"1434.TW", "南紡":"1440.TW", "力麗":"1444.TW", "力鵬":"1447.TW", "年興":"1451.TW", "宏益":"1452.TW", "集盛":"1455.TW", "聯發":"1459.TW", "台南":"1473.TW", "儒鴻":"1476.TW", "聚陽":"1477.TW", "士電":"1503.TW", "東元":"1504.TW", "中興電":"1513.TW", "亞力":"1514.TW", "力山":"1515.TW", "華城":"1519.TW", "堤維西":"1522.TW", "勤美":"1532.TW", "和大":"1536.TW", "中砂":"1560.TW", "信錦":"1582.TW", "亞德客-KY":"1590.TW", "華電":"1603.TW", "聲寶":"1604.TW", "華新":"1605.TW", "華榮":"1608.TW", "大亞":"1609.TW", "南僑":"1702.TW", "葡萄王":"1707.TW", "東聯":"1710.TW", "永光":"1711.TW", "興農":"1712.TW", "長興":"1717.TW", "台肥":"1722.TW", "中碳":"1723.TW", "喬山":"1736.TW", "美時":"1795.TW", "台玻":"1802.TW", "中釉":"1809.TW", "正隆":"1904.TW", "華紙":"1905.TW", "永豐餘":"1907.TW", "榮成":"1909.TW", "中鋼":"2002.TW", "東和鋼鐵":"2006.TW", "中鴻":"2014.TW", "豐興":"2015.TW", "大成鋼":"2027.TW", "新光鋼":"2031.TW", "上銀":"2049.TW", "南港":"2101.TW", "台橡":"2103.TW", "國際中橡":"2104.TW", "正新":"2105.TW", "建大":"2106.TW", "裕隆":"2201.TW", "中華":"2204.TW", "三陽工業":"2206.TW", "和泰車":"2207.TW", "耿鼎":"2222.TW", "光寶科":"2301.TW", "聯電":"2303.TW", "台達電":"2308.TW", "金寶":"2312.TW", "華通":"2313.TW", "鴻海":"2317.TW", "中環":"2323.TW", "仁寶":"2324.TW", "國巨":"2327.TW", "台積電":"2330.TW", "旺宏":"2337.TW", "華邦電":"2344.TW", "智邦":"2345.TW", "佳世達":"2352.TW", "宏碁":"2353.TW", "鴻準":"2354.TW", "英業達":"2356.TW", "華碩":"2357.TW", "致茂":"2360.TW", "藍天":"2362.TW", "金像電":"2368.TW", "大同":"2371.TW", "技嘉":"2376.TW", "微星":"2377.TW", "瑞昱":"2379.TW", "廣達":"2382.TW", "台光電":"2383.TW", "群光":"2385.TW", "研華":"2395.TW", "漢唐":"2404.TW", "南亞科":"2408.TW", "友達":"2409.TW", "中華電":"2412.TW", "京元電子":"2449.TW", "聯發科":"2454.TW", "可成":"2474.TW", "華新科":"2492.TW", "國產":"2504.TW", "興富發":"2542.TW", "長榮":"2603.TW", "裕民":"2606.TW", "陽明":"2609.TW", "華航":"2610.TW", "萬海":"2615.TW", "長榮航":"2618.TW", "台灣高鐵":"2633.TW", "彰銀":"2801.TW", "華南金":"2880.TW", "富邦金":"2881.TW", "國泰金":"2882.TW", "凱基金":"2883.TW", "玉山金":"2884.TW", "元大金":"2885.TW", "兆豐金":"2886.TW", "台新金":"2887.TW", "新光金":"2888.TW", "永豐金":"2890.TW", "中信金":"2891.TW", "第一金":"2892.TW", "統一超":"2912.TW", "大立光":"3008.TW", "聯詠":"3034.TW", "欣興":"3037.TW", "健鼎":"3044.TW", "台灣大":"3045.TW", "穩懋":"3105.TWO", "緯創":"3231.TW", "威剛":"3260.TWO", "欣銓":"3264.TWO", "鈊象":"3293.TWO", "創意":"3443.TW", "群創":"3481.TW", "力旺":"3529.TWO", "世芯-KY":"3661.TW", "日月光投控":"3711.TW", "東洋":"4105.TWO", "遠傳":"4904.TW", "和碩":"4938.TW", "臻鼎-KY":"4958.TW", "譜瑞-KY":"4966.TWO", "信驊":"5274.TWO", "世界":"5347.TWO", "中美晶":"5483.TWO", "中租-KY":"5871.TW", "上海商銀":"5876.TW", "合庫金":"5880.TW", "寶雅":"5904.TWO", "新普":"6121.TWO", "頎邦":"6147.TWO", "合晶":"6182.TWO", "力成":"6239.TW", "矽力*-KY":"6415.TW", "環球晶":"6488.TWO", "台塑化":"6505.TW", "緯穎":"6669.TW", "南電":"8046.TW", "元太":"8069.TWO", "群聯":"8299.TWO", "富邦媒":"8454.TW", "寶成":"9904.TW", "豐泰":"9910.TW", "美利達":"9914.TW", "巨大":"9921.TW", "裕融":"9941.TW", "潤泰新":"9945.TW", "元大台灣50":"0050.TW", "元大高股息":"0056.TW", "國泰永續高股息":"00878.TW", "群益台灣精選高息":"00919.TW", "復華台灣科技優息":"00929.TW", "富邦台50":"006208.TW", "元大台灣高息低波":"00713.TW", "國泰台灣5G+":"00881.TW", "元大台灣價值高息":"00940.TW", "統一台灣高息動能":"00939.TW", "長虹":"5534.TW", "汎銓":"6830.TW", "南茂":"8150.TW", "晶彩科":"3535.TW", "尖點":"8021.TW", "聯友金屬-創":"7610.TW", "明基材":"8215.TW", "富喬":"1815.TWO", "主動統一升級50":"00403A.TW"}
+
+def resolve_tw_input(raw):
+    """[V26.46] 把使用者輸入轉成可查詢的代碼。
+    - 純中文（在對照表）→ 回對照的代碼（如 "台積電" → "2330.TW"）
+    - 已是代碼 → 原樣回傳（大寫去空白）
+    - 中文但不在表 → 原樣回傳（讓後續 yfinance 自己試/報錯）
+    """
+    if not raw:
+        return raw
+    s = raw.strip()
+    # 先試完全比對中文名
+    if s in _TW_NAME_TO_CODE:
+        return _TW_NAME_TO_CODE[s]
+    # 試大寫後是否為代碼格式（含數字或英文）→ 視為代碼
+    up = s.upper()
+    return up
 
 
 def get_stock_name(ticker: str) -> str:
@@ -3240,13 +3260,17 @@ with st.sidebar:
     with st.expander("✏️ 編輯清單"):
         st.markdown("**➕ 新增單一股票**")
         col_inp, col_tgt = st.columns([1, 1])
-        new_t = col_inp.text_input("代號", placeholder="2330.TW",
-                                    label_visibility="collapsed").upper().strip()
+        _raw_input = col_inp.text_input("代號", placeholder="台積電 或 2330.TW",
+                                    label_visibility="collapsed").strip()
+        new_t = resolve_tw_input(_raw_input)  # [V26.46] 支援中文名輸入（台積電→2330.TW）
         target_list = col_tgt.selectbox(
             "加入清單", list(wls.keys()),
             index=list(wls.keys()).index(act_l) if act_l in wls else 0,
             label_visibility="collapsed",
         )
+        # 中文成功轉換時給提示
+        if _raw_input and new_t != _raw_input.upper():
+            st.caption(f"🔍 「{_raw_input}」→ {new_t}")
         if st.button("➕ 新增", use_container_width=True) and new_t:
             if new_t not in wls[target_list]:
                 wls[target_list].append(new_t)
@@ -3339,7 +3363,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.45")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.47")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -3640,52 +3664,10 @@ with c4:
     st.markdown(c4_html, unsafe_allow_html=True)
 
 # ──────────────────────────────────────────────────────
-# [V26.35] 基本面 EPS 估值卡片（獨立區塊，技術面 vs 基本面對照）
+# [V26.35→V26.47] 基本面 EPS 估值卡片已停用
+#   .info 端點慢又易限流、實際用得少 → 整塊移除（不再打 yahoo .info）。
+#   compute_eps_valuation 函式保留（未呼叫），要恢復顯示再接回即可。
 # ──────────────────────────────────────────────────────
-try:
-    _eps = compute_eps_valuation(cur_t)
-    if _eps and _eps.get("ok"):
-        def _pct(v):
-            return (v / close_v - 1) * 100 if close_v else 0
-        _g_txt = (f"{_eps['eps_growth_pct']:+.0f}%"
-                  if _eps['eps_growth_pct'] is not None else "N/A")
-        _hist_row = ""
-        if _eps['historical'] is not None and _eps['hist_pe']:
-            _hist_row = (
-                f'歷史目標 <b>${_eps["historical"]:.2f}</b> '
-                f'<span style="color:#888;font-size:11px;">({_pct(_eps["historical"]):+.1f}%，歷史均 {_eps["hist_pe"]:.0f}x)</span><br>'
-            )
-        _eps_html = (
-            '<div style="border:1px solid #a855f7; border-radius:8px; padding:12px 16px; '
-            'margin-bottom:15px; background:rgba(168,85,247,0.06);">'
-            '<h5 style="color:#c084fc; margin:0 0 8px 0;">📊 基本面 EPS 估值（分析師共識）</h5>'
-            f'<div style="font-size:12px; color:#bbb; margin-bottom:8px;">'
-            f'前期 EPS ${_eps["trailing_eps"] if _eps["trailing_eps"] else "N/A"} → '
-            f'本期預估 EPS <b style="color:#ddd;">${_eps["forward_eps"]:.2f}</b> '
-            f'<span style="color:#a855f7;">({_g_txt})</span>'
-            f'　｜　當前 P/E {_eps["cur_pe"]:.0f}x'
-            f'{"｜歷史均 " + format(_eps["hist_pe"], ".0f") + "x" if _eps["hist_pe"] else ""}'
-            f'</div>'
-            f'<div style="font-size:13px; color:#ddd; line-height:1.7;">'
-            f'保守目標 <b>${_eps["conservative"]:.2f}</b> '
-            f'<span style="color:#888;font-size:11px;">({_pct(_eps["conservative"]):+.1f}%，維持 {_eps["cur_pe"]:.0f}x)</span><br>'
-            f'成長目標 <b>${_eps["growth"]:.2f}</b> '
-            f'<span style="color:#888;font-size:11px;">({_pct(_eps["growth"]):+.1f}%，給 {_eps["growth_pe"]:.0f}x)</span><br>'
-            f'{_hist_row}'
-            f'</div>'
-            '<div style="font-size:10px; color:#777; margin-top:6px;">'
-            '※ 基於分析師共識 EPS，非技術面。目標 = 預估EPS × P/E 倍數，僅供參考。'
-            f'{" ⚠️ 限流中，顯示上次資料" if _eps.get("_stale") else ""}'
-            '</div>'
-            '</div>'
-        )
-        st.markdown(_eps_html, unsafe_allow_html=True)
-    elif _eps and not _eps.get("ok"):
-        # [V26.36] 抓不到 EPS 時顯示原因（fail loud），而非默默消失
-        st.caption(f"📊 基本面 EPS 估值：暫無資料（{_eps.get('reason', '未知')}）")
-except Exception as _eps_e:
-    st.session_state['_eps_val_err'] = str(_eps_e)
-    st.caption(f"📊 基本面 EPS 估值：計算例外（{str(_eps_e)[:50]}）")
 
 st.markdown("<div style='margin-bottom: 15px;'></div>", unsafe_allow_html=True)
 
@@ -4936,8 +4918,10 @@ if _mc_result:
       </div>
     </div>
     """, unsafe_allow_html=True)
-elif _mc_status_disp and not _mc_status_disp.get("ran", False):
+elif _mc_status_disp and not _mc_status_disp.get("ran", False) \
+        and "已停用" not in _mc_status_disp.get("reason", ""):
     # MC 沒跑成功，明確告訴使用者原因（Rule 12: fail loud）
+    # [V26.46] 但「已停用」是故意關的，不顯示警告（避免誤導）
     _reason = _mc_status_disp.get("reason", "未知原因")
     st.warning(
         f"⚠️ **蒙地卡羅模擬未產出**：{_reason}\n\n"
