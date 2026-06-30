@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.50", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.51", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2016,6 +2016,12 @@ def scan_watchlist_icons(tickers, lookback_days=5):
                 icons.setdefault("_errors", {})[tk] = "指標 NaN"
                 continue
 
+            # [V26.51] 順便記錄現價（持倉總表用）
+            try:
+                icons.setdefault("_prices", {})[tk] = round(float(d["Close"].iloc[-1]), 2)
+            except Exception:
+                pass
+
             engine_type = get_engine_type_v27(tk)
             parts = []
 
@@ -3086,11 +3092,20 @@ with st.sidebar:
         try:
             if _os_wl.path.exists(_wl_icon_file):
                 with open(_wl_icon_file) as _fh:
-                    st.session_state["_wl_icons"] = json.load(_fh)
+                    _cached = json.load(_fh)
+                # [V26.51] 新格式 {icons, prices}；舊格式直接是 icons dict（相容）
+                if isinstance(_cached, dict) and "icons" in _cached and "prices" in _cached:
+                    st.session_state["_wl_icons"] = _cached["icons"]
+                    st.session_state["_wl_prices"] = _cached["prices"]
+                else:
+                    st.session_state["_wl_icons"] = _cached
+                    st.session_state["_wl_prices"] = {}
             else:
                 st.session_state["_wl_icons"] = {}
+                st.session_state["_wl_prices"] = {}
         except Exception:
             st.session_state["_wl_icons"] = {}
+            st.session_state["_wl_prices"] = {}
 
     if st.button("🔍 掃描清單訊號", use_container_width=True,
                  help="掃描全部自選股，在清單按鈕後顯示近5天訊號：🟢⬆吸籌/🔴⬇出貨、BUY/SELL、🤫吸籌、💎N炒底、💰達標、🔥過熱（約 2-4 分鐘，當天有效）"):
@@ -3099,12 +3114,14 @@ with st.sidebar:
             _icons = scan_watchlist_icons(_all_wl_tickers, lookback_days=5)
         # [V26.40] 分離診斷資訊
         _scan_errors = _icons.pop("_errors", {}) if isinstance(_icons, dict) else {}
+        _scan_prices = _icons.pop("_prices", {}) if isinstance(_icons, dict) else {}
         st.session_state["_wl_icons"] = _icons
-        # 存 disk（當天有效）
+        st.session_state["_wl_prices"] = _scan_prices  # [V26.51] 現價供持倉總表
+        # 存 disk（當天有效）— [V26.51] icons + prices 一起存
         try:
             _os_wl.makedirs(_wl_icon_dir, exist_ok=True)
             with open(_wl_icon_file, "w") as _fh:
-                json.dump(_icons, _fh)
+                json.dump({"icons": _icons, "prices": _scan_prices}, _fh)
         except Exception:
             pass
         _all_set = set(_all_wl_tickers)
@@ -3488,8 +3505,74 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.50")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.51")
 
+# ══════════════════════════════════════════════════════════
+# [V26.51] 視圖切換：📊 持倉總表 / 📈 個股戰情（預設停在總表）
+# ══════════════════════════════════════════════════════════
+_view = st.radio(
+    "檢視模式", ["📊 持倉總表", "📈 個股戰情"],
+    horizontal=True, label_visibility="collapsed", key="_main_view",
+)
+
+if _view == "📊 持倉總表":
+    st.markdown("## 📊 持倉戰情總表")
+    _hold = st.session_state.get("_holdings", {})
+    _prices = st.session_state.get("_wl_prices", {})
+    _icons_map = st.session_state.get("_wl_icons", {})
+    _wls_all = st.session_state.get("watchlists", {})
+    _all_tk = list(dict.fromkeys([t for lst in _wls_all.values() for t in lst]))
+
+    if not _prices:
+        st.info("尚未掃描現價。請先到左側控制台按「🔍 掃描清單訊號」，總表才有現價與訊號資料。")
+    else:
+        # 組總表資料
+        _rows = []
+        _us_pl_usd = 0.0
+        _tw_pl_twd = 0.0
+        for tk in _all_tk:
+            px = _prices.get(tk)
+            ic_raw = _icons_map.get(tk, "")
+            # 圖示去掉分隔符，合併顯示
+            ic = ic_raw.replace("|", " ").strip() if ic_raw else ""
+            s_name = get_stock_name(tk)
+            disp_name = s_name if s_name != tk else ""
+            is_tw = ".TW" in tk
+            h = _hold.get(tk)
+            row = {"代碼": tk, "名稱": disp_name, "現價": px if px else "—", "訊號": ic}
+            if h and px:
+                cost = h["cost"]; shares = h["shares"]
+                pl_pct = (px / cost - 1) * 100
+                if is_tw:
+                    pl_twd = (px - cost) * shares
+                    _tw_pl_twd += pl_twd
+                    row["成本"] = cost
+                    row["損益%"] = round(pl_pct, 1)
+                    row["損益"] = f"NT${pl_twd:,.0f}"
+                else:
+                    pl_usd = (px - cost) * shares
+                    _us_pl_usd += pl_usd
+                    row["成本"] = cost
+                    row["損益%"] = round(pl_pct, 1)
+                    row["損益"] = f"${pl_usd:,.0f} / NT${pl_usd*USD_TWD:,.0f}"
+            else:
+                row["成本"] = "—"; row["損益%"] = "—"; row["損益"] = "—"
+            _rows.append(row)
+
+        _df_table = pd.DataFrame(_rows)
+        st.dataframe(_df_table, use_container_width=True, hide_index=True)
+
+        # 分幣別總計
+        st.markdown("### 💰 總損益（持倉部分）")
+        _c1, _c2 = st.columns(2)
+        _c1.metric("美股總損益 (USD)", f"${_us_pl_usd:,.0f}",
+                   delta=f"≈ NT${_us_pl_usd*USD_TWD:,.0f}")
+        _c2.metric("台股總損益 (TWD)", f"NT${_tw_pl_twd:,.0f}")
+        st.caption(f"※ 美股以固定匯率 {USD_TWD:.0f} 換算台幣；幣別不同故分開計算。訊號/現價來自最近一次掃描。")
+
+    st.stop()  # 總表視圖：不渲染下方個股戰情
+
+# ── 以下為「📈 個股戰情」視圖（原有內容）──
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
 if df.empty:
