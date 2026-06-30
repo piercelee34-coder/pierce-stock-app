@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.52", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.53", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3472,8 +3472,8 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.52" if cur_t != "__DASHBOARD__"
-         else "📊 持倉戰情總表 V26.52")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.53" if cur_t != "__DASHBOARD__"
+         else "📊 持倉戰情總表 V26.53")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -3509,17 +3509,48 @@ if cur_t == "__DASHBOARD__":
             })
         _edit_df = pd.DataFrame(_editor_rows)
 
-        st.caption("💡 直接在「成本」「股數」欄輸入你的買進成本與持有股數，改完按下方「💾 儲存持倉」。台股 1 張＝1000 股。")
+        # ── 先算損益（用已儲存的持倉）供上方總計 + 下方損益表 ──
+        _us_pl_usd = 0.0
+        _tw_pl_twd = 0.0
+        _pl_rows = []
+        for tk in _all_tk:
+            px = _prices.get(tk)
+            h = _hold.get(tk)
+            if h and px:
+                cost = h["cost"]; shares = h["shares"]
+                pl_pct = (px / cost - 1) * 100
+                is_tw = ".TW" in tk
+                if is_tw:
+                    pl = (px - cost) * shares
+                    _tw_pl_twd += pl
+                    _pl_rows.append({"代碼": tk, "損益%": round(pl_pct, 1),
+                                     "損益(美)": "—", "損益(台)": f"NT${pl:,.0f}"})
+                else:
+                    pl = (px - cost) * shares
+                    _us_pl_usd += pl
+                    _pl_rows.append({"代碼": tk, "損益%": round(pl_pct, 1),
+                                     "損益(美)": f"${pl:,.0f}", "損益(台)": f"NT${pl*USD_TWD:,.0f}"})
+        _total_twd = _us_pl_usd * USD_TWD + _tw_pl_twd
+
+        # ── 上方：總損益（台幣）大字 ──
+        if _pl_rows:
+            _delta_color = "normal"
+            st.metric("💰 總損益（台幣，美股已換算）", f"NT${_total_twd:,.0f}",
+                      delta=f"美股 ${_us_pl_usd:,.0f}＋台股 NT${_tw_pl_twd:,.0f}")
+            st.markdown("---")
+
+        # ── 編輯表（欄寬收窄、緊湊）──
+        st.caption("💡 直接在「成本」「股數」欄輸入買進成本與持有股數，改完按「💾 儲存持倉」。台股 1 張＝1000 股。")
         _edited = st.data_editor(
             _edit_df,
             use_container_width=True, hide_index=True, key="_holdings_editor",
             column_config={
-                "代碼": st.column_config.TextColumn("代碼", disabled=True),
-                "名稱": st.column_config.TextColumn("名稱", disabled=True),
-                "現價": st.column_config.NumberColumn("現價", disabled=True, format="%.2f"),
-                "訊號": st.column_config.TextColumn("訊號", disabled=True),
-                "成本": st.column_config.NumberColumn("成本", min_value=0.0, format="%.2f"),
-                "股數": st.column_config.NumberColumn("股數", min_value=0, format="%d"),
+                "代碼": st.column_config.TextColumn("代碼", disabled=True, width="small"),
+                "名稱": st.column_config.TextColumn("名稱", disabled=True, width="small"),
+                "現價": st.column_config.NumberColumn("現價", disabled=True, format="%.2f", width="small"),
+                "訊號": st.column_config.TextColumn("訊號", disabled=True, width="medium"),
+                "成本": st.column_config.NumberColumn("成本", min_value=0.0, format="%.2f", width="small"),
+                "股數": st.column_config.NumberColumn("股數", min_value=0, format="%d", width="small"),
             },
         )
 
@@ -3535,29 +3566,16 @@ if cur_t == "__DASHBOARD__":
             st.success(f"已儲存 {len(_new_hold)} 檔持倉（{_msg}）" if _ok else f"⚠️ {_msg}")
             st.rerun()
 
-        # 損益總計（用已儲存的持倉算）
-        _us_pl_usd = 0.0
-        _tw_pl_twd = 0.0
-        _pl_rows = []
-        for tk in _all_tk:
-            px = _prices.get(tk)
-            h = _hold.get(tk)
-            if h and px:
-                cost = h["cost"]; shares = h["shares"]
-                pl_pct = (px / cost - 1) * 100
-                is_tw = ".TW" in tk
-                if is_tw:
-                    pl = (px - cost) * shares
-                    _tw_pl_twd += pl
-                    _pl_rows.append({"代碼": tk, "損益%": round(pl_pct, 1), "損益": f"NT${pl:,.0f}"})
-                else:
-                    pl = (px - cost) * shares
-                    _us_pl_usd += pl
-                    _pl_rows.append({"代碼": tk, "損益%": round(pl_pct, 1),
-                                     "損益": f"${pl:,.0f} / NT${pl*USD_TWD:,.0f}"})
+        # ── 下方：損益表（唯讀，代碼/損益%/損益美/損益台）──
         if _pl_rows:
             st.markdown("### 📈 已持倉損益")
-            st.dataframe(pd.DataFrame(_pl_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(_pl_rows), use_container_width=True, hide_index=True,
+                         column_config={
+                             "代碼": st.column_config.TextColumn("代碼", width="small"),
+                             "損益%": st.column_config.NumberColumn("損益%", format="%.1f%%", width="small"),
+                             "損益(美)": st.column_config.TextColumn("損益(美)", width="small"),
+                             "損益(台)": st.column_config.TextColumn("損益(台)", width="medium"),
+                         })
             _c1, _c2 = st.columns(2)
             _c1.metric("美股總損益 (USD)", f"${_us_pl_usd:,.0f}", delta=f"≈ NT${_us_pl_usd*USD_TWD:,.0f}")
             _c2.metric("台股總損益 (TWD)", f"NT${_tw_pl_twd:,.0f}")
