@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.48", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.50", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -629,18 +629,51 @@ def _gist_headers():
     }
 
 def _gist_read():
-    """從 Gist 讀回 watchlists dict。成功回 dict；未設定或任何失敗一律回 None。"""
+    """從 Gist 讀回 watchlists dict。成功回 dict；未設定或任何失敗一律回 None。
+    [V26.50] 失敗時把原因記到 session（_gist_read_err）供診斷，不再靜默吞掉。"""
     if not (GIST_TOKEN and GIST_ID):
+        try:
+            st.session_state['_gist_read_err'] = "未設定 GIST_TOKEN/GIST_ID"
+        except Exception:
+            pass
         return None
     try:
         res = requests.get(f"{_GIST_API}/{GIST_ID}", headers=_gist_headers(), timeout=8)
         if res.status_code != 200:
+            try:
+                st.session_state['_gist_read_err'] = f"HTTP {res.status_code}（token 可能失效或無權限）"
+            except Exception:
+                pass
             return None
         f = res.json().get("files", {}).get(WATCHLIST_FILE)
         if not f or "content" not in f:
+            try:
+                st.session_state['_gist_read_err'] = f"Gist 內找不到 {WATCHLIST_FILE} 檔"
+            except Exception:
+                pass
             return None
-        return json.loads(f["content"])
-    except Exception:
+        # 處理大檔 truncated
+        if f.get("truncated") and f.get("raw_url"):
+            raw = requests.get(f["raw_url"], headers=_gist_headers(), timeout=8)
+            data = json.loads(raw.text) if raw.status_code == 200 else None
+        else:
+            data = json.loads(f["content"])
+        try:
+            st.session_state['_gist_read_err'] = ""  # 成功清空
+        except Exception:
+            pass
+        return data
+    except requests.exceptions.Timeout:
+        try:
+            st.session_state['_gist_read_err'] = "連線逾時（8秒）— 網路慢或 GitHub 暫時無回應"
+        except Exception:
+            pass
+        return None
+    except Exception as _e:
+        try:
+            st.session_state['_gist_read_err'] = f"{type(_e).__name__}: {str(_e)[:50]}"
+        except Exception:
+            pass
         return None
 
 def _gist_write(data):
@@ -3031,8 +3064,11 @@ with st.sidebar:
     elif _gs == "unconfigured":
         st.caption("🟡 本機模式：未設定 GIST_TOKEN / GIST_ID，編輯不會同步雲端")
     elif _gs == "error":
+        _err_detail = st.session_state.get('_gist_read_err', '')
         st.warning("🔴 雲端同步失敗：本次讀不到 Gist，**本次編輯僅暫存於本機、不會寫回雲端**"
                    "（避免覆蓋雲端資料）。請重新整理頁面重試。")
+        if _err_detail:
+            st.caption(f"🔍 失敗原因：{_err_detail}")
     elif _gs == "write_error":
         st.warning("🟠 上次儲存未能同步到雲端 Gist（本機已存）。再編輯一次即會自動重試。")
     cur_t = st.session_state.get('current_ticker', "^NDX")
@@ -3452,7 +3488,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.48")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.50")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -3551,7 +3587,7 @@ if False and _MC_AVAILABLE:  # [V26.45] 停用 MC 計算
         except Exception as _mc_e:
             _mc_status["reason"] = f"MC 呼叫拋例外: {type(_mc_e).__name__}: {_mc_e}"
 else:
-    _mc_status["reason"] = f"reversal_scanner 模組未匯入"
+    _mc_status["reason"] = "MC 已停用（V26.45）"
 
 st.session_state['_mc_status_v27'] = _mc_status
 
@@ -3656,25 +3692,47 @@ ern_date, ern_res = get_earnings_status(cur_t)
 st.session_state['_earn_info_v29'] = {"next_date": ern_date.split(":")[-1].strip() if ern_date and "N/A" not in ern_date else "N/A",
                                        "last_result": ern_res}
 
-# [v28] 砍掉規則式劇本，改用 MC 漂移方向作為「未來推演」標籤
-_drift_for_label = st.session_state.get('_mc_result_v27', {}).get('drift_adjust', 0.0)
-if not _mc_status.get("ran"):
-    sc_name = "⚠️ MC 未計算<br>無法推演"
-    sc_color_class = "sig-orange"
-elif _drift_for_label >= 0.0008:
-    sc_name = "📈 偏多漂移<br>傾向上行"
+# [V26.49] 未來推演標籤改用技術面（均線 + MACD + 短期動能），不再依賴已停用的 MC
+# 計分制：價格站上均線 / MACD 多頭 / 短期動能向上 → 偏多；反之偏空
+_proj_score = 0
+try:
+    _last = df.iloc[-1]
+    _px = float(_last['Close'])
+    # 1) 價格 vs 月線/季線
+    if not pd.isna(_last.get('SMA_20')) and _px > _last['SMA_20']:
+        _proj_score += 1
+    if not pd.isna(_last.get('SMA_60')) and _px > _last['SMA_60']:
+        _proj_score += 1
+    # 2) MACD 多空
+    if not pd.isna(_last.get('MACD')) and not pd.isna(_last.get('Signal_Line')):
+        if _last['MACD'] > _last['Signal_Line']:
+            _proj_score += 1
+        else:
+            _proj_score -= 1
+    # 3) 短期動能（近5日報酬）
+    if len(df) > 5:
+        _mom5 = (_px / float(df['Close'].iloc[-6]) - 1) * 100
+        if _mom5 > 2:
+            _proj_score += 1
+        elif _mom5 < -2:
+            _proj_score -= 1
+except Exception:
+    _proj_score = 0
+
+if _proj_score >= 3:
+    sc_name = "📈 技術偏多<br>傾向上行"
     sc_color_class = "sig-green"
-elif _drift_for_label >= 0.0003:
+elif _proj_score >= 1:
     sc_name = "↗ 輕微偏多<br>溫和上行"
     sc_color_class = "sig-green"
-elif _drift_for_label > -0.0003:
+elif _proj_score > -1:
     sc_name = "↔ 中性漂移<br>區間震盪"
     sc_color_class = "sig-orange"
-elif _drift_for_label > -0.0008:
+elif _proj_score > -2:
     sc_name = "↘ 輕微偏空<br>溫和下行"
     sc_color_class = "sig-red"
 else:
-    sc_name = "📉 偏空漂移<br>傾向下行"
+    sc_name = "📉 技術偏空<br>傾向下行"
     sc_color_class = "sig-red"
 
 c1, c2, c3, c4 = st.columns([1.3, 1, 1, 1])
