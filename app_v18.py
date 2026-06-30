@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.44", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.45", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3339,7 +3339,7 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.44")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.45")
 
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
@@ -3376,9 +3376,12 @@ engine_label, engine_type = get_stock_engine_mode(cur_t, df)
 # [v28] 提前生成 p_data + 跑蒙地卡羅，讓 AI 目標卡片能用 MC 結果
 p_data = df.tail(120) if "日" in time_opt else df.tail(60)
 
-# ── 蒙地卡羅計算（在繪圖前先算完，c4 卡片 + 圖上雲帶 + 推演摘要共用結果）──
+# ── 蒙地卡羅計算 ──
+# [V26.45] 蒙地卡羅已停用：1000 條路徑模擬是數學噪音、且拖慢速度。
+#          _mc 保持 None → 短/長目標自動走 predict_target_and_rating 的技術面 fallback
+#          （布林上軌 + 60日高點 + 阻力位）。要恢復：把下方 False 改回 True。
 _mc = None
-_mc_status = {"ran": False, "reason": "", "n_points": 0}
+_mc_status = {"ran": False, "reason": "MC 已停用（V26.45）", "n_points": 0}
 try:
     import reversal_scanner as _rev_mc
     _MC_AVAILABLE = True
@@ -3386,7 +3389,7 @@ except ImportError as _imp_e:
     _MC_AVAILABLE = False
     _MC_IMPORT_ERR = str(_imp_e)
 
-if _MC_AVAILABLE:
+if False and _MC_AVAILABLE:  # [V26.45] 停用 MC 計算
     # 計算漂移調整（context 失敗只代表漂移=0，不影響 MC 跑）
     _drift_adj = 0.0
     try:
