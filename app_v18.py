@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.53", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.55", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2939,7 +2939,8 @@ def get_tactical_advice(df, cur_p, t_s, iron_p, ph_support, ph_resist, bias_ma5,
 # --- 4. 側邊控制台 ---
 with st.sidebar:
     st.title("🎛️ 控制台")
-    mobile_mode = st.toggle("啟用手機防卡死模式", value=False)
+    mobile_mode = st.toggle("📱 手機模式（防卡死＋只看近60天）", value=False,
+                            help="開啟後：關閉拖曳防卡死，且主走勢圖只顯示最近 60 天，元素稀疏、手機看更清楚。")
     st.markdown("---")
 
     # ── [V26.14] 一鍵記錄今日劇本快照（凍結推演供日後比對）──
@@ -3472,8 +3473,8 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.53" if cur_t != "__DASHBOARD__"
-         else "📊 持倉戰情總表 V26.53")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.55" if cur_t != "__DASHBOARD__"
+         else "📊 持倉戰情總表 V26.55")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -3499,13 +3500,14 @@ if cur_t == "__DASHBOARD__":
             s_name = get_stock_name(tk)
             disp_name = s_name if s_name != tk else ""
             h = _hold.get(tk, {})
+            _is_index = tk.startswith("^")  # [V26.54] 指數標記
             _editor_rows.append({
                 "代碼": tk,
-                "名稱": disp_name,
+                "名稱": "（指數）" if _is_index else disp_name,
                 "現價": px if px else None,
                 "訊號": ic,
-                "成本": float(h["cost"]) if h.get("cost") else None,
-                "股數": int(h["shares"]) if h.get("shares") else None,
+                "成本": None if _is_index else (float(h["cost"]) if h.get("cost") else None),
+                "股數": None if _is_index else (int(h["shares"]) if h.get("shares") else None),
             })
         _edit_df = pd.DataFrame(_editor_rows)
 
@@ -3514,6 +3516,8 @@ if cur_t == "__DASHBOARD__":
         _tw_pl_twd = 0.0
         _pl_rows = []
         for tk in _all_tk:
+            if tk.startswith("^"):  # [V26.54] 指數（^NDX/^TWII等）不是可買標的，跳過損益
+                continue
             px = _prices.get(tk)
             h = _hold.get(tk)
             if h and px:
@@ -3540,7 +3544,7 @@ if cur_t == "__DASHBOARD__":
             st.markdown("---")
 
         # ── 編輯表（欄寬收窄、緊湊）──
-        st.caption("💡 直接在「成本」「股數」欄輸入買進成本與持有股數，改完按「💾 儲存持倉」。台股 1 張＝1000 股。")
+        st.caption("💡 直接在「成本」「股數」欄輸入買進成本與持有股數，改完按「💾 儲存持倉」。台股 1 張＝1000 股。指數（^開頭）不可持倉、不計損益。")
         _edited = st.data_editor(
             _edit_df,
             use_container_width=True, hide_index=True, key="_holdings_editor",
@@ -3558,6 +3562,8 @@ if cur_t == "__DASHBOARD__":
             _new_hold = {}
             for _, r in _edited.iterrows():
                 tk = r["代碼"]
+                if tk.startswith("^"):  # [V26.54] 指數不存持倉
+                    continue
                 cost = r["成本"]; shares = r["股數"]
                 if cost and shares and cost > 0 and shares > 0:
                     _new_hold[tk] = {"cost": round(float(cost), 2), "shares": int(shares)}
@@ -3617,7 +3623,11 @@ rs_txt, rs_col = get_relative_strength(cur_t, df)
 engine_label, engine_type = get_stock_engine_mode(cur_t, df)
 
 # [v28] 提前生成 p_data + 跑蒙地卡羅，讓 AI 目標卡片能用 MC 結果
-p_data = df.tail(120) if "日" in time_opt else df.tail(60)
+# [V26.55] 手機模式只顯示最近 60 天，元素稀疏不擁擠（電腦模式維持日線120/其他60）
+if mobile_mode:
+    p_data = df.tail(60)
+else:
+    p_data = df.tail(120) if "日" in time_opt else df.tail(60)
 
 # ── 蒙地卡羅計算 ──
 # [V26.45] 蒙地卡羅已停用：1000 條路徑模擬是數學噪音、且拖慢速度。
