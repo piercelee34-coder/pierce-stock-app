@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.56", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.57", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2939,8 +2939,7 @@ def get_tactical_advice(df, cur_p, t_s, iron_p, ph_support, ph_resist, bias_ma5,
 # --- 4. 側邊控制台 ---
 with st.sidebar:
     st.title("🎛️ 控制台")
-    mobile_mode = st.toggle("📱 手機模式（防卡死＋只看近60天）", value=False,
-                            help="開啟後：關閉拖曳防卡死，且主走勢圖只顯示最近 60 天，元素稀疏、手機看更清楚。")
+    mobile_mode = st.toggle("啟用手機防卡死模式", value=False)
     st.markdown("---")
 
     # ── [V26.14] 一鍵記錄今日劇本快照（凍結推演供日後比對）──
@@ -3473,8 +3472,8 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.56" if cur_t != "__DASHBOARD__"
-         else "📊 持倉戰情總表 V26.56")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.57" if cur_t != "__DASHBOARD__"
+         else "📊 持倉戰情總表 V26.57")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -3623,11 +3622,7 @@ rs_txt, rs_col = get_relative_strength(cur_t, df)
 engine_label, engine_type = get_stock_engine_mode(cur_t, df)
 
 # [v28] 提前生成 p_data + 跑蒙地卡羅，讓 AI 目標卡片能用 MC 結果
-# [V26.55] 手機模式只顯示最近 60 天，元素稀疏不擁擠（電腦模式維持日線120/其他60）
-if mobile_mode:
-    p_data = df.tail(60)
-else:
-    p_data = df.tail(120) if "日" in time_opt else df.tail(60)
+p_data = df.tail(120) if "日" in time_opt else df.tail(60)
 
 # ── 蒙地卡羅計算 ──
 # [V26.45] 蒙地卡羅已停用：1000 條路徑模擬是數學噪音、且拖慢速度。
@@ -4466,10 +4461,7 @@ except ImportError as _ev_imp_e:
     _EV_AVAILABLE = False
     _ev_status["reason"] = f"event_nodes 模組未匯入：{_ev_imp_e}"
 
-if mobile_mode:
-    # [V26.56] 手機模式：隱藏垂直事件線（那些鋪滿的虛線），畫面清爽不擁擠
-    _ev_status["reason"] = "手機模式已隱藏事件線"
-elif not _EV_AVAILABLE:
+if not _EV_AVAILABLE:
     pass  # reason 已記錄
 elif not _ev.is_us_stock(cur_t):
     _ev_status["reason"] = f"當前股票 {cur_t} 非美股，事件節點僅標記美股事件"
@@ -4884,12 +4876,30 @@ if not p_data[macd_dead].empty:
 fig.add_trace(go.Scatter(x=p_data.index, y=p_data['DMA_DDD'], line=dict(color='#d8b4fe', width=1)), row=3, col=1)
 fig.add_trace(go.Scatter(x=p_data.index, y=p_data['DMA_AMA'], line=dict(color='#facc15', width=1)), row=3, col=1)
 
+# [V26.57] 手機模式：不減少資料，而是設定 X 軸顯示範圍只框最近 60 根，
+#          讓 Plotly 把那段「放大拉滿」整個畫面寬度（元素照畫、比例放大 → 不擠）
+_xaxis_range = None
+if mobile_mode and len(p_data) > 60:
+    _xaxis_range = [p_data.index[-60], p_data.index[-1]]
+
 fig.update_layout(
     dragmode=False if mobile_mode else 'zoom',
     height=800, template="plotly_dark",
     xaxis_rangeslider_visible=False, showlegend=False,
     margin=dict(t=10, b=10, l=10, r=10)
 )
+if _xaxis_range is not None:
+    # 三個子圖共用 X 軸，設最下面那個的 range 即可帶動全部
+    fig.update_xaxes(range=_xaxis_range)
+    # Y 軸也跟著縮到這 60 天的高低範圍（否則 Y 軸涵蓋全部、K線仍偏一邊）
+    _win = p_data.tail(60)
+    try:
+        _ylo = float(_win['Low'].min())
+        _yhi = float(_win['High'].max())
+        _pad = (_yhi - _ylo) * 0.08  # 上下留 8% 邊
+        fig.update_yaxes(range=[_ylo - _pad, _yhi + _pad], row=1, col=1)
+    except Exception:
+        pass
 st.plotly_chart(fig, use_container_width=True)
 
 # ──────────────────────────────────────────────────────
