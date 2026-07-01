@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.57", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.54", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3472,8 +3472,8 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.57" if cur_t != "__DASHBOARD__"
-         else "📊 持倉戰情總表 V26.57")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.54" if cur_t != "__DASHBOARD__"
+         else "📊 持倉戰情總表 V26.54")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -3499,14 +3499,13 @@ if cur_t == "__DASHBOARD__":
             s_name = get_stock_name(tk)
             disp_name = s_name if s_name != tk else ""
             h = _hold.get(tk, {})
-            _is_index = tk.startswith("^")  # [V26.54] 指數標記
             _editor_rows.append({
                 "代碼": tk,
-                "名稱": "（指數）" if _is_index else disp_name,
+                "名稱": disp_name,
                 "現價": px if px else None,
                 "訊號": ic,
-                "成本": None if _is_index else (float(h["cost"]) if h.get("cost") else None),
-                "股數": None if _is_index else (int(h["shares"]) if h.get("shares") else None),
+                "成本": float(h["cost"]) if h.get("cost") else None,
+                "股數": int(h["shares"]) if h.get("shares") else None,
             })
         _edit_df = pd.DataFrame(_editor_rows)
 
@@ -3515,8 +3514,6 @@ if cur_t == "__DASHBOARD__":
         _tw_pl_twd = 0.0
         _pl_rows = []
         for tk in _all_tk:
-            if tk.startswith("^"):  # [V26.54] 指數（^NDX/^TWII等）不是可買標的，跳過損益
-                continue
             px = _prices.get(tk)
             h = _hold.get(tk)
             if h and px:
@@ -3543,7 +3540,7 @@ if cur_t == "__DASHBOARD__":
             st.markdown("---")
 
         # ── 編輯表（欄寬收窄、緊湊）──
-        st.caption("💡 直接在「成本」「股數」欄輸入買進成本與持有股數，改完按「💾 儲存持倉」。台股 1 張＝1000 股。指數（^開頭）不可持倉、不計損益。")
+        st.caption("💡 直接在「成本」「股數」欄輸入買進成本與持有股數，改完按「💾 儲存持倉」。台股 1 張＝1000 股。")
         _edited = st.data_editor(
             _edit_df,
             use_container_width=True, hide_index=True, key="_holdings_editor",
@@ -3561,8 +3558,6 @@ if cur_t == "__DASHBOARD__":
             _new_hold = {}
             for _, r in _edited.iterrows():
                 tk = r["代碼"]
-                if tk.startswith("^"):  # [V26.54] 指數不存持倉
-                    continue
                 cost = r["成本"]; shares = r["股數"]
                 if cost and shares and cost > 0 and shares > 0:
                     _new_hold[tk] = {"cost": round(float(cost), 2), "shares": int(shares)}
@@ -4876,11 +4871,43 @@ if not p_data[macd_dead].empty:
 fig.add_trace(go.Scatter(x=p_data.index, y=p_data['DMA_DDD'], line=dict(color='#d8b4fe', width=1)), row=3, col=1)
 fig.add_trace(go.Scatter(x=p_data.index, y=p_data['DMA_AMA'], line=dict(color='#facc15', width=1)), row=3, col=1)
 
-# [V26.57] 手機模式：不減少資料，而是設定 X 軸顯示範圍只框最近 60 根，
-#          讓 Plotly 把那段「放大拉滿」整個畫面寬度（元素照畫、比例放大 → 不擠）
-_xaxis_range = None
-if mobile_mode and len(p_data) > 60:
-    _xaxis_range = [p_data.index[-60], p_data.index[-1]]
+# [V26.54-mobile] 手機模式：顯示範圍 = 近15交易日 → AI劇本線終點，放大拉滿畫面。
+#   Y 軸範圍涵蓋近15天所有繪圖資料（K線/均線/布林/劇本線），避免切掉任何指標線。
+_mob_xrange = None
+_mob_yrange = None
+if mobile_mode and len(p_data) >= 15:
+    _w15 = p_data.tail(15)
+    _left = _w15.index[0]
+    _right = p_data.index[-1]
+    # 右界延伸到劇本推演線終點（若有）
+    try:
+        if '_v17_x' in dir() and _v17_x and len(_v17_x) > 0:
+            _pe = pd.Timestamp(_v17_x[-1])
+            if _pe > _right:
+                _right = _pe
+    except Exception:
+        pass
+    _mob_xrange = [_left, _right]
+    # Y 軸：蒐集近15天所有線的高低，全部涵蓋 → 不切線
+    try:
+        _lows = [float(_w15['Low'].min())]
+        _highs = [float(_w15['High'].max())]
+        for _col in ['SMA_20', 'SMA_60', 'SMA_200', 'Bollinger_Upper', 'Bollinger_Lower']:
+            if _col in _w15.columns:
+                _s = _w15[_col].dropna()
+                if len(_s) > 0:
+                    _lows.append(float(_s.min()))
+                    _highs.append(float(_s.max()))
+        # 劇本線 y 值也納入（避免藍線目標被切）
+        if '_v17_y' in dir() and _v17_y and len(_v17_y) > 0:
+            _lows.append(float(min(_v17_y)))
+            _highs.append(float(max(_v17_y)))
+        _ylo = min(_lows)
+        _yhi = max(_highs)
+        _pad = (_yhi - _ylo) * 0.06
+        _mob_yrange = [_ylo - _pad, _yhi + _pad]
+    except Exception:
+        _mob_yrange = None
 
 fig.update_layout(
     dragmode=False if mobile_mode else 'zoom',
@@ -4888,18 +4915,10 @@ fig.update_layout(
     xaxis_rangeslider_visible=False, showlegend=False,
     margin=dict(t=10, b=10, l=10, r=10)
 )
-if _xaxis_range is not None:
-    # 三個子圖共用 X 軸，設最下面那個的 range 即可帶動全部
-    fig.update_xaxes(range=_xaxis_range)
-    # Y 軸也跟著縮到這 60 天的高低範圍（否則 Y 軸涵蓋全部、K線仍偏一邊）
-    _win = p_data.tail(60)
-    try:
-        _ylo = float(_win['Low'].min())
-        _yhi = float(_win['High'].max())
-        _pad = (_yhi - _ylo) * 0.08  # 上下留 8% 邊
-        fig.update_yaxes(range=[_ylo - _pad, _yhi + _pad], row=1, col=1)
-    except Exception:
-        pass
+if _mob_xrange is not None:
+    fig.update_xaxes(range=_mob_xrange)
+    if _mob_yrange is not None:
+        fig.update_yaxes(range=_mob_yrange, row=1, col=1)
 st.plotly_chart(fig, use_container_width=True)
 
 # ──────────────────────────────────────────────────────
