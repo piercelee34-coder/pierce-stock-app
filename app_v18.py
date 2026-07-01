@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.55", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.56", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3473,8 +3473,8 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.55" if cur_t != "__DASHBOARD__"
-         else "📊 持倉戰情總表 V26.55")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.56" if cur_t != "__DASHBOARD__"
+         else "📊 持倉戰情總表 V26.56")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -4466,7 +4466,10 @@ except ImportError as _ev_imp_e:
     _EV_AVAILABLE = False
     _ev_status["reason"] = f"event_nodes 模組未匯入：{_ev_imp_e}"
 
-if not _EV_AVAILABLE:
+if mobile_mode:
+    # [V26.56] 手機模式：隱藏垂直事件線（那些鋪滿的虛線），畫面清爽不擁擠
+    _ev_status["reason"] = "手機模式已隱藏事件線"
+elif not _EV_AVAILABLE:
     pass  # reason 已記錄
 elif not _ev.is_us_stock(cur_t):
     _ev_status["reason"] = f"當前股票 {cur_t} 非美股，事件節點僅標記美股事件"
