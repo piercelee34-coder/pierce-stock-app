@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.54", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.55", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -912,6 +912,68 @@ def get_stock_name(ticker: str) -> str:
             json_save(TW_NAMES_FILE, local_map)
             return name
     return ticker
+
+
+# =============================================================
+# [V26.55] 台股近即時報價 — 證交所 MIS API（約 5 秒更新一次）
+#   用途：yfinance 台股延遲 15~20 分鐘，只用來補「今日這根 K 棒 + 現價」，
+#         歷史 K 線仍全部走 yfinance（不改動任何下游計算）。
+#   風險：Streamlit Cloud 機房在美國，MIS 可能擋非台灣 IP → 抓不到就回 None，
+#         呼叫端靜默 fallback 回 yfinance 並在畫面標「⏱ 延遲」。
+# =============================================================
+_MIS_URL = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp"
+
+@st.cache_data(ttl=15, show_spinner=False)   # 15 秒快取：MIS 限流是每 5 秒 3 次，別打爆
+def fetch_tw_realtime(ticker: str):
+    """台股近即時報價。成功回 dict，失敗回 None（呼叫端自行 fallback）。
+    ticker 需為 yfinance 格式：2330.TW（上市）/ 6488.TWO（上櫃）。"""
+    if ".TWO" in ticker:
+        ex_ch = f"otc_{ticker.split('.')[0]}.tw"
+    elif ".TW" in ticker:
+        ex_ch = f"tse_{ticker.split('.')[0]}.tw"
+    else:
+        return None   # 非台股，不處理
+
+    try:
+        r = requests.get(
+            _MIS_URL,
+            params={"ex_ch": ex_ch, "json": "1", "delay": "0"},
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://mis.twse.com.tw/stock/index.jsp",
+            },
+            timeout=3,   # 抓不到就走人，不能卡住整個 app
+        )
+        if r.status_code != 200:
+            return None
+        arr = r.json().get("msgArray") or []
+        if not arr:
+            return None
+        d = arr[0]
+
+        def _f(key):
+            """MIS 無成交時欄位是 '-'，轉不動就回 None。"""
+            v = d.get(key, "-")
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        price = _f("z")          # 成交價
+        if price is None:        # 無成交（如尚未開盤/暫停交易）→ 退回昨收無意義，直接放棄
+            return None
+
+        return {
+            "price":  price,
+            "open":   _f("o"),
+            "high":   _f("h"),
+            "low":    _f("l"),
+            "volume": _f("v"),   # 累積成交量（張）
+            "time":   d.get("t", ""),   # 撮合時間 HH:MM:SS
+            "date":   d.get("d", ""),   # 交易日 YYYYMMDD
+        }
+    except Exception:
+        return None   # 網路/解析失敗 → 靜默 fallback（呼叫端會標示資料為延遲）
 
 
 if 'watchlists' not in st.session_state:
@@ -3472,8 +3534,8 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.54" if cur_t != "__DASHBOARD__"
-         else "📊 持倉戰情總表 V26.54")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.55" if cur_t != "__DASHBOARD__"
+         else "📊 持倉戰情總表 V26.55")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -3602,6 +3664,46 @@ df = df.dropna(subset=['Open', 'High', 'Low', 'Close'])
 if len(df) < 2:
     st.error("數據連線異常或資料量不足以進行 AI 分析，請稍後再試。")
     st.stop()
+
+# ══════════════════════════════════════════════════════════
+# [V26.55] 台股近即時價覆蓋（美股完全不經過這裡）
+#   在 calculate_indicators 之前動手 → 均線/MACD/訊號/劇本推演全部自動吃到新價。
+#   只碰「今天這根」K 棒，歷史 K 線一根都不動。
+#   失敗 → 靜默保留 yfinance 資料，畫面標「⏱ 延遲」（Rule 12：不假裝是即時）。
+# ══════════════════════════════════════════════════════════
+_rt_status = None   # None=非台股不顯示 / dict=成功 / False=失敗
+_is_tw_main = (".TW" in cur_t or ".TWO" in cur_t)
+
+if _is_tw_main and "日" in time_opt:   # 只在日線模式做（週線/當沖不適用）
+    _rt = fetch_tw_realtime(cur_t)
+    if _rt:
+        _rt_status = _rt
+        _tw_today = (datetime.utcnow() + timedelta(hours=8)).date()   # 台北時間今天
+        _last_day = df.index[-1].date()
+        _px = _rt["price"]
+
+        if _last_day == _tw_today:
+            # 情況 A：yfinance 已有今天這根（但價格是延遲的）→ 就地覆蓋
+            _i = df.index[-1]
+            df.loc[_i, 'Close'] = _px
+            if _rt["open"]:   df.loc[_i, 'Open'] = _rt["open"]
+            # 高低點取「MIS 值」與「已知值」的極值，避免 MIS 盤中瞬時值縮小真實區間
+            if _rt["high"]:   df.loc[_i, 'High'] = max(float(df.loc[_i, 'High']), _rt["high"], _px)
+            if _rt["low"]:    df.loc[_i, 'Low']  = min(float(df.loc[_i, 'Low']),  _rt["low"],  _px)
+            if _rt["volume"]: df.loc[_i, 'Volume'] = _rt["volume"] * 1000   # 張 → 股
+        else:
+            # 情況 B：盤中開了新的一天、yfinance 還沒補上 → 補一根今日 K 棒
+            _new = {
+                'Open':   _rt["open"] or _px,
+                'High':   max(_rt["high"] or _px, _px),
+                'Low':    min(_rt["low"] or _px, _px),
+                'Close':  _px,
+                'Volume': (_rt["volume"] or 0) * 1000,
+            }
+            df.loc[pd.Timestamp(_tw_today)] = pd.Series(_new)
+            df = df.sort_index()
+    else:
+        _rt_status = False   # 抓失敗 → 維持 yfinance（延遲）資料，下方標示
 
 df = calculate_indicators(df)
 
@@ -3832,10 +3934,20 @@ else:
 c1, c2, c3, c4 = st.columns([1.3, 1, 1, 1])
 
 with c1:
+    # [V26.55] 台股資料來源標示（Rule 12：不假裝延遲資料是即時的）
+    _src_html = ""
+    if _rt_status:
+        _src_html = (f'<div style="font-size:11px; color:#22c55e; margin-bottom:6px;">'
+                     f'⚡ 即時 {_rt_status.get("time","")}（證交所）</div>')
+    elif _rt_status is False:
+        _src_html = ('<div style="font-size:11px; color:#f97316; margin-bottom:6px;">'
+                     '⏱ 延遲約15分（Yahoo）</div>')
+
     c1_html = (
         f'<div class="ai-box" style="border: 1px solid #4a9eff; background-color: #16202b; padding: 15px; display: flex; flex-direction: column; justify-content: center;">'
         f'<h2 style="margin:0; font-size: 38px; font-weight: 900; line-height: 1.1;">${close_v:.2f}</h2>'
         f'<div style="font-size: 18px; font-weight: bold; color: {clr}; margin-bottom: 8px;">{chg:+.2f}% <span style="color: #888; font-size: 13px; font-weight: normal;">(量: {format_volume(latest["Volume"])})</span></div>'
+        f'{_src_html}'
         f'<div><span class="engine-tag" style="margin:0; padding: 3px 8px; font-size: 12px;">⚙️ {engine_label}</span></div>'
         f'<div style="margin-top: 8px; font-size: 12px; line-height: 1.4; color: #ccc;">{ern_date}<br>{ern_res}</div>'
         f'</div>'
