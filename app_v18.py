@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import requests
 import json
 import os
@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.55", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.56", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -915,7 +915,7 @@ def get_stock_name(ticker: str) -> str:
 
 
 # =============================================================
-# [V26.55] 台股近即時報價 — 證交所 MIS API（約 5 秒更新一次）
+# [V26.56] 台股近即時報價 — 證交所 MIS API（約 5 秒更新一次）
 #   用途：yfinance 台股延遲 15~20 分鐘，只用來補「今日這根 K 棒 + 現價」，
 #         歷史 K 線仍全部走 yfinance（不改動任何下游計算）。
 #   風險：Streamlit Cloud 機房在美國，MIS 可能擋非台灣 IP → 抓不到就回 None，
@@ -2774,7 +2774,7 @@ def build_snapshot_df(watchlists):
     回傳 (DataFrame 每股一列, 快照日期) 供日後比對實際走勢。
     刻意不跑蒙地卡羅 / 不抓 funda（×數十檔太慢又可能觸發限流），
     劇本核心（趨勢 / RSI / 支撐阻力）不受影響。"""
-    tw_now = datetime.utcnow() + timedelta(hours=8)
+    tw_now = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=8)
     snap_date = tw_now.strftime("%Y-%m-%d")
     rows, seen = [], set()
     for _cat, _tickers in watchlists.items():
@@ -3028,7 +3028,7 @@ with st.sidebar:
         if _today not in _hist_dates:
             _auto_trigger = True  # 今天還沒記 → 觸發自動記錄
 
-    if st.button("📸 記錄今日劇本快照", use_container_width=True,
+    if st.button("📸 記錄今日劇本快照", width='stretch',
                  help="對左側所有清單股票凍結今日 AI 劇本判定與目標價，輸出 Excel 供日後比對實際走勢") or _auto_trigger:
         if _auto_trigger:
             st.info("🤖 偵測到今天尚未記錄，自動記錄中…")
@@ -3080,14 +3080,14 @@ with st.sidebar:
         st.download_button("⬇️ 下載今日快照", st.session_state["_snap_bytes"],
                            file_name=st.session_state["_snap_fname"],
                            mime=st.session_state["_snap_mime"],
-                           use_container_width=True)
+                           width='stretch')
         if st.session_state.get("_snap_msg"):
             st.caption(st.session_state["_snap_msg"])
         if st.session_state.get("_snap_gist_msg"):
             st.caption(st.session_state["_snap_gist_msg"])
 
     # ── [V26.34] 匯出自選股分析包 CSV（手動，含 Gist 全部歷史 + 今日）──
-    if st.button("⬇️ 匯出自選股分析包 CSV", use_container_width=True,
+    if st.button("⬇️ 匯出自選股分析包 CSV", width='stretch',
                  help="把雲端所有歷史快照中，屬於你自選股清單的資料合併成一份 CSV（給日後分析用）"):
         with st.spinner("正在從雲端整理歷史快照..."):
             try:
@@ -3119,7 +3119,7 @@ with st.sidebar:
             st.session_state["_exp_csv"],
             file_name=f"watchlist_analysis_{_dt_exp.now().strftime('%Y%m%d')}.csv",
             mime="text/csv",
-            use_container_width=True,
+            width='stretch',
         )
     if st.session_state.get("_exp_msg"):
         st.caption(st.session_state["_exp_msg"])
@@ -3169,7 +3169,7 @@ with st.sidebar:
             st.session_state["_wl_icons"] = {}
             st.session_state["_wl_prices"] = {}
 
-    if st.button("🔍 掃描清單訊號", use_container_width=True,
+    if st.button("🔍 掃描清單訊號", width='stretch',
                  help="掃描全部自選股，在清單按鈕後顯示近5天訊號：🟢⬆吸籌/🔴⬇出貨、BUY/SELL、🤫吸籌、💎N炒底、💰達標、🔥過熱（約 2-4 分鐘，當天有效）"):
         _all_wl_tickers = [t for lst in wls.values() for t in lst]
         with st.spinner(f"掃描 {len(set(_all_wl_tickers))} 檔自選股訊號中..."):
@@ -3226,12 +3226,12 @@ with st.sidebar:
                 # 全選/取消全選 按鈕（小巧）
                 sel_col1, sel_col2 = st.columns(2)
                 if sel_col1.button(f"☑️ 全選", key=f"sel_all_{wl_name}",
-                                     use_container_width=True):
+                                     width='stretch'):
                     for t in tickers:
                         st.session_state['selected_stocks'].add((wl_name, t))
                     st.rerun()
                 if sel_col2.button(f"☐ 全消", key=f"sel_none_{wl_name}",
-                                     use_container_width=True):
+                                     width='stretch'):
                     for t in tickers:
                         st.session_state['selected_stocks'].discard((wl_name, t))
                     st.rerun()
@@ -3271,7 +3271,7 @@ with st.sidebar:
                 key="batch_target_list",
             )
             bc1, bc2 = st.columns(2)
-            if bc1.button(f"✂️ 移動到「{target_list}」", use_container_width=True):
+            if bc1.button(f"✂️ 移動到「{target_list}」", width='stretch'):
                 moved = 0
                 for (src_wl, t) in list(st.session_state['selected_stocks']):
                     if src_wl != target_list and t in wls.get(src_wl, []):
@@ -3284,7 +3284,7 @@ with st.sidebar:
                     st.session_state['selected_stocks'].clear()
                     st.success(f"✅ 移動 {moved} 檔到「{target_list}」")
                     st.rerun()
-            if bc2.button(f"📋 複製到「{target_list}」", use_container_width=True):
+            if bc2.button(f"📋 複製到「{target_list}」", width='stretch'):
                 copied = 0
                 for (src_wl, t) in st.session_state['selected_stocks']:
                     if t not in wls.get(target_list, []):
@@ -3343,23 +3343,23 @@ with st.sidebar:
                     changed = True
                 return changed
 
-            if sc1.button("⏫ 置頂", use_container_width=True):
+            if sc1.button("⏫ 置頂", width='stretch'):
                 if _batch_reorder("top"):
                     save_watchlists(wls); st.rerun()
-            if sc2.button("⬆️ 上移", use_container_width=True):
+            if sc2.button("⬆️ 上移", width='stretch'):
                 if _batch_reorder("up"):
                     save_watchlists(wls); st.rerun()
-            if sc3.button("⬇️ 下移", use_container_width=True):
+            if sc3.button("⬇️ 下移", width='stretch'):
                 if _batch_reorder("down"):
                     save_watchlists(wls); st.rerun()
-            if sc4.button("⏬ 置底", use_container_width=True):
+            if sc4.button("⏬ 置底", width='stretch'):
                 if _batch_reorder("bottom"):
                     save_watchlists(wls); st.rerun()
 
             st.markdown("---")
             # 危險區
             if st.button(f"🗑️ 批次刪除 {sel_count} 檔",
-                          type="primary", use_container_width=True):
+                          type="primary", width='stretch'):
                 for (wl, t) in list(st.session_state['selected_stocks']):
                     if t in wls.get(wl, []):
                         wls[wl].remove(t)
@@ -3377,7 +3377,7 @@ with st.sidebar:
         # ── 點按模式（既有 UI） ─────────────────────────
         # [V26.52] 清單頂部「📊 總表」項目（點它看持倉總表）
         _dash_sel = (cur_t == "__DASHBOARD__")
-        if st.button("📊 持倉總表", key="btn_dashboard", use_container_width=True,
+        if st.button("📊 持倉總表", key="btn_dashboard", width='stretch',
                      type="primary" if _dash_sel else "secondary"):
             st.session_state['current_ticker'] = "__DASHBOARD__"
             st.rerun()
@@ -3400,7 +3400,7 @@ with st.sidebar:
                         f"{'▶ ' if is_sel else ''}{_disp_full}",
                         key=f"btn_{wl_name}_{t}",
                         type="primary" if is_sel else "secondary",
-                        use_container_width=True,
+                        width='stretch',
                     ):
                         st.session_state['current_ticker'] = t
                         st.session_state['active_list'] = wl_name
@@ -3442,7 +3442,7 @@ with st.sidebar:
         # 中文成功轉換時給提示
         if _raw_input and new_t != _raw_input.upper():
             st.caption(f"🔍 「{_raw_input}」→ {new_t}")
-        if st.button("➕ 新增", use_container_width=True) and new_t:
+        if st.button("➕ 新增", width='stretch') and new_t:
             if new_t not in wls[target_list]:
                 wls[target_list].append(new_t)
                 st.session_state['current_ticker'] = new_t
@@ -3462,7 +3462,7 @@ with st.sidebar:
             index=list(wls.keys()).index(act_l) if act_l in wls else 0,
             key="bulk_target",
         )
-        if st.button("📥 批量匯入", use_container_width=True) and bulk_raw.strip():
+        if st.button("📥 批量匯入", width='stretch') and bulk_raw.strip():
             raw_tickers = [
                 t.strip().upper()
                 for t in bulk_raw.replace(",", "\n").splitlines()
@@ -3487,7 +3487,7 @@ with st.sidebar:
             key="move_target",
         )
         col_mv1, col_mv2 = st.columns(2)
-        if col_mv1.button("✂️ 移動", use_container_width=True) and cur_t in lst:
+        if col_mv1.button("✂️ 移動", width='stretch') and cur_t in lst:
             lst.remove(cur_t)
             if cur_t not in wls[move_target]:
                 wls[move_target].append(cur_t)
@@ -3495,7 +3495,7 @@ with st.sidebar:
             st.session_state['active_list'] = move_target
             st.session_state['user_opened_list'] = move_target
             st.rerun()
-        if col_mv2.button("📋 複製", use_container_width=True):
+        if col_mv2.button("📋 複製", width='stretch'):
             if cur_t not in wls[move_target]:
                 wls[move_target].append(cur_t)
                 save_watchlists(wls)
@@ -3504,7 +3504,7 @@ with st.sidebar:
 
         st.markdown("---")
         st.markdown("**🗑️ 刪除 / 重命名**")
-        if st.button("❌ 從清單移除目前股票", use_container_width=True) and cur_t in lst:
+        if st.button("❌ 從清單移除目前股票", width='stretch') and cur_t in lst:
             lst.remove(cur_t)
             save_watchlists(wls)
             st.session_state['current_ticker'] = lst[0] if lst else "^NDX"
@@ -3515,7 +3515,7 @@ with st.sidebar:
         rename_src = st.selectbox("選擇清單", list(wls.keys()), key="rename_src")
         new_name = st.text_input("新名稱", placeholder="例如：🇺🇸 美持股",
                                   key="rename_name")
-        if st.button("✏️ 確認重命名", use_container_width=True) and new_name.strip():
+        if st.button("✏️ 確認重命名", width='stretch') and new_name.strip():
             new_name = new_name.strip()
             if new_name not in wls:
                 # 保留順序的重命名
@@ -3534,8 +3534,8 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.55" if cur_t != "__DASHBOARD__"
-         else "📊 持倉戰情總表 V26.55")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.56" if cur_t != "__DASHBOARD__"
+         else "📊 持倉戰情總表 V26.56")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -3605,7 +3605,7 @@ if cur_t == "__DASHBOARD__":
         st.caption("💡 直接在「成本」「股數」欄輸入買進成本與持有股數，改完按「💾 儲存持倉」。台股 1 張＝1000 股。")
         _edited = st.data_editor(
             _edit_df,
-            use_container_width=True, hide_index=True, key="_holdings_editor",
+            width='stretch', hide_index=True, key="_holdings_editor",
             column_config={
                 "代碼": st.column_config.TextColumn("代碼", disabled=True, width="small"),
                 "名稱": st.column_config.TextColumn("名稱", disabled=True, width="small"),
@@ -3616,7 +3616,7 @@ if cur_t == "__DASHBOARD__":
             },
         )
 
-        if st.button("💾 儲存持倉", use_container_width=True, type="primary"):
+        if st.button("💾 儲存持倉", width='stretch', type="primary"):
             _new_hold = {}
             for _, r in _edited.iterrows():
                 tk = r["代碼"]
@@ -3631,7 +3631,7 @@ if cur_t == "__DASHBOARD__":
         # ── 下方：損益表（唯讀，代碼/損益%/損益美/損益台）──
         if _pl_rows:
             st.markdown("### 📈 已持倉損益")
-            st.dataframe(pd.DataFrame(_pl_rows), use_container_width=True, hide_index=True,
+            st.dataframe(pd.DataFrame(_pl_rows), width='stretch', hide_index=True,
                          column_config={
                              "代碼": st.column_config.TextColumn("代碼", width="small"),
                              "損益%": st.column_config.NumberColumn("損益%", format="%.1f%%", width="small"),
@@ -3666,7 +3666,7 @@ if len(df) < 2:
     st.stop()
 
 # ══════════════════════════════════════════════════════════
-# [V26.55] 台股近即時價覆蓋（美股完全不經過這裡）
+# [V26.56] 台股近即時價覆蓋（美股完全不經過這裡）
 #   在 calculate_indicators 之前動手 → 均線/MACD/訊號/劇本推演全部自動吃到新價。
 #   只碰「今天這根」K 棒，歷史 K 線一根都不動。
 #   失敗 → 靜默保留 yfinance 資料，畫面標「⏱ 延遲」（Rule 12：不假裝是即時）。
@@ -3678,7 +3678,7 @@ if _is_tw_main and "日" in time_opt:   # 只在日線模式做（週線/當沖�
     _rt = fetch_tw_realtime(cur_t)
     if _rt:
         _rt_status = _rt
-        _tw_today = (datetime.utcnow() + timedelta(hours=8)).date()   # 台北時間今天
+        _tw_today = (datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=8)).date()   # 台北時間今天
         _last_day = df.index[-1].date()
         _px = _rt["price"]
 
@@ -3934,7 +3934,7 @@ else:
 c1, c2, c3, c4 = st.columns([1.3, 1, 1, 1])
 
 with c1:
-    # [V26.55] 台股資料來源標示（Rule 12：不假裝延遲資料是即時的）
+    # [V26.56] 台股資料來源標示（Rule 12：不假裝延遲資料是即時的）
     _src_html = ""
     if _rt_status:
         _src_html = (f'<div style="font-size:11px; color:#22c55e; margin-bottom:6px;">'
@@ -5031,7 +5031,7 @@ if _mob_xrange is not None:
     fig.update_xaxes(range=_mob_xrange)
     if _mob_yrange is not None:
         fig.update_yaxes(range=_mob_yrange, row=1, col=1)
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width='stretch')
 
 # ──────────────────────────────────────────────────────
 # ──────────────────────────────────────────────────────
@@ -5411,7 +5411,7 @@ try:
             else:
                 fig_mf.add_annotation(x=p_data.index[-1], y=mf.iloc[-1], text="🔴 主力出貨", showarrow=True, arrowhead=1, font=dict(color="#ff6b6b", size=12), bgcolor="#3a1b1b")
         fig_mf.update_layout(dragmode=False if mobile_mode else 'zoom', height=250, template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10))
-        st.plotly_chart(fig_mf, use_container_width=True, config={'displayModeBar': False})
+        st.plotly_chart(fig_mf, width='stretch', config={'displayModeBar': False})
     with c2:
         st.caption("籌碼分佈 (主力 vs 散戶)")
         inst_mask = (p_data['Close'] > p_data['Open']) & (p_data['Volume'] > p_data['Vol_SMA5'])
@@ -5422,7 +5422,7 @@ try:
         fig_vp.add_trace(go.Scatter(x=vp_main['Price'], y=vp_main['Volume'], fill='tozeroy', line=dict(color='#00d4ff', width=2), name='主力'))
         fig_vp.add_vline(x=close_v, line_dash="dash", line_color="white", annotation_text="現價")
         fig_vp.update_layout(dragmode=False if mobile_mode else 'zoom', height=250, template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10), showlegend=True, legend=dict(orientation="h", y=1.1))
-        st.plotly_chart(fig_vp, use_container_width=True, config={'displayModeBar': False})
+        st.plotly_chart(fig_vp, width='stretch', config={'displayModeBar': False})
 except Exception:
     pass
 
@@ -5443,7 +5443,7 @@ if _CRISIS_AVAILABLE:
     _anchor = get_cache_anchor()
     _anchors = [5, 8, 14, 20]
     try:
-        _tw_now = datetime.utcnow() + timedelta(hours=8)
+        _tw_now = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=8)
         _curr_hr = _tw_now.hour
         _next_anchor_hr = next((h for h in _anchors if h > _curr_hr), 5)
         _next_anchor_day = _tw_now if _next_anchor_hr > _curr_hr else _tw_now + timedelta(days=1)
@@ -5606,7 +5606,7 @@ if _CRISIS_AVAILABLE:
                 hovermode="x unified",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02),
             )
-            st.plotly_chart(fig_crisis, use_container_width=True,
+            st.plotly_chart(fig_crisis, width='stretch',
                              config={"displayModeBar": False})
 
         # ─── 資料源狀態 ───
@@ -6061,7 +6061,7 @@ if not _show_old_accum:
         ["📌 自選股清單", "🎯 AI 目標清單（242 檔，約 2-4 分鐘）"],
         horizontal=True, key="sig_scan_scope",
     )
-    if st.button("🔍 開始掃描", use_container_width=True, key="sig_scan_btn"):
+    if st.button("🔍 開始掃描", width='stretch', key="sig_scan_btn"):
         # 組掃描清單
         if _scan_scope.startswith("📌"):
             _wls = st.session_state.get("watchlists", {})
@@ -6094,7 +6094,7 @@ if not _show_old_accum:
                     "代碼": r["代碼"], "名稱": r["名稱"],
                     "現價": r["現價"], "訊號（類型 日期 金額）": _sig_txt,
                 })
-            st.dataframe(pd.DataFrame(_table_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(_table_rows), width='stretch', hide_index=True)
 
 
 # ==========================================
@@ -6277,7 +6277,7 @@ if _SIGDIAG_AVAILABLE:
         ).strip().upper()
     with diag_col2:
         st.caption("")  # 空白對齊
-        diag_btn = st.button("🔬 診斷訊號軌跡", key="diag_run_btn", use_container_width=True)
+        diag_btn = st.button("🔬 診斷訊號軌跡", key="diag_run_btn", width='stretch')
 
     if diag_btn and diag_ticker:
         with st.spinner(f"診斷 {diag_ticker} 過去 14 天訊號軌跡..."):
@@ -6368,7 +6368,7 @@ if _SIGDIAG_AVAILABLE:
                             yaxis=dict(range=[-0.5, 4.5], dtick=1, title="命中數"),
                             showlegend=False,
                         )
-                        st.plotly_chart(fig_diag, use_container_width=True, config={'displayModeBar': False})
+                        st.plotly_chart(fig_diag, width='stretch', config={'displayModeBar': False})
 
                         # ── 14 天詳細表格 ──
                         with st.expander("📋 完整 14 天詳細紀錄", expanded=False):
@@ -6390,7 +6390,7 @@ if _SIGDIAG_AVAILABLE:
                                     "漲跌量比": f"{m['up_down_vol_ratio']:.2f}x",
                                     "距 52w 高": f"{m['dist_from_52w_high_pct']:.1f}%",
                                 })
-                            st.dataframe(table_data, hide_index=True, use_container_width=True)
+                            st.dataframe(table_data, hide_index=True, width='stretch')
                             st.caption(
                                 "💡 **看板說明**：\n"
                                 "- **S2 量能放大**：30 日均量比 60 日均量 ×1.5 以上\n"
@@ -6481,7 +6481,7 @@ if _REV_AVAILABLE:
                 "20 日動能": f"{s['momentum_20d']:+.2f}%",
                 "進場價": f"${s['close']:.2f}",
             })
-        st.dataframe(rev_data, hide_index=True, use_container_width=True)
+        st.dataframe(rev_data, hide_index=True, width='stretch')
     else:
         st.info("💤 本次掃描未發現新訊號（市場可能在強勢區或弱勢區，反轉條件不易觸發）")
 
@@ -6521,7 +6521,7 @@ if _REV_AVAILABLE:
                     "+20日": fmt(s.get('actual_20d')),
                     "結果": badge,
                 })
-            st.dataframe(history_data, hide_index=True, use_container_width=True)
+            st.dataframe(history_data, hide_index=True, width='stretch')
             st.caption(
                 f"💡 系統每天自動追蹤這些訊號的實際表現。**5 天後**填入「+5日」、"
                 f"**10 天後**填入「+10日」、**20 天後**填入「+20日」。"
@@ -6931,7 +6931,7 @@ if _REV_AVAILABLE:  # 共用 reversal_scanner 的 generate_monte_carlo_bands
                 "下跌風險 p10": f"{r['downside']:+.2f}%",
                 "強弱": rating_disp,
             })
-        st.dataframe(rows, hide_index=True, use_container_width=True)
+        st.dataframe(rows, hide_index=True, width='stretch')
     elif res_list:
         st.info("⏳ 沒有符合篩選條件的股票。試試取消「僅顯示強勢股」勾選。")
     else:
@@ -7122,7 +7122,7 @@ if is_tw:
                 height=320, template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10), showlegend=False,
                 xaxis=dict(tickformat="%Y-%m", dtick="M1", rangeslider=dict(visible=True, thickness=0.08))
             )
-            st.plotly_chart(fig_oi, use_container_width=True, config={'displayModeBar': False})
+            st.plotly_chart(fig_oi, width='stretch', config={'displayModeBar': False})
             st.caption("💡 歷史高點的『結構性避險』讓 0 軸失去意義。請觀察【白線】是否高於【灰線(半年均值)】來判斷真實多空。")
         else:
             st.markdown('<div style="height:280px; display:flex; align-items:center; justify-content:center; color:#666; font-size:18px; border:1px dashed #444; border-radius:5px;">N/A (資料讀取失敗)</div>', unsafe_allow_html=True)
@@ -7163,7 +7163,7 @@ if is_tw:
         fig_spot.add_hline(y=150, line_dash="dot", line_color="#22c55e", annotation_text="大買 (>150億)", annotation_font_color="#22c55e", opacity=0.5)
         fig_spot.add_hline(y=-150, line_dash="dot", line_color="#ef4444", annotation_text="大賣 (<-150億)", annotation_font_color="#ef4444", annotation_position="bottom left", opacity=0.5)
         fig_spot.update_layout(height=250, template="plotly_dark", margin=dict(t=10, b=10, l=10, r=10), xaxis=dict(tickformat="%m-%d", dtick="M1"))
-        st.plotly_chart(fig_spot, use_container_width=True, config={'displayModeBar': False})
+        st.plotly_chart(fig_spot, width='stretch', config={'displayModeBar': False})
         st.caption("💡 搭配上方大台圖表，若出現『期貨大空單 + 現貨大買』即為假避險真拉抬。")
     else:
         st.markdown('<div style="height:180px; display:flex; align-items:center; justify-content:center; color:#666;">N/A (資料讀取中)</div>', unsafe_allow_html=True)
@@ -7223,7 +7223,7 @@ else:
                                 margin=dict(t=10, b=10, l=10, r=10),
                                 yaxis=dict(range=[20, 110]),
                                 xaxis=dict(rangeslider=dict(visible=True, thickness=0.1)))
-        st.plotly_chart(fig_naaim, use_container_width=True, config={'displayModeBar': False})
+        st.plotly_chart(fig_naaim, width='stretch', config={'displayModeBar': False})
         if naaim_status == "real":
             latest_val = naaim_df['Exposure'].iloc[-1] if not naaim_df.empty else None
             if latest_val is not None:
