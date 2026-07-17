@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.56", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.57", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -915,7 +915,7 @@ def get_stock_name(ticker: str) -> str:
 
 
 # =============================================================
-# [V26.56] 台股近即時報價 — 證交所 MIS API（約 5 秒更新一次）
+# [V26.57] 台股近即時報價 — 證交所 MIS API（約 5 秒更新一次）
 #   用途：yfinance 台股延遲 15~20 分鐘，只用來補「今日這根 K 棒 + 現價」，
 #         歷史 K 線仍全部走 yfinance（不改動任何下游計算）。
 #   風險：Streamlit Cloud 機房在美國，MIS 可能擋非台灣 IP → 抓不到就回 None，
@@ -2084,6 +2084,17 @@ def scan_watchlist_icons(tickers, lookback_days=5):
             except Exception:
                 pass
 
+            # [V26.57] 順便算格局分數（總表分組 + 側邊格局標籤共用同一份，避免兩邊不一致）
+            #   sr_info 傳 None 安全（classify_scenario 內有 None 防呆）
+            try:
+                _sc = classify_scenario(d, None)
+                icons.setdefault("_scores", {})[tk] = {
+                    "score": _sc.get("score", 0),
+                    "label": _sc.get("label", ""),
+                }
+            except Exception:
+                pass
+
             engine_type = get_engine_type_v27(tk)
             parts = []
 
@@ -3156,15 +3167,19 @@ with st.sidebar:
                 with open(_wl_icon_file) as _fh:
                     _cached = json.load(_fh)
                 # [V26.51] 新格式 {icons, prices}；舊格式直接是 icons dict（相容）
+                # [V26.57] 再加 scores（舊快取沒有 → 空 dict，不影響）
                 if isinstance(_cached, dict) and "icons" in _cached and "prices" in _cached:
                     st.session_state["_wl_icons"] = _cached["icons"]
                     st.session_state["_wl_prices"] = _cached["prices"]
+                    st.session_state["_wl_scores"] = _cached.get("scores", {})
                 else:
                     st.session_state["_wl_icons"] = _cached
                     st.session_state["_wl_prices"] = {}
+                    st.session_state["_wl_scores"] = {}
             else:
                 st.session_state["_wl_icons"] = {}
                 st.session_state["_wl_prices"] = {}
+                st.session_state["_wl_scores"] = {}
         except Exception:
             st.session_state["_wl_icons"] = {}
             st.session_state["_wl_prices"] = {}
@@ -3177,13 +3192,15 @@ with st.sidebar:
         # [V26.40] 分離診斷資訊
         _scan_errors = _icons.pop("_errors", {}) if isinstance(_icons, dict) else {}
         _scan_prices = _icons.pop("_prices", {}) if isinstance(_icons, dict) else {}
+        _scan_scores = _icons.pop("_scores", {}) if isinstance(_icons, dict) else {}
         st.session_state["_wl_icons"] = _icons
         st.session_state["_wl_prices"] = _scan_prices  # [V26.51] 現價供持倉總表
+        st.session_state["_wl_scores"] = _scan_scores  # [V26.57] 格局分數供總表分組
         # 存 disk（當天有效）— [V26.51] icons + prices 一起存
         try:
             _os_wl.makedirs(_wl_icon_dir, exist_ok=True)
             with open(_wl_icon_file, "w") as _fh:
-                json.dump({"icons": _icons, "prices": _scan_prices}, _fh)
+                json.dump({"icons": _icons, "prices": _scan_prices, "scores": _scan_scores}, _fh)
         except Exception:
             pass
         _all_set = set(_all_wl_tickers)
@@ -3534,8 +3551,8 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title(f"📈 {disp_main_title} 實戰戰情室 V26.56" if cur_t != "__DASHBOARD__"
-         else "📊 持倉戰情總表 V26.56")
+st.title(f"📈 {disp_main_title} 實戰戰情室 V26.57" if cur_t != "__DASHBOARD__"
+         else "📊 持倉戰情總表 V26.57")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -3599,6 +3616,59 @@ if cur_t == "__DASHBOARD__":
             _delta_color = "normal"
             st.metric("💰 總損益（台幣，美股已換算）", f"NT${_total_twd:,.0f}",
                       delta=f"美股 ${_us_pl_usd:,.0f}＋台股 NT${_tw_pl_twd:,.0f}")
+            st.markdown("---")
+
+        # ── [V26.57] 🎯 戰情分組（一頁看懂：按格局把所有自選股歸類）──
+        _scores_map = st.session_state.get("_wl_scores", {})
+        if _scores_map:
+            # 分組：一檔只進一組，優先序 強勢→蓄力→弱勢→布局→中性
+            _grp = {"strong": [], "charge": [], "weak": [], "setup": [], "neutral": []}
+            for tk in _all_tk:
+                sc_obj = _scores_map.get(tk)
+                ic_raw = _icons_map.get(tk, "")
+                if not sc_obj:
+                    continue
+                score = sc_obj.get("score", 0)
+                if score >= 2:
+                    _grp["strong"].append((tk, score))
+                elif ("🤫" in ic_raw) or ("💎" in ic_raw):
+                    _grp["charge"].append((tk, score))
+                elif score <= -2 or ("SELL" in ic_raw):
+                    _grp["weak"].append((tk, score))
+                elif score >= 0:
+                    _grp["setup"].append((tk, score))
+                else:
+                    _grp["neutral"].append((tk, score))
+
+            # 組內排序：弱勢區「最弱在前」（最該注意的先看到），其餘「最強在前」
+            for _k in _grp:
+                _reverse = (_k == "weak")
+                _grp[_k].sort(key=lambda x: (x[1] if _reverse else -x[1]))
+
+            _grp_meta = [
+                ("strong", "🐂 強勢區", "#22c55e"),
+                ("charge", "⚡ 蓄力區", "#38bdf8"),
+                ("setup",  "💎 布局區", "#eab308"),
+                ("weak",   "🐻 弱勢區", "#ef4444"),
+                ("neutral","😐 中性",   "#888"),
+            ]
+            _total_grouped = sum(len(v) for v in _grp.values())
+            st.markdown(f"### 🎯 戰情分組（{_total_grouped} 檔）")
+            for _k, _title, _col in _grp_meta:
+                _items = _grp[_k]
+                if not _items:
+                    continue
+                def _fmt(tk):
+                    nm = get_stock_name(tk)
+                    return nm if nm != tk else tk
+                _codes = "　".join(_fmt(tk) for tk, _ in _items)
+                st.markdown(
+                    f"<div style='margin:4px 0; padding:8px 10px; border-left:3px solid {_col}; "
+                    f"background:#16202b; border-radius:4px;'>"
+                    f"<span style='color:{_col}; font-weight:bold;'>{_title} ({len(_items)})</span>　"
+                    f"<span style='color:#ccc; font-size:13px;'>{_codes}</span></div>",
+                    unsafe_allow_html=True,
+                )
             st.markdown("---")
 
         # ── 編輯表（欄寬收窄、緊湊）──
@@ -3666,7 +3736,7 @@ if len(df) < 2:
     st.stop()
 
 # ══════════════════════════════════════════════════════════
-# [V26.56] 台股近即時價覆蓋（美股完全不經過這裡）
+# [V26.57] 台股近即時價覆蓋（美股完全不經過這裡）
 #   在 calculate_indicators 之前動手 → 均線/MACD/訊號/劇本推演全部自動吃到新價。
 #   只碰「今天這根」K 棒，歷史 K 線一根都不動。
 #   失敗 → 靜默保留 yfinance 資料，畫面標「⏱ 延遲」（Rule 12：不假裝是即時）。
@@ -3934,7 +4004,7 @@ else:
 c1, c2, c3, c4 = st.columns([1.3, 1, 1, 1])
 
 with c1:
-    # [V26.56] 台股資料來源標示（Rule 12：不假裝延遲資料是即時的）
+    # [V26.57] 台股資料來源標示（Rule 12：不假裝延遲資料是即時的）
     _src_html = ""
     if _rt_status:
         _src_html = (f'<div style="font-size:11px; color:#22c55e; margin-bottom:6px;">'
