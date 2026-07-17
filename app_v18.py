@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.59", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.60", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3556,9 +3556,9 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.59" if cur_t == "__SCANNER__"
-         else "📊 持倉戰情總表 V26.59" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.59")
+st.title("📡 掃描中心 V26.60" if cur_t == "__SCANNER__"
+         else "📊 持倉戰情總表 V26.60" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.60")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -3627,8 +3627,8 @@ if cur_t == "__DASHBOARD__":
         # ── [V26.58] 🎯 戰情分組（一頁看懂：按格局把所有自選股歸類）──
         _scores_map = st.session_state.get("_wl_scores", {})
         if _scores_map:
-            # 分組：一檔只進一組，優先序 強勢→蓄力→弱勢→布局→中性
-            _grp = {"strong": [], "charge": [], "weak": [], "setup": [], "neutral": []}
+            # 分組：一檔只進一組，優先序 強勢→吸籌→抄底→弱勢→布局→中性
+            _grp = {"strong": [], "xichou": [], "chaodi": [], "weak": [], "setup": [], "neutral": []}
             for tk in _all_tk:
                 sc_obj = _scores_map.get(tk)
                 ic_raw = _icons_map.get(tk, "")
@@ -3637,8 +3637,10 @@ if cur_t == "__DASHBOARD__":
                 score = sc_obj.get("score", 0)
                 if score >= 2:
                     _grp["strong"].append((tk, score))
-                elif ("🤫" in ic_raw) or ("💎" in ic_raw):
-                    _grp["charge"].append((tk, score))
+                elif "🤫" in ic_raw:
+                    _grp["xichou"].append((tk, score))
+                elif "💎" in ic_raw:
+                    _grp["chaodi"].append((tk, score))
                 elif score <= -2 or ("SELL" in ic_raw):
                     _grp["weak"].append((tk, score))
                 elif score >= 0:
@@ -3660,8 +3662,9 @@ if cur_t == "__DASHBOARD__":
 
             _grp_meta = [
                 ("strong", "🐂 強勢區", "#22c55e"),
-                ("charge", "⚡ 蓄力區", "#38bdf8"),
-                ("setup",  "💎 布局區", "#eab308"),
+                ("xichou", "🤫 吸籌區", "#38bdf8"),
+                ("chaodi", "💎 抄底區", "#14b8a6"),
+                ("setup",  "🧩 布局區", "#eab308"),
                 ("weak",   "🐻 弱勢區", "#ef4444"),
                 ("neutral","😐 中性",   "#888"),
             ]
