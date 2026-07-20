@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.60", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.63", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2081,6 +2081,7 @@ def scan_watchlist_icons(tickers, lookback_days=5):
             # [V26.51] 順便記錄現價（持倉總表用）
             try:
                 icons.setdefault("_prices", {})[tk] = round(float(d["Close"].iloc[-1]), 2)
+                icons.setdefault("_prices_wk", {})[tk] = round(float(d["Close"].iloc[-6]), 2)  # [V26.63] 上週收盤（前5交易日）
             except Exception:
                 pass
 
@@ -3171,6 +3172,7 @@ with st.sidebar:
                 if isinstance(_cached, dict) and "icons" in _cached and "prices" in _cached:
                     st.session_state["_wl_icons"] = _cached["icons"]
                     st.session_state["_wl_prices"] = _cached["prices"]
+                    st.session_state["_wl_prices_wk"] = _cached.get("prices_wk", {})  # [V26.63]
                     st.session_state["_wl_scores"] = _cached.get("scores", {})
                 else:
                     st.session_state["_wl_icons"] = _cached
@@ -3192,15 +3194,17 @@ with st.sidebar:
         # [V26.40] 分離診斷資訊
         _scan_errors = _icons.pop("_errors", {}) if isinstance(_icons, dict) else {}
         _scan_prices = _icons.pop("_prices", {}) if isinstance(_icons, dict) else {}
+        _scan_prices_wk = _icons.pop("_prices_wk", {}) if isinstance(_icons, dict) else {}
         _scan_scores = _icons.pop("_scores", {}) if isinstance(_icons, dict) else {}
         st.session_state["_wl_icons"] = _icons
         st.session_state["_wl_prices"] = _scan_prices  # [V26.51] 現價供持倉總表
+        st.session_state["_wl_prices_wk"] = _scan_prices_wk  # [V26.63] 上週價供分組chip
         st.session_state["_wl_scores"] = _scan_scores  # [V26.58] 格局分數供總表分組
         # 存 disk（當天有效）— [V26.51] icons + prices 一起存
         try:
             _os_wl.makedirs(_wl_icon_dir, exist_ok=True)
             with open(_wl_icon_file, "w") as _fh:
-                json.dump({"icons": _icons, "prices": _scan_prices, "scores": _scan_scores}, _fh)
+                json.dump({"icons": _icons, "prices": _scan_prices, "prices_wk": _scan_prices_wk, "scores": _scan_scores}, _fh)
         except Exception:
             pass
         _all_set = set(_all_wl_tickers)
@@ -3556,9 +3560,9 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.60" if cur_t == "__SCANNER__"
-         else "📊 持倉戰情總表 V26.60" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.60")
+st.title("📡 掃描中心 V26.63" if cur_t == "__SCANNER__"
+         else "📊 持倉戰情總表 V26.63" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.63")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -3676,10 +3680,17 @@ if cur_t == "__DASHBOARD__":
                     continue
                 def _fmt(tk):
                     nm = get_stock_name(tk)
-                    if nm == tk:
-                        return tk
-                    # 同名（≥2 檔）才附代碼，避免畫面過長
-                    return f"{nm}({tk})" if _name_count.get(nm, 0) >= 2 else nm
+                    base = tk if nm == tk else (f"{nm}({tk})" if _name_count.get(nm, 0) >= 2 else nm)
+                    _p = st.session_state.get("_wl_prices", {}).get(tk)
+                    if _p is None:
+                        return base
+                    _pw = st.session_state.get("_wl_prices_wk", {}).get(tk)
+                    if _pw and _pw > 0:
+                        _chg = (_p / _pw - 1) * 100
+                        _ar = "▲" if _chg >= 0 else "▼"
+                        _cc = "#22c55e" if _chg >= 0 else "#ef4444"
+                        return f"{base} <span style='color:#eee'>${_p:g}</span> <span style='color:{_cc}'>{_ar}{abs(_chg):.1f}%</span>"
+                    return f"{base} <span style='color:#eee'>${_p:g}</span>"
                 _codes = "　".join(_fmt(tk) for tk, _ in _items)
                 st.markdown(
                     f"<div style='margin:4px 0; padding:8px 10px; border-left:3px solid {_col}; "
@@ -3688,9 +3699,29 @@ if cur_t == "__DASHBOARD__":
                     f"<span style='color:#ccc; font-size:13px;'>{_codes}</span></div>",
                     unsafe_allow_html=True,
                 )
+
+            with st.expander("ℹ️ 分組說明（各區定義）"):
+                st.markdown(
+                    "- **🐂 強勢區**：格局分數 ≥ 2（站上均線多頭排列／RSI 偏強），趨勢站穩。\n"
+                    "- **🤫 吸籌區**：出現「悄悄吸籌」訊號（量增價不漲、主力默默建倉），尚未轉強。\n"
+                    "- **💎 抄底區**：出現「乖離抄底」訊號（超賣乖離、跌深反彈）——技術性反彈，非主動買盤。\n"
+                    "- **🧩 布局區**：格局分數 ≥ 0（結構中性偏多）但無明確訊號，可留意逢低布局。\n"
+                    "- **🐻 弱勢區**：格局分數 ≤ -2 或出現 SELL 訊號（跌破均線空頭排列）。\n"
+                    "- **😐 中性**：分數微負、無訊號，方向不明。\n\n"
+                    "※ 一檔只進一組，優先序：強勢 → 吸籌 → 抄底 → 弱勢 → 布局 → 中性；"
+                    "同時有吸籌＋抄底訊號者歸吸籌區。"
+                )
             st.markdown("---")
 
         # ── 編輯表（欄寬收窄、緊湊）──
+        # [V26.63] #1 持倉未讀到 → fail loud（不再靜默顯示 None）
+        if not _hold:
+            if GIST_TOKEN and GIST_ID:
+                st.warning("⚠️ 未讀到任何持倉，但 Gist 已設定——可能是 GIST_TOKEN 失效／缺 gist 權限，或 GIST_ID 有誤。請檢查 Streamlit Secrets；資料若還在 Gist，修好後會自動回來。")
+            else:
+                st.info("尚未輸入持倉，或未設定 Gist。可在下方表格填入成本與股數後儲存。")
+        # [V26.63] #2 訊號圖示說明（總表補上，原本只在側邊掃描鈕）
+        st.caption("訊號圖示：🟡達標　🟣炒底　🟢⬆吸籌　🔴⬇出貨　BUY／SELL（MACD 金／死叉）　🤫吸籌　💎N＝炒底N次　💰達標　🔥過熱（保鮮3交易日）")
         st.caption("💡 直接在「成本」「股數」欄輸入買進成本與持有股數，改完按「💾 儲存持倉」。台股 1 張＝1000 股。")
         _edited = st.data_editor(
             _edit_df,
@@ -5544,6 +5575,83 @@ if _mc is not None:
     except Exception as _scen_e:
         # [Rule 12] 不靜默失敗
         st.session_state['_scenario_err'] = str(_scen_e)
+
+# ══════════════════════════════════════════════════════════
+# [V26.62] 綜合行動燈號（v(a) 當下條件版）
+#   把既有訊號彙整成「決策支援燈號 + 攤開理由」，擺在主圖上方。
+#   score 與持倉總表六區同源：classify_scenario(df, None)，確保燈號 ↔ 分區一致。
+#   非投資建議，只做訊號彙整；反映當前檢視週期。Rule 12：算不出就明講、不靜默。
+# ══════════════════════════════════════════════════════════
+try:
+    _lt_sc = classify_scenario(df, None)
+    _lt_score = _lt_sc.get("score", 0)
+    _lt_reasons = list(_lt_sc.get("reasons", []))
+
+    _lt_price = float(df['Close'].iloc[-1])
+    _lt_rsi = float(df['RSI'].iloc[-1]) if 'RSI' in df.columns and not pd.isna(df['RSI'].iloc[-1]) else 50.0
+    try:
+        _lt_thr = get_technical_target_threshold(df)
+    except Exception:
+        _lt_thr = None
+    _lt_hit_target = bool(_lt_thr) and _lt_price >= _lt_thr
+    _lt_overheat = _lt_hit_target or (_lt_rsi > 70)
+
+    try:
+        _lt_smart = detect_smart_money_status(df.iloc[-10:]) or ""
+    except Exception:
+        _lt_smart = ""
+    _lt_xichou = "吸籌" in _lt_smart
+    _lt_chaodi = ("抄底" in _lt_smart) or ("破底翻" in _lt_smart)
+
+    _lt_macd_dead = False
+    try:
+        _lt_macd_dead = (float(df['MACD'].iloc[-1]) < float(df['Signal_Line'].iloc[-1])) and \
+                        (float(df['MACD'].iloc[-2]) >= float(df['Signal_Line'].iloc[-2]))
+    except Exception:
+        pass
+
+    if _lt_overheat:
+        _lt_label, _lt_color = "🟠 轉弱注意（過熱／達標，慎追高）", "#f97316"
+        _pre = []
+        if _lt_hit_target:
+            _pre.append(f"現價已達技術目標 ${_lt_thr:.2f}")
+        if _lt_rsi > 70:
+            _pre.append(f"RSI {_lt_rsi:.0f} 過熱")
+        if _lt_score >= 2:
+            _pre.append("趨勢仍多、僅短線過熱")
+        _lt_reasons = _pre + _lt_reasons
+    elif _lt_score >= 2:
+        _lt_label, _lt_color = "🔵 趨勢偏多（站穩多頭，可續抱）", "#3b82f6"
+    elif _lt_xichou:
+        _lt_label, _lt_color = "🟢 機會浮現（疑似悄悄吸籌）", "#22c55e"
+        _lt_reasons = ["偵測到悄悄吸籌訊號（量增價不漲）"] + _lt_reasons
+    elif _lt_chaodi:
+        _lt_label, _lt_color = "🟢 機會浮現（跌深翻揚）", "#14b8a6"
+        _lt_reasons = ["偵測到破底翻買點" if "破底翻" in _lt_smart else "偵測到乖離抄底（超賣反彈）"] + _lt_reasons
+        if _lt_score < 0:
+            _lt_reasons.append("※ 趨勢仍偏空，屬技術性反彈，非趨勢反轉")
+    elif _lt_score <= -2 or _lt_macd_dead:
+        _lt_label, _lt_color = "🔴 轉弱訊號（空頭排列／賣壓）", "#ef4444"
+        if _lt_macd_dead and _lt_score > -2:
+            _lt_reasons = ["MACD 剛死叉"] + _lt_reasons
+    elif _lt_score >= 0:
+        _lt_label, _lt_color = "⚪ 中性偏多（可留意布局）", "#9ca3af"
+    else:
+        _lt_label, _lt_color = "⚪ 觀望（方向不明）", "#9ca3af"
+
+    _lt_reason_html = "、".join(_lt_reasons[:4]) if _lt_reasons else "無明顯訊號"
+    st.markdown(
+        f"<div style='margin:6px 0 10px 0; padding:10px 14px; border-left:5px solid {_lt_color}; "
+        f"background:#16202b; border-radius:6px;'>"
+        f"<div style='color:{_lt_color}; font-weight:bold; font-size:16px;'>{_lt_label}</div>"
+        f"<div style='color:#bbb; font-size:12px; margin-top:3px;'>理由：{_lt_reason_html}</div>"
+        f"<div style='color:#777; font-size:11px; margin-top:2px;'>⚠️ 訊號彙整，非投資建議；最終決定在你。</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+except Exception as _lt_e:
+    st.caption(f"⚠️ 行動燈號計算失敗：{_lt_e}")
+
 
 
 # [v28] 規則式劇本（黃色虛線+菱形）已移除，預測完全交給蒙地卡羅雲帶
