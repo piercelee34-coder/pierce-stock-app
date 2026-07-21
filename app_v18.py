@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.63", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.64", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3560,9 +3560,9 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.63" if cur_t == "__SCANNER__"
-         else "📊 持倉戰情總表 V26.63" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.63")
+st.title("📡 掃描中心 V26.64" if cur_t == "__SCANNER__"
+         else "📊 持倉戰情總表 V26.64" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.64")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -3775,13 +3775,9 @@ def render_scanner_center():
     # 🎯 [V26.28] 個人清單訊號掃描器（按鈕觸發，掃自選股 / AI 目標）
     # ==========================================
     st.markdown("---")
-    _sig_top1, _sig_top2 = st.columns([5, 1])
-    _sig_top1.header("🎯 個人清單訊號掃描")
-    # toggle：新掃描器 / 舊悄悄吸籌探測器
-    _show_old_accum = _sig_top2.toggle("切換舊探測器", value=False, key="toggle_old_accum",
-                                        help="開啟改顯示『悄悄吸籌探測器』（全市場掃描）")
+    st.header("🎯 個人清單訊號掃描")
 
-    if not _show_old_accum:
+    if True:  # [V26.64] 新掃描器一律顯示（toggle 已移除）
         st.caption("掃描你的清單中，最近 3 個交易日出現 💰達標 / 🤫吸籌 / 💎乖離抄底 的個股")
         _scan_scope = st.radio(
             "掃描範圍",
@@ -3833,7 +3829,7 @@ def render_scanner_center():
     except ImportError:
         _ACCUM_AVAILABLE = False
 
-    if _ACCUM_AVAILABLE and _show_old_accum:  # [V26.28] 切換後才顯示
+    if _ACCUM_AVAILABLE:  # [V26.64] 悄悄吸籌探測器一律顯示（不再需切換）
         st.markdown("---")
         accum_col1, accum_col2 = st.columns([5, 1])
         accum_col1.header("🤫 悄悄吸籌探測器")
