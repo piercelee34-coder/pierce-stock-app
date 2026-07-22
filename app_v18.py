@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.64", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.65", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2081,7 +2081,8 @@ def scan_watchlist_icons(tickers, lookback_days=5):
             # [V26.51] 順便記錄現價（持倉總表用）
             try:
                 icons.setdefault("_prices", {})[tk] = round(float(d["Close"].iloc[-1]), 2)
-                icons.setdefault("_prices_wk", {})[tk] = round(float(d["Close"].iloc[-6]), 2)  # [V26.63] 上週收盤（前5交易日）
+                icons.setdefault("_prices_wk", {})[tk] = round(float(d["Close"].iloc[-6]), 2)  # [V26.63] 5日前收盤
+                icons.setdefault("_prices_yd", {})[tk] = round(float(d["Close"].iloc[-2]), 2)  # [V26.65] 昨日收盤
             except Exception:
                 pass
 
@@ -3173,6 +3174,7 @@ with st.sidebar:
                     st.session_state["_wl_icons"] = _cached["icons"]
                     st.session_state["_wl_prices"] = _cached["prices"]
                     st.session_state["_wl_prices_wk"] = _cached.get("prices_wk", {})  # [V26.63]
+                    st.session_state["_wl_prices_yd"] = _cached.get("prices_yd", {})  # [V26.65]
                     st.session_state["_wl_scores"] = _cached.get("scores", {})
                 else:
                     st.session_state["_wl_icons"] = _cached
@@ -3195,16 +3197,18 @@ with st.sidebar:
         _scan_errors = _icons.pop("_errors", {}) if isinstance(_icons, dict) else {}
         _scan_prices = _icons.pop("_prices", {}) if isinstance(_icons, dict) else {}
         _scan_prices_wk = _icons.pop("_prices_wk", {}) if isinstance(_icons, dict) else {}
+        _scan_prices_yd = _icons.pop("_prices_yd", {}) if isinstance(_icons, dict) else {}
         _scan_scores = _icons.pop("_scores", {}) if isinstance(_icons, dict) else {}
         st.session_state["_wl_icons"] = _icons
         st.session_state["_wl_prices"] = _scan_prices  # [V26.51] 現價供持倉總表
-        st.session_state["_wl_prices_wk"] = _scan_prices_wk  # [V26.63] 上週價供分組chip
+        st.session_state["_wl_prices_wk"] = _scan_prices_wk  # [V26.63] 5日前價
+        st.session_state["_wl_prices_yd"] = _scan_prices_yd  # [V26.65] 昨日價
         st.session_state["_wl_scores"] = _scan_scores  # [V26.58] 格局分數供總表分組
         # 存 disk（當天有效）— [V26.51] icons + prices 一起存
         try:
             _os_wl.makedirs(_wl_icon_dir, exist_ok=True)
             with open(_wl_icon_file, "w") as _fh:
-                json.dump({"icons": _icons, "prices": _scan_prices, "prices_wk": _scan_prices_wk, "scores": _scan_scores}, _fh)
+                json.dump({"icons": _icons, "prices": _scan_prices, "prices_wk": _scan_prices_wk, "prices_yd": _scan_prices_yd, "scores": _scan_scores}, _fh)
         except Exception:
             pass
         _all_set = set(_all_wl_tickers)
@@ -3560,9 +3564,9 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.64" if cur_t == "__SCANNER__"
-         else "📊 持倉戰情總表 V26.64" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.64")
+st.title("📡 掃描中心 V26.65" if cur_t == "__SCANNER__"
+         else "📊 持倉戰情總表 V26.65" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.65")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -3674,31 +3678,36 @@ if cur_t == "__DASHBOARD__":
             ]
             _total_grouped = sum(len(v) for v in _grp.values())
             st.markdown(f"### 🎯 戰情分組（{_total_grouped} 檔）")
+            _px_map = st.session_state.get("_wl_prices", {})
+            _yd_map = st.session_state.get("_wl_prices_yd", {})
+            _wk_map = st.session_state.get("_wl_prices_wk", {})
             for _k, _title, _col in _grp_meta:
                 _items = _grp[_k]
                 if not _items:
                     continue
-                def _fmt(tk):
-                    nm = get_stock_name(tk)
-                    base = tk if nm == tk else (f"{nm}({tk})" if _name_count.get(nm, 0) >= 2 else nm)
-                    _p = st.session_state.get("_wl_prices", {}).get(tk)
-                    if _p is None:
-                        return base
-                    _pw = st.session_state.get("_wl_prices_wk", {}).get(tk)
-                    if _pw and _pw > 0:
-                        _chg = (_p / _pw - 1) * 100
-                        _ar = "▲" if _chg >= 0 else "▼"
-                        _cc = "#22c55e" if _chg >= 0 else "#ef4444"
-                        return f"{base} <span style='color:#eee'>${_p:g}</span> <span style='color:{_cc}'>{_ar}{abs(_chg):.1f}%</span>"
-                    return f"{base} <span style='color:#eee'>${_p:g}</span>"
-                _codes = "　".join(_fmt(tk) for tk, _ in _items)
+                # [V26.65] 排列好：組內依格局分數排序（弱勢最弱在前，其餘最強在前）
+                _items = sorted(_items, key=lambda x: x[1], reverse=(_k != "weak"))
                 st.markdown(
-                    f"<div style='margin:4px 0; padding:8px 10px; border-left:3px solid {_col}; "
-                    f"background:#16202b; border-radius:4px;'>"
-                    f"<span style='color:{_col}; font-weight:bold;'>{_title} ({len(_items)})</span>　"
-                    f"<span style='color:#ccc; font-size:13px;'>{_codes}</span></div>",
+                    f"<div style='margin:8px 0 2px 0; color:{_col}; font-weight:bold;'>"
+                    f"{_title}（{len(_items)}）</div>",
                     unsafe_allow_html=True,
                 )
+                _rows = []
+                for _tk, _scv in _items:
+                    _nm = get_stock_name(_tk)
+                    _base = _tk if _nm == _tk else (f"{_nm}({_tk})" if _name_count.get(_nm, 0) >= 2 else _nm)
+                    _p = _px_map.get(_tk); _yd = _yd_map.get(_tk); _wk = _wk_map.get(_tk)
+                    _dchg = f"{(_p/_yd-1)*100:+.1f}%" if (_p and _yd) else "—"
+                    _wchg = f"{(_p/_wk-1)*100:+.1f}%" if (_p and _wk) else "—"
+                    _rows.append({
+                        "名稱": _base,
+                        "現價": _p if _p is not None else "—",
+                        "昨日": _yd if _yd is not None else "—",
+                        "5日前": _wk if _wk is not None else "—",
+                        "日%": _dchg,
+                        "週%": _wchg,
+                    })
+                st.dataframe(pd.DataFrame(_rows), width='stretch', hide_index=True)
 
             with st.expander("ℹ️ 分組說明（各區定義）"):
                 st.markdown(
