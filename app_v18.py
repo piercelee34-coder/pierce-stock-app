@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.67", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.68", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3599,9 +3599,9 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.67" if cur_t == "__SCANNER__"
-         else "📊 持倉戰情總表 V26.67" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.67")
+st.title("📡 掃描中心 V26.68" if cur_t == "__SCANNER__"
+         else "📊 持倉戰情總表 V26.68" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.68")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -3703,13 +3703,14 @@ if cur_t == "__DASHBOARD__":
                 if _nm != _tk_all:
                     _name_count[_nm] = _name_count.get(_nm, 0) + 1
 
+            # [V26.68] 各區註解直接寫在標題後（原摺疊說明已移除，避免重複）
             _grp_meta = [
-                ("strong", "🐂 強勢區", "#22c55e"),
-                ("xichou", "🤫 吸籌區", "#38bdf8"),
-                ("chaodi", "💎 抄底區", "#14b8a6"),
-                ("setup",  "🧩 布局區", "#eab308"),
-                ("weak",   "🐻 弱勢區", "#ef4444"),
-                ("neutral","😐 中性",   "#888"),
+                ("strong", "🐂 強勢區", "#22c55e", "格局分數 ≥ 2：站上均線多頭排列／RSI 偏強，趨勢站穩"),
+                ("xichou", "🤫 吸籌區", "#38bdf8", "出現「悄悄吸籌」訊號（量增價不漲、主力默默建倉），尚未轉強"),
+                ("chaodi", "💎 抄底區", "#14b8a6", "出現「乖離抄底」訊號（超賣跌深反彈）——技術性反彈，非主動買盤"),
+                ("setup",  "🧩 布局區", "#eab308", "格局分數 ≥ 0（結構中性偏多）但無明確訊號，可留意逢低布局"),
+                ("weak",   "🐻 弱勢區", "#ef4444", "格局分數 ≤ -2 或出現 SELL 訊號（跌破均線空頭排列）"),
+                ("neutral","😐 中性",   "#888",    "分數微負、無訊號，方向不明"),
             ]
             _total_grouped = sum(len(v) for v in _grp.values())
             st.markdown(f"### 🎯 戰情分組（{_total_grouped} 檔）")
@@ -3724,15 +3725,16 @@ if cur_t == "__DASHBOARD__":
                     else:
                         _o.append("")
                 return _o
-            for _k, _title, _col in _grp_meta:
+            for _k, _title, _col, _desc in _grp_meta:
                 _items = _grp[_k]
                 if not _items:
                     continue
                 # [V26.65] 排列好：組內依格局分數排序（弱勢最弱在前，其餘最強在前）
                 _items = sorted(_items, key=lambda x: x[1], reverse=(_k != "weak"))
                 st.markdown(
-                    f"<div style='margin:8px 0 2px 0; color:{_col}; font-weight:bold;'>"
-                    f"{_title}（{len(_items)}）</div>",
+                    f"<div style='margin:10px 0 2px 0;'>"
+                    f"<span style='color:{_col}; font-weight:bold;'>{_title}（{len(_items)}）</span>"
+                    f"<span style='color:#8b98a5; font-size:12px; margin-left:10px;'>— {_desc}</span></div>",
                     unsafe_allow_html=True,
                 )
                 _rows = []
@@ -3744,26 +3746,18 @@ if cur_t == "__DASHBOARD__":
                     _wchg = f"{(_p/_wk-1)*100:+.1f}%" if (_p and _wk) else "—"
                     _rows.append({
                         "名稱": _base,
-                        "現價": _p if _p is not None else "—",
-                        "昨日": _yd if _yd is not None else "—",
-                        "5日前": _wk if _wk is not None else "—",
+                        "現價": _p, "昨日": _yd, "5日前": _wk,
                         "日%": _dchg,
                         "週%": _wchg,
                     })
-                st.dataframe(pd.DataFrame(_rows).style.apply(_pct_color, subset=["日%", "週%"]),
-                             width='stretch', hide_index=True)
+                # [V26.68] 價格欄保持數值型並格式化到小數 2 位（修 V26.65 的 6 位小數顯示）
+                st.dataframe(
+                    pd.DataFrame(_rows).style
+                      .format({"現價": "{:.2f}", "昨日": "{:.2f}", "5日前": "{:.2f}"}, na_rep="—")
+                      .apply(_pct_color, subset=["日%", "週%"]),
+                    width='stretch', hide_index=True)
 
-            with st.expander("ℹ️ 分組說明（各區定義）"):
-                st.markdown(
-                    "- **🐂 強勢區**：格局分數 ≥ 2（站上均線多頭排列／RSI 偏強），趨勢站穩。\n"
-                    "- **🤫 吸籌區**：出現「悄悄吸籌」訊號（量增價不漲、主力默默建倉），尚未轉強。\n"
-                    "- **💎 抄底區**：出現「乖離抄底」訊號（超賣乖離、跌深反彈）——技術性反彈，非主動買盤。\n"
-                    "- **🧩 布局區**：格局分數 ≥ 0（結構中性偏多）但無明確訊號，可留意逢低布局。\n"
-                    "- **🐻 弱勢區**：格局分數 ≤ -2 或出現 SELL 訊號（跌破均線空頭排列）。\n"
-                    "- **😐 中性**：分數微負、無訊號，方向不明。\n\n"
-                    "※ 一檔只進一組，優先序：強勢 → 吸籌 → 抄底 → 弱勢 → 布局 → 中性；"
-                    "同時有吸籌＋抄底訊號者歸吸籌區。"
-                )
+            st.caption("※ 一檔只進一組，優先序：強勢 → 吸籌 → 抄底 → 弱勢 → 布局 → 中性；同時有吸籌＋抄底訊號者歸吸籌區。")
             st.markdown("---")
 
         # ── 編輯表（欄寬收窄、緊湊）──
@@ -3792,11 +3786,30 @@ if cur_t == "__DASHBOARD__":
         else:
             _edit_df_held = _edit_df.copy(); _edit_df_unheld = _edit_df.copy()
 
+        # [V26.68] 有持倉區加「損益金額 / 損益%」兩欄（唯讀，插在 訊號 與 成本 之間）
+        if len(_edit_df_held):
+            _pl_amt_col, _pl_pct_col = [], []
+            for _, _hr in _edit_df_held.iterrows():
+                _hpx = _hr.get("現價"); _hc = _hr.get("成本"); _hs = _hr.get("股數")
+                if pd.notna(_hpx) and pd.notna(_hc) and pd.notna(_hs) and float(_hc) > 0 and int(_hs) > 0:
+                    _hamt = (float(_hpx) - float(_hc)) * int(_hs)
+                    _hsym = "NT$" if ".TW" in str(_hr.get("代碼", "")) else "$"
+                    _pl_amt_col.append(f"{_hsym}{_hamt:,.0f}")
+                    _pl_pct_col.append(round((float(_hpx) / float(_hc) - 1) * 100, 1))
+                else:
+                    _pl_amt_col.append("—")
+                    _pl_pct_col.append(None)
+            _edit_df_held.insert(4, "損益金額", _pl_amt_col)
+            _edit_df_held.insert(5, "損益%", _pl_pct_col)
+        _held_col_cfg = dict(_hold_col_cfg)
+        _held_col_cfg["損益金額"] = st.column_config.TextColumn("損益金額", disabled=True, width="small")
+        _held_col_cfg["損益%"] = st.column_config.NumberColumn("損益%", disabled=True, format="%.1f%%", width="small")
+
         st.markdown(f"#### 💼 有持倉（{len(_edit_df_held)}）")
         if len(_edit_df_held):
             _edited_held = st.data_editor(
                 _edit_df_held, width='stretch', hide_index=True,
-                key="_holdings_editor_held", column_config=_hold_col_cfg,
+                key="_holdings_editor_held", column_config=_held_col_cfg,
             )
         else:
             st.caption("目前無持倉。可在下方「未持倉」區輸入成本與股數後儲存。")
