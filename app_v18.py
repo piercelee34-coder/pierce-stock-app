@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.65", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.67", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -789,6 +789,41 @@ def save_holdings(holdings):
     if not (GIST_TOKEN and GIST_ID):
         return False, "已存本機（未設定 Gist，不同步雲端）"
     ok = _gist_write_file(HOLDINGS_FILE, holdings)
+    return ok, ("已同步雲端" if ok else "雲端寫入失敗（已存本機）")
+
+
+# [V26.67] 已實現損益（了結紀錄）持久層 — 沿用 holdings 的雙寫慣例
+REALIZED_FILE = "realized_pnl.json"
+_REALIZED_LOCAL = ".realized_cache.json"
+
+def load_realized():
+    """讀已實現損益紀錄：Gist（雲端真相）→ 本機備援。回 list。
+    [Rule 12] 讀不到時把原因記入 session（_realized_err），不靜默吞掉。"""
+    data = _gist_read_file(REALIZED_FILE)
+    if isinstance(data, list):
+        st.session_state['_realized_err'] = ""
+        return data
+    if GIST_TOKEN and GIST_ID:
+        st.session_state['_realized_err'] = "Gist 尚無 realized_pnl.json 或讀取失敗（改用本機備援）"
+    else:
+        st.session_state['_realized_err'] = "未設定 Gist，僅本機保存（雲端重啟會遺失）"
+    try:
+        with open(_REALIZED_LOCAL, "r", encoding="utf-8") as f:
+            local = json.load(f)
+        return local if isinstance(local, list) else []
+    except Exception:
+        return []
+
+def save_realized(records):
+    """寫入已實現損益：本機 + Gist 雙寫。回 (成功, 訊息)。"""
+    try:
+        with open(_REALIZED_LOCAL, "w", encoding="utf-8") as f:
+            json.dump(records, f, ensure_ascii=False)
+    except Exception as _e:
+        st.session_state['_realized_err'] = f"本機寫入失敗：{type(_e).__name__}"
+    if not (GIST_TOKEN and GIST_ID):
+        return False, "已存本機（未設定 Gist，重啟後可能遺失）"
+    ok = _gist_write_file(REALIZED_FILE, records)
     return ok, ("已同步雲端" if ok else "雲端寫入失敗（已存本機）")
 
 
@@ -3564,9 +3599,9 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.65" if cur_t == "__SCANNER__"
-         else "📊 持倉戰情總表 V26.65" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.65")
+st.title("📡 掃描中心 V26.67" if cur_t == "__SCANNER__"
+         else "📊 持倉戰情總表 V26.67" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.67")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -3681,6 +3716,14 @@ if cur_t == "__DASHBOARD__":
             _px_map = st.session_state.get("_wl_prices", {})
             _yd_map = st.session_state.get("_wl_prices_yd", {})
             _wk_map = st.session_state.get("_wl_prices_wk", {})
+            def _pct_color(_col_vals):  # [V26.66] 漲綠跌紅
+                _o = []
+                for _v in _col_vals:
+                    if isinstance(_v, str) and _v.endswith("%"):
+                        _o.append("color:#22c55e" if _v.startswith("+") else ("color:#ef4444" if _v.startswith("-") else ""))
+                    else:
+                        _o.append("")
+                return _o
             for _k, _title, _col in _grp_meta:
                 _items = _grp[_k]
                 if not _items:
@@ -3707,7 +3750,8 @@ if cur_t == "__DASHBOARD__":
                         "日%": _dchg,
                         "週%": _wchg,
                     })
-                st.dataframe(pd.DataFrame(_rows), width='stretch', hide_index=True)
+                st.dataframe(pd.DataFrame(_rows).style.apply(_pct_color, subset=["日%", "週%"]),
+                             width='stretch', hide_index=True)
 
             with st.expander("ℹ️ 分組說明（各區定義）"):
                 st.markdown(
@@ -3732,26 +3776,46 @@ if cur_t == "__DASHBOARD__":
         # [V26.63] #2 訊號圖示說明（總表補上，原本只在側邊掃描鈕）
         st.caption("訊號圖示：🟡達標　🟣炒底　🟢⬆吸籌　🔴⬇出貨　BUY／SELL（MACD 金／死叉）　🤫吸籌　💎N＝炒底N次　💰達標　🔥過熱（保鮮3交易日）")
         st.caption("💡 直接在「成本」「股數」欄輸入買進成本與持有股數，改完按「💾 儲存持倉」。台股 1 張＝1000 股。")
-        _edited = st.data_editor(
-            _edit_df,
-            width='stretch', hide_index=True, key="_holdings_editor",
-            column_config={
-                "代碼": st.column_config.TextColumn("代碼", disabled=True, width="small"),
-                "名稱": st.column_config.TextColumn("名稱", disabled=True, width="small"),
-                "現價": st.column_config.NumberColumn("現價", disabled=True, format="%.2f", width="small"),
-                "訊號": st.column_config.TextColumn("訊號", disabled=True, width="medium"),
-                "成本": st.column_config.NumberColumn("成本", min_value=0.0, format="%.2f", width="small"),
-                "股數": st.column_config.NumberColumn("股數", min_value=0, format="%d", width="small"),
-            },
+        # [V26.66] #2 拆兩區：有持倉（成本+股數都有）在上、未持倉在下，兩區皆可編輯、皆可存
+        _hold_col_cfg = {
+            "代碼": st.column_config.TextColumn("代碼", disabled=True, width="small"),
+            "名稱": st.column_config.TextColumn("名稱", disabled=True, width="small"),
+            "現價": st.column_config.NumberColumn("現價", disabled=True, format="%.2f", width="small"),
+            "訊號": st.column_config.TextColumn("訊號", disabled=True, width="medium"),
+            "成本": st.column_config.NumberColumn("成本", min_value=0.0, format="%.2f", width="small"),
+            "股數": st.column_config.NumberColumn("股數", min_value=0, format="%d", width="small"),
+        }
+        if (not _edit_df.empty) and ("成本" in _edit_df.columns):
+            _held_mask = _edit_df["成本"].notna() & _edit_df["股數"].notna()
+            _edit_df_held = _edit_df[_held_mask].reset_index(drop=True)
+            _edit_df_unheld = _edit_df[~_held_mask].reset_index(drop=True)
+        else:
+            _edit_df_held = _edit_df.copy(); _edit_df_unheld = _edit_df.copy()
+
+        st.markdown(f"#### 💼 有持倉（{len(_edit_df_held)}）")
+        if len(_edit_df_held):
+            _edited_held = st.data_editor(
+                _edit_df_held, width='stretch', hide_index=True,
+                key="_holdings_editor_held", column_config=_hold_col_cfg,
+            )
+        else:
+            st.caption("目前無持倉。可在下方「未持倉」區輸入成本與股數後儲存。")
+            _edited_held = _edit_df_held
+
+        st.markdown(f"#### 🆕 未持倉（可建倉，{len(_edit_df_unheld)}）")
+        _edited_unheld = st.data_editor(
+            _edit_df_unheld, width='stretch', hide_index=True,
+            key="_holdings_editor_unheld", column_config=_hold_col_cfg,
         )
 
         if st.button("💾 儲存持倉", width='stretch', type="primary"):
             _new_hold = {}
-            for _, r in _edited.iterrows():
-                tk = r["代碼"]
-                cost = r["成本"]; shares = r["股數"]
-                if cost and shares and cost > 0 and shares > 0:
-                    _new_hold[tk] = {"cost": round(float(cost), 2), "shares": int(shares)}
+            for _ed in (_edited_held, _edited_unheld):
+                for _, r in _ed.iterrows():
+                    tk = r["代碼"]
+                    cost = r["成本"]; shares = r["股數"]
+                    if cost and shares and cost > 0 and shares > 0:
+                        _new_hold[tk] = {"cost": round(float(cost), 2), "shares": int(shares)}
             _ok, _msg = save_holdings(_new_hold)
             st.session_state["_holdings"] = _new_hold
             st.success(f"已儲存 {len(_new_hold)} 檔持倉（{_msg}）" if _ok else f"⚠️ {_msg}")
@@ -3771,6 +3835,84 @@ if cur_t == "__DASHBOARD__":
             _c1.metric("美股總損益 (USD)", f"${_us_pl_usd:,.0f}", delta=f"≈ NT${_us_pl_usd*USD_TWD:,.0f}")
             _c2.metric("台股總損益 (TWD)", f"NT${_tw_pl_twd:,.0f}")
             st.caption(f"※ 美股以固定匯率 {USD_TWD:.0f} 換算台幣；訊號/現價來自最近一次掃描。")
+
+        # ── [V26.67] 💵 已實現損益（了結紀錄，存 Gist）──
+        st.markdown("---")
+        st.markdown("### 💵 已實現損益（了結紀錄）")
+        _realized = load_realized()
+        _rz_err = st.session_state.get("_realized_err", "")
+        if _rz_err:
+            st.caption(f"⚠️ 紀錄來源：{_rz_err}")
+
+        with st.expander("📝 記錄一筆了結", expanded=False):
+            _rz_c1, _rz_c2, _rz_c3 = st.columns(3)
+            _rz_tk = _rz_c1.selectbox("代碼", options=_all_tk, key="_rz_tk")
+            _rz_h = _hold.get(_rz_tk, {}) or {}
+            _rz_cost = _rz_c2.number_input("買進成本", min_value=0.0, step=0.01, format="%.2f",
+                                           value=float(_rz_h.get("cost") or 0.0), key="_rz_cost")
+            _rz_sell = _rz_c3.number_input("賣出價", min_value=0.0, step=0.01, format="%.2f",
+                                           value=float(_prices.get(_rz_tk) or 0.0), key="_rz_sell")
+            _rz_c4, _rz_c5 = st.columns(2)
+            _rz_shares = _rz_c4.number_input("股數", min_value=0, step=1,
+                                             value=int(_rz_h.get("shares") or 0), key="_rz_shares")
+            _rz_date = _rz_c5.date_input("了結日期", key="_rz_date")
+            _rz_note = st.text_input("備註（選填）", key="_rz_note")
+            _rz_valid = (_rz_cost > 0 and _rz_sell > 0 and _rz_shares > 0)
+            _rz_ccy = "TWD" if (".TW" in _rz_tk) else "USD"
+            _rz_sym = "NT$" if _rz_ccy == "TWD" else "$"
+            if _rz_valid:
+                _rz_pl_prev = (_rz_sell - _rz_cost) * _rz_shares
+                st.caption(f"試算：{_rz_sym}{_rz_pl_prev:,.0f}（{(_rz_sell/_rz_cost-1)*100:+.1f}%）")
+            if st.button("📝 記錄了結", type="primary", key="_rz_add"):
+                if not _rz_valid:
+                    st.error("⚠️ 成本、賣出價、股數都必須大於 0 — 未寫入任何紀錄。")
+                else:
+                    _realized.append({
+                        "date": str(_rz_date), "ticker": _rz_tk,
+                        "cost": round(float(_rz_cost), 2), "sell": round(float(_rz_sell), 2),
+                        "shares": int(_rz_shares), "ccy": _rz_ccy,
+                        "pl": round((_rz_sell - _rz_cost) * _rz_shares, 2),
+                        "note": _rz_note or "",
+                    })
+                    _rz_ok, _rz_msg = save_realized(_realized)
+                    if _rz_ok:
+                        st.success(f"已記錄 {_rz_tk} 了結（{_rz_msg}）")
+                    else:
+                        st.warning(f"⚠️ {_rz_msg}")
+                    st.rerun()
+
+        if _realized:
+            _rz_us = sum(float(r.get("pl") or 0) for r in _realized if r.get("ccy") == "USD")
+            _rz_tw = sum(float(r.get("pl") or 0) for r in _realized if r.get("ccy") == "TWD")
+            _rz_rows = []
+            for r in reversed(_realized):
+                _c = float(r.get("cost") or 0); _sv = float(r.get("sell") or 0)
+                _sym2 = "NT$" if r.get("ccy") == "TWD" else "$"
+                _rz_rows.append({
+                    "日期": r.get("date", ""), "代碼": r.get("ticker", ""),
+                    "成本": _c, "賣出": _sv, "股數": r.get("shares", 0),
+                    "損益%": round((_sv / _c - 1) * 100, 1) if _c > 0 else 0.0,
+                    "已實現損益": f"{_sym2}{float(r.get('pl') or 0):,.0f}",
+                    "備註": r.get("note", ""),
+                })
+            st.dataframe(pd.DataFrame(_rz_rows), width='stretch', hide_index=True)
+            _rzm1, _rzm2, _rzm3 = st.columns(3)
+            _rzm1.metric("美股累積已實現 (USD)", f"${_rz_us:,.0f}")
+            _rzm2.metric("台股累積已實現 (TWD)", f"NT${_rz_tw:,.0f}")
+            _rzm3.metric("合計（台幣）", f"NT${_rz_us * USD_TWD + _rz_tw:,.0f}")
+            st.caption(f"※ 共 {len(_realized)} 筆；美股以固定匯率 {USD_TWD:.0f} 換算。此為已了結損益，與上方未實現損益分開計算。")
+            with st.expander("🗑️ 刪除紀錄（修正誤植）"):
+                _rz_labels = [f"{r.get('date','')}　{r.get('ticker','')}　{r.get('shares',0)}股　{r.get('note','')}"
+                              for r in _realized]
+                _rz_di = st.selectbox("選擇要刪除的紀錄", options=list(range(len(_realized))),
+                                      format_func=lambda i: _rz_labels[i], key="_rz_del_idx")
+                if st.button("確認刪除", key="_rz_del_btn"):
+                    _realized.pop(_rz_di)
+                    _rz_ok2, _rz_msg2 = save_realized(_realized)
+                    st.success(f"已刪除（{_rz_msg2}）") if _rz_ok2 else st.warning(f"⚠️ {_rz_msg2}")
+                    st.rerun()
+        else:
+            st.caption("尚無了結紀錄。展開上方「📝 記錄一筆了結」新增第一筆。")
 
     st.stop()  # 總表視圖：不渲染下方個股戰情
 
