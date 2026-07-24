@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.68", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.69", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2118,6 +2118,21 @@ def scan_watchlist_icons(tickers, lookback_days=5):
                 icons.setdefault("_prices", {})[tk] = round(float(d["Close"].iloc[-1]), 2)
                 icons.setdefault("_prices_wk", {})[tk] = round(float(d["Close"].iloc[-6]), 2)  # [V26.63] 5日前收盤
                 icons.setdefault("_prices_yd", {})[tk] = round(float(d["Close"].iloc[-2]), 2)  # [V26.65] 昨日收盤
+                # [V26.69] 鐵板＝結構箱底(find_structural_box_bottom)；前高＝局部高點中高於現價的最近一個
+                _pxn = float(d["Close"].iloc[-1])
+                try:
+                    _ib = find_structural_box_bottom(d, _pxn)[0]
+                    icons.setdefault("_iron", {})[tk] = round(float(_ib), 2)
+                except Exception:
+                    icons.setdefault("_iron", {})[tk] = None
+                try:
+                    _hs = d["High"]
+                    _lm = _hs[(_hs == _hs.rolling(9, center=True).max())].dropna()
+                    _lm = _lm[_lm < _hs.max()]
+                    _ab = _lm[_lm > _pxn]
+                    icons.setdefault("_prev_high", {})[tk] = round(float(_ab.iloc[-1]), 2) if not _ab.empty else None
+                except Exception:
+                    icons.setdefault("_prev_high", {})[tk] = None
             except Exception:
                 pass
 
@@ -3210,6 +3225,8 @@ with st.sidebar:
                     st.session_state["_wl_prices"] = _cached["prices"]
                     st.session_state["_wl_prices_wk"] = _cached.get("prices_wk", {})  # [V26.63]
                     st.session_state["_wl_prices_yd"] = _cached.get("prices_yd", {})  # [V26.65]
+                    st.session_state["_wl_prev_high"] = _cached.get("prev_high", {})  # [V26.69]
+                    st.session_state["_wl_iron"] = _cached.get("iron", {})            # [V26.69]
                     st.session_state["_wl_scores"] = _cached.get("scores", {})
                 else:
                     st.session_state["_wl_icons"] = _cached
@@ -3233,17 +3250,23 @@ with st.sidebar:
         _scan_prices = _icons.pop("_prices", {}) if isinstance(_icons, dict) else {}
         _scan_prices_wk = _icons.pop("_prices_wk", {}) if isinstance(_icons, dict) else {}
         _scan_prices_yd = _icons.pop("_prices_yd", {}) if isinstance(_icons, dict) else {}
+        _scan_prev_high = _icons.pop("_prev_high", {}) if isinstance(_icons, dict) else {}
+        _scan_iron = _icons.pop("_iron", {}) if isinstance(_icons, dict) else {}
         _scan_scores = _icons.pop("_scores", {}) if isinstance(_icons, dict) else {}
         st.session_state["_wl_icons"] = _icons
         st.session_state["_wl_prices"] = _scan_prices  # [V26.51] 現價供持倉總表
         st.session_state["_wl_prices_wk"] = _scan_prices_wk  # [V26.63] 5日前價
         st.session_state["_wl_prices_yd"] = _scan_prices_yd  # [V26.65] 昨日價
+        st.session_state["_wl_prev_high"] = _scan_prev_high  # [V26.69] 前高
+        st.session_state["_wl_iron"] = _scan_iron            # [V26.69] 鐵板
         st.session_state["_wl_scores"] = _scan_scores  # [V26.58] 格局分數供總表分組
         # 存 disk（當天有效）— [V26.51] icons + prices 一起存
         try:
             _os_wl.makedirs(_wl_icon_dir, exist_ok=True)
             with open(_wl_icon_file, "w") as _fh:
-                json.dump({"icons": _icons, "prices": _scan_prices, "prices_wk": _scan_prices_wk, "prices_yd": _scan_prices_yd, "scores": _scan_scores}, _fh)
+                json.dump({"icons": _icons, "prices": _scan_prices, "prices_wk": _scan_prices_wk,
+                           "prices_yd": _scan_prices_yd, "prev_high": _scan_prev_high,
+                           "iron": _scan_iron, "scores": _scan_scores}, _fh)
         except Exception:
             pass
         _all_set = set(_all_wl_tickers)
@@ -3599,9 +3622,9 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.68" if cur_t == "__SCANNER__"
-         else "📊 持倉戰情總表 V26.68" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.68")
+st.title("📡 掃描中心 V26.69" if cur_t == "__SCANNER__"
+         else "📊 持倉戰情總表 V26.69" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.69")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -3622,8 +3645,6 @@ if cur_t == "__DASHBOARD__":
         _editor_rows = []
         for tk in _all_tk:
             px = _prices.get(tk)
-            ic_raw = _icons_map.get(tk, "")
-            ic = ic_raw.replace("|", " ").strip() if ic_raw else ""
             s_name = get_stock_name(tk)
             disp_name = s_name if s_name != tk else ""
             h = _hold.get(tk, {})
@@ -3631,7 +3652,6 @@ if cur_t == "__DASHBOARD__":
                 "代碼": tk,
                 "名稱": disp_name,
                 "現價": px if px else None,
-                "訊號": ic,
                 "成本": float(h["cost"]) if h.get("cost") else None,
                 "股數": int(h["shares"]) if h.get("shares") else None,
             })
@@ -3717,6 +3737,8 @@ if cur_t == "__DASHBOARD__":
             _px_map = st.session_state.get("_wl_prices", {})
             _yd_map = st.session_state.get("_wl_prices_yd", {})
             _wk_map = st.session_state.get("_wl_prices_wk", {})
+            _ph_map = st.session_state.get("_wl_prev_high", {})   # [V26.69] 前高
+            _ir_map = st.session_state.get("_wl_iron", {})        # [V26.69] 鐵板
             def _pct_color(_col_vals):  # [V26.66] 漲綠跌紅
                 _o = []
                 for _v in _col_vals:
@@ -3746,14 +3768,18 @@ if cur_t == "__DASHBOARD__":
                     _wchg = f"{(_p/_wk-1)*100:+.1f}%" if (_p and _wk) else "—"
                     _rows.append({
                         "名稱": _base,
+                        "訊號": (_icons_map.get(_tk, "") or "").replace("|", " ").strip(),
                         "現價": _p, "昨日": _yd, "5日前": _wk,
                         "日%": _dchg,
                         "週%": _wchg,
+                        "前高": _ph_map.get(_tk),
+                        "鐵板": _ir_map.get(_tk),
                     })
                 # [V26.68] 價格欄保持數值型並格式化到小數 2 位（修 V26.65 的 6 位小數顯示）
                 st.dataframe(
                     pd.DataFrame(_rows).style
-                      .format({"現價": "{:.2f}", "昨日": "{:.2f}", "5日前": "{:.2f}"}, na_rep="—")
+                      .format({"現價": "{:.2f}", "昨日": "{:.2f}", "5日前": "{:.2f}",
+                               "前高": "{:.2f}", "鐵板": "{:.2f}"}, na_rep="—")
                       .apply(_pct_color, subset=["日%", "週%"]),
                     width='stretch', hide_index=True)
 
@@ -3775,7 +3801,6 @@ if cur_t == "__DASHBOARD__":
             "代碼": st.column_config.TextColumn("代碼", disabled=True, width="small"),
             "名稱": st.column_config.TextColumn("名稱", disabled=True, width="small"),
             "現價": st.column_config.NumberColumn("現價", disabled=True, format="%.2f", width="small"),
-            "訊號": st.column_config.TextColumn("訊號", disabled=True, width="medium"),
             "成本": st.column_config.NumberColumn("成本", min_value=0.0, format="%.2f", width="small"),
             "股數": st.column_config.NumberColumn("股數", min_value=0, format="%d", width="small"),
         }
@@ -3837,7 +3862,14 @@ if cur_t == "__DASHBOARD__":
         # ── 下方：損益表（唯讀，代碼/損益%/損益美/損益台）──
         if _pl_rows:
             st.markdown("### 📈 已持倉損益")
-            st.dataframe(pd.DataFrame(_pl_rows), width='stretch', hide_index=True,
+            def _pl_bg(_r):  # [V26.69] 正綠負紅底色（依損益% 判斷，整列上色）
+                _v = _r.get("損益%")
+                if _v is None or pd.isna(_v) or _v == 0:
+                    return [""] * len(_r)
+                _b = "background-color:rgba(34,197,94,0.20)" if _v > 0 else "background-color:rgba(239,68,68,0.20)"
+                return [_b] * len(_r)
+            st.dataframe(pd.DataFrame(_pl_rows).style.apply(_pl_bg, axis=1),
+                         width='stretch', hide_index=True,
                          column_config={
                              "代碼": st.column_config.TextColumn("代碼", width="small"),
                              "損益%": st.column_config.NumberColumn("損益%", format="%.1f%%", width="small"),
