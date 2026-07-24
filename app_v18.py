@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.69", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.71", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3228,6 +3228,7 @@ with st.sidebar:
                     st.session_state["_wl_prev_high"] = _cached.get("prev_high", {})  # [V26.69]
                     st.session_state["_wl_iron"] = _cached.get("iron", {})            # [V26.69]
                     st.session_state["_wl_scores"] = _cached.get("scores", {})
+                    st.session_state["_wl_src"] = f"快取檔 {_wl_icon_file}"  # [V26.71]
                 else:
                     st.session_state["_wl_icons"] = _cached
                     st.session_state["_wl_prices"] = {}
@@ -3239,6 +3240,26 @@ with st.sidebar:
         except Exception:
             st.session_state["_wl_icons"] = {}
             st.session_state["_wl_prices"] = {}
+
+    _clr_msg = st.session_state.pop("_cache_clr_msg", None)
+    if _clr_msg:
+        st.success(_clr_msg)
+    # [V26.71] 快取一天一檔，若寫入壞資料會被鎖整天 → 提供清除重掃的逃生門
+    if st.button("🔄 清除今日快取", width='stretch',
+                 help="掃描結果快取一天。若價格看起來不對，先清掉再重新掃描。"):
+        try:
+            if _os_wl.path.exists(_wl_icon_file):
+                _os_wl.remove(_wl_icon_file)
+                _msg_clr = f"已刪除今日快取，請按「🔍 掃描清單訊號」重抓。"
+            else:
+                _msg_clr = "今日尚無快取檔，直接按「🔍 掃描清單訊號」即可。"
+            for _kc in ("_wl_icons", "_wl_prices", "_wl_prices_wk", "_wl_prices_yd",
+                        "_wl_prev_high", "_wl_iron", "_wl_scores", "_wl_src"):
+                st.session_state.pop(_kc, None)
+            st.session_state["_cache_clr_msg"] = _msg_clr
+        except Exception as _ec:
+            st.session_state["_cache_clr_msg"] = f"⚠️ 清除失敗：{type(_ec).__name__}: {_ec}"
+        st.rerun()
 
     if st.button("🔍 掃描清單訊號", width='stretch',
                  help="掃描全部自選股，在清單按鈕後顯示近5天訊號：🟢⬆吸籌/🔴⬇出貨、BUY/SELL、🤫吸籌、💎N炒底、💰達標、🔥過熱（約 2-4 分鐘，當天有效）"):
@@ -3255,6 +3276,7 @@ with st.sidebar:
         _scan_scores = _icons.pop("_scores", {}) if isinstance(_icons, dict) else {}
         st.session_state["_wl_icons"] = _icons
         st.session_state["_wl_prices"] = _scan_prices  # [V26.51] 現價供持倉總表
+        st.session_state["_wl_src"] = f"本次掃描 {_dt_wl.now().strftime('%m/%d %H:%M:%S')}"  # [V26.71]
         st.session_state["_wl_prices_wk"] = _scan_prices_wk  # [V26.63] 5日前價
         st.session_state["_wl_prices_yd"] = _scan_prices_yd  # [V26.65] 昨日價
         st.session_state["_wl_prev_high"] = _scan_prev_high  # [V26.69] 前高
@@ -3622,9 +3644,9 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.69" if cur_t == "__SCANNER__"
-         else "📊 持倉戰情總表 V26.69" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.69")
+st.title("📡 掃描中心 V26.71" if cur_t == "__SCANNER__"
+         else "📊 持倉戰情總表 V26.71" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.71")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -3641,6 +3663,21 @@ if cur_t == "__DASHBOARD__":
     if not _prices:
         st.info("尚未掃描現價。請先到左側控制台按「🔍 掃描清單訊號」，總表才有現價與訊號資料。")
     else:
+        # [V26.71] 價格資料診斷 — 抓「現價寫錯」的現行犯
+        with st.expander("🔧 價格資料診斷"):
+            st.caption(f"資料來源：{st.session_state.get('_wl_src', '未知（可能是舊 session）')}")
+            _dbg = [{"代碼": _t,
+                     "現價": _prices.get(_t),
+                     "昨日": st.session_state.get("_wl_prices_yd", {}).get(_t),
+                     "5日前": st.session_state.get("_wl_prices_wk", {}).get(_t)}
+                    for _t in _all_tk]
+            st.dataframe(pd.DataFrame(_dbg).style.format(
+                {"現價": "{:.2f}", "昨日": "{:.2f}", "5日前": "{:.2f}"}, na_rep="—"),
+                width='stretch', hide_index=True)
+            st.caption("比對方式：把可疑的代碼開個股頁，看現價是否一致。"
+                       "若此表錯、個股頁對 → 是掃描寫入時出錯，請用左側「🔄 清除今日快取」後重掃，"
+                       "並把這張表截圖回報。")
+
         # 組可編輯表格資料
         _editor_rows = []
         for tk in _all_tk:
@@ -3767,6 +3804,7 @@ if cur_t == "__DASHBOARD__":
                     _dchg = f"{(_p/_yd-1)*100:+.1f}%" if (_p and _yd) else "—"
                     _wchg = f"{(_p/_wk-1)*100:+.1f}%" if (_p and _wk) else "—"
                     _rows.append({
+                        "代碼": _tk,   # [V26.70] 顯示代碼，名稱掛錯時可立刻辨識
                         "名稱": _base,
                         "訊號": (_icons_map.get(_tk, "") or "").replace("|", " ").strip(),
                         "現價": _p, "昨日": _yd, "5日前": _wk,
