@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.73", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.74", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3771,10 +3771,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.73" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V26.73" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V26.73" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.73")
+st.title("📡 掃描中心 V26.74" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V26.74" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V26.74" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.74")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -3784,6 +3784,7 @@ if cur_t == "__DASHBOARD__":
     st.markdown("## 📊 持倉戰情總表")
     _hold = st.session_state.get("_holdings", {})
     _prices = st.session_state.get("_wl_prices", {})
+    _prices_yd = st.session_state.get("_wl_prices_yd", {})  # [V26.74] 日漲跌來源
     _icons_map = st.session_state.get("_wl_icons", {})
     _wls_all = st.session_state.get("watchlists", {})
     _all_tk = list(dict.fromkeys([t for lst in _wls_all.values() for t in lst]))
@@ -3817,6 +3818,8 @@ if cur_t == "__DASHBOARD__":
                 "代碼": tk,
                 "名稱": disp_name,
                 "現價": px if px else None,
+                "日%": round((px / _prices_yd[tk] - 1) * 100, 1)
+                       if (px and _prices_yd.get(tk)) else None,  # [V26.74]
                 "成本": float(h["cost"]) if h.get("cost") else None,
                 "股數": int(h["shares"]) if h.get("shares") else None,
             })
@@ -3967,6 +3970,7 @@ if cur_t == "__DASHBOARD__":
             "代碼": st.column_config.TextColumn("代碼", disabled=True, width="small"),
             "名稱": st.column_config.TextColumn("名稱", disabled=True, width="small"),
             "現價": st.column_config.NumberColumn("現價", disabled=True, format="%.2f", width="small"),
+            "日%": st.column_config.NumberColumn("日%", disabled=True, format="%+.1f%%", width="small"),  # [V26.74]
             "成本": st.column_config.NumberColumn("成本", min_value=0.0, format="%.2f", width="small"),
             "股數": st.column_config.NumberColumn("股數", min_value=0, format="%d", width="small"),
         }
@@ -3990,8 +3994,8 @@ if cur_t == "__DASHBOARD__":
                 else:
                     _pl_amt_col.append("—")
                     _pl_pct_col.append(None)
-            _edit_df_held.insert(4, "損益金額", _pl_amt_col)
-            _edit_df_held.insert(5, "損益%", _pl_pct_col)
+            _edit_df_held.insert(5, "損益金額", _pl_amt_col)  # [V26.74] +1（日%欄插入後）
+            _edit_df_held.insert(6, "損益%", _pl_pct_col)
         _held_col_cfg = dict(_hold_col_cfg)
         _held_col_cfg["損益金額"] = st.column_config.TextColumn("損益金額", disabled=True, width="small")
         _held_col_cfg["損益%"] = st.column_config.NumberColumn("損益%", disabled=True, format="%.1f%%", width="small")
