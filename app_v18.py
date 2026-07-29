@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.72", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.73", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -746,6 +746,119 @@ def save_snapshot_to_gist(snap_date, records):
             del hist[k]
     ok = _gist_write_file(SNAPSHOT_FILE, hist)
     return ok, (f"已同步 {len(hist)} 天歷史快照" if ok else "Gist 寫入失敗")
+
+
+# ──────────────────────────────────────────────────────
+# [V26.73] 快照「實際隔日價」自動回填
+# 還原法：實際隔日價 = 快照當下現價 × (次一根K收盤 / 基準K收盤)
+#   用比值而非直接取隔日收盤 → 事後配息/拆股把整條序列同比例調整時，比值不變（免疫）。
+#   基準K：優先讀快照列的「基準K日期」(V26.73 起寫入)；舊快照退回「日期 <= 快照日」規則。
+# Rule 12：pending / 異常 / 取價失敗 / 寫回失敗 一律計數回報，不靜默。
+# ──────────────────────────────────────────────────────
+BACKFILL_MAX_RET = 0.40   # 單日報酬絕對值超過此值 → 視為資料異常，拒絕寫入
+
+
+def _bf_next_day_ratio(close_ser, anchor_date):
+    """從收盤序列取『基準K → 次一根K』的收盤比值。
+    回傳 (ratio, status)；status ∈ ok / pending / no_anchor / abnormal。"""
+    try:
+        ts = pd.Timestamp(str(anchor_date)[:10])
+    except Exception:
+        return None, "no_anchor"
+    idx = close_ser.index[close_ser.index <= ts]
+    if len(idx) == 0:
+        return None, "no_anchor"
+    pos = len(idx) - 1          # index 已排序，前綴長度-1 即基準K位置
+    if pos + 1 >= len(close_ser):
+        return None, "pending"  # 隔日K尚未生成 → 等下次再補
+    try:
+        a, b = float(close_ser.iloc[pos]), float(close_ser.iloc[pos + 1])
+    except Exception:
+        return None, "no_anchor"
+    if not (a > 0) or not (b > 0):
+        return None, "no_anchor"
+    ratio = b / a
+    if abs(ratio - 1.0) > BACKFILL_MAX_RET:
+        return None, "abnormal"
+    return ratio, "ok"
+
+
+def backfill_snapshot_actuals(max_days=60):
+    """回填歷史快照中尚未填的『實際隔日價』與『隔日誤差%』。冪等：填過的列不再動。
+    回傳 (filled, pending, abnormal, msg)。"""
+    hist = load_snapshot_history()
+    if not hist:
+        return 0, 0, 0, "雲端尚無快照，無可回填"
+    need = {}
+    for d in sorted(hist.keys())[-max_days:]:
+        for r in hist[d]:
+            if not isinstance(r, dict) or r.get("實際隔日價") is not None:
+                continue
+            tk, base = r.get("代碼"), r.get("現價")
+            if not tk or base in (None, 0):
+                continue
+            need.setdefault(tk, []).append((d, r))
+    if not need:
+        return 0, 0, 0, "沒有待回填的快照列"
+    try:
+        raw = yf.download(list(need.keys()), period="6mo", interval="1d",
+                          progress=False, group_by="ticker", auto_adjust=False)
+    except Exception as _e:
+        _n = sum(len(v) for v in need.values())
+        return 0, _n, 0, f"🔴 回填中止：yfinance 例外 {type(_e).__name__}: {_e}（{_n} 筆未處理）"
+    closes = {}
+    for tk in need:
+        try:
+            ser = raw[tk]["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw["Close"]
+            ser = ser.dropna()
+            ser.index = pd.to_datetime(ser.index)
+            if ser.index.tz is not None:
+                ser.index = ser.index.tz_localize(None)
+            closes[tk] = ser if len(ser) >= 2 else None
+        except Exception:
+            closes[tk] = None
+    filled = pending = abnormal = noprice = 0
+    for tk, items in need.items():
+        ser = closes.get(tk)
+        if ser is None:
+            noprice += len(items)
+            continue
+        for d, r in items:
+            ratio, status = _bf_next_day_ratio(ser, r.get("基準K日期") or d)
+            if status == "pending":
+                pending += 1
+                continue
+            if status == "abnormal":
+                abnormal += 1
+                continue
+            if status != "ok":
+                noprice += 1
+                continue
+            try:
+                act = round(float(r["現價"]) * ratio, 2)
+            except Exception:
+                noprice += 1
+                continue
+            r["實際隔日價"] = act
+            _exp = r.get("隔日預期價")
+            try:
+                r["隔日誤差%"] = round((act / float(_exp) - 1) * 100, 2) if _exp else None
+            except Exception:
+                r["隔日誤差%"] = None
+            filled += 1
+    parts = [f"回填 {filled} 筆"]
+    if pending:
+        parts.append(f"待隔日 {pending} 筆")
+    if abnormal:
+        parts.append(f"⚠️ 異常拒寫 {abnormal} 筆（單日振幅 >{int(BACKFILL_MAX_RET * 100)}%）")
+    if noprice:
+        parts.append(f"⚠️ 取價失敗 {noprice} 筆")
+    body = "、".join(parts)
+    if filled == 0:
+        return 0, pending, abnormal, f"🔁 {body}"
+    if not _gist_write_file(SNAPSHOT_FILE, hist):
+        return filled, pending, abnormal, f"🔴 {body} —— 但寫回 Gist 失敗，本次回填未保存！"
+    return filled, pending, abnormal, f"✅ {body}，已寫回雲端"
 
 
 # ──────────────────────────────────────────────────────
@@ -2890,6 +3003,7 @@ def build_snapshot_df(watchlists):
                     "代碼": tk,
                     "名稱": get_stock_name(tk),
                     "快照日期": snap_date,
+                    "基準K日期": str(d.index[-1].date()),  # [V26.73] 回填錨點，避免事後挑錯基準K
                     "現價": round(price, 2),
                     "股性": _eng_label,
                     "隔日預期價": _nd_price,
@@ -3137,6 +3251,12 @@ with st.sidebar:
             )
         except Exception as _ge:
             st.session_state["_snap_gist_msg"] = f"⚠️ 雲端同步例外：{str(_ge)[:40]}"
+        # [V26.73] 搭便車：快照存完順手回填先前所有 pending 的「實際隔日價」
+        try:
+            _bf_f, _bf_p, _bf_a, _bf_msg = backfill_snapshot_actuals()
+            st.session_state["_snap_bf_msg"] = f"🎯 {_bf_msg}"
+        except Exception as _bfe:
+            st.session_state["_snap_bf_msg"] = f"🔴 回填例外：{type(_bfe).__name__}: {_bfe}"
 
     # 雙保險②：下載鈕（從 session_state 渲染，點擊後不消失）
     if st.session_state.get("_snap_bytes"):
@@ -3148,6 +3268,8 @@ with st.sidebar:
             st.caption(st.session_state["_snap_msg"])
         if st.session_state.get("_snap_gist_msg"):
             st.caption(st.session_state["_snap_gist_msg"])
+        if st.session_state.get("_snap_bf_msg"):
+            st.caption(st.session_state["_snap_bf_msg"])
 
     # ── [V26.34] 匯出自選股分析包 CSV（手動，含 Gist 全部歷史 + 今日）──
     if st.button("⬇️ 匯出自選股分析包 CSV", width='stretch',
@@ -3491,6 +3613,11 @@ with st.sidebar:
                      type="primary" if _scan_sel else "secondary"):
             st.session_state['current_ticker'] = "__SCANNER__"
             st.rerun()
+        _vfy_sel = (cur_t == "__VERIFY__")   # [V26.73]
+        if st.button("🎯 訊號驗證", key="btn_verify", width='stretch',
+                     type="primary" if _vfy_sel else "secondary"):
+            st.session_state['current_ticker'] = "__VERIFY__"
+            st.rerun()
         for wl_name, tickers in wls.items():
             is_exp = (wl_name == st.session_state.get('user_opened_list'))
             with st.expander(f"{wl_name} ({len(tickers)})", expanded=is_exp):
@@ -3644,9 +3771,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.72" if cur_t == "__SCANNER__"
-         else "📊 持倉戰情總表 V26.72" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.72")
+st.title("📡 掃描中心 V26.73" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V26.73" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V26.73" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.73")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -5012,6 +5140,96 @@ def render_scanner_center():
 # ── [V26.59] 掃描中心視圖（三個全市場掃描器，移出個股頁）──
 if cur_t == "__SCANNER__":
     render_scanner_center()
+    st.stop()
+
+
+# ── [V26.73] 訊號驗證視圖：拿已回填的實際隔日價，回頭考核 AI 的隔日預測 ──
+VERIFY_MIN_N = 3   # 個股排行的最低樣本數，低於此不列入（避免 1 筆 100% 的假象）
+
+
+def render_signal_verify():
+    """用 Gist 快照的『實際隔日價』統計隔日預測的方向命中率與誤差。
+    Rule 12：讀不到、沒樣本、待回填都明講。"""
+    st.markdown("## 🎯 訊號驗證（隔日預測 vs 實際）")
+    st.caption("資料來源：雲端歷史快照的「實際隔日價」欄，於每次記錄快照後自動回填。"
+               "當天最新一筆要等下一個交易日收盤才會有實際值。")
+    try:
+        hist = load_snapshot_history()
+    except Exception as _e:
+        st.error(f"🔴 讀取雲端快照失敗：{type(_e).__name__}: {_e}")
+        return
+    if not hist:
+        st.warning("⚠️ 雲端尚無歷史快照。先讓左側「📸 記錄今日劇本快照」累積幾天再回來。")
+        return
+
+    rows, pending = [], 0
+    for _d in sorted(hist.keys()):
+        for r in hist[_d]:
+            if not isinstance(r, dict):
+                continue
+            _pred, _base, _act = r.get("隔日預測漲跌%"), r.get("現價"), r.get("實際隔日價")
+            if _pred is None or _base in (None, 0):
+                continue
+            if _act is None:
+                pending += 1
+                continue
+            try:
+                _act_pct = (float(_act) / float(_base) - 1) * 100
+                _pred = float(_pred)
+            except Exception:
+                continue
+            rows.append({"日期": _d, "代碼": r.get("代碼"),
+                         "名稱": r.get("名稱") or r.get("代碼"),
+                         "預測%": _pred, "實際%": _act_pct})
+    if not rows:
+        st.warning(f"⚠️ 目前沒有任何已回填的樣本（待回填 {pending} 筆）。"
+                   "「實際隔日價」要等快照日的下一個交易日收盤後才補得上，請隔天再看。")
+        return
+
+    vdf = pd.DataFrame(rows)
+    vdf["差距"] = vdf["實際%"] - vdf["預測%"]
+    _dir = vdf[vdf["預測%"] != 0]
+    _hit_ser = ((_dir["預測%"] > 0) & (_dir["實際%"] > 0)) | ((_dir["預測%"] < 0) & (_dir["實際%"] < 0))
+    _hit = float(_hit_ser.mean() * 100) if len(_dir) else float("nan")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("已回填樣本", f"{len(vdf)}", help=f"另有 {pending} 筆待回填（等隔日收盤）")
+    c2.metric("方向命中率", "—" if pd.isna(_hit) else f"{_hit:.1f}%",
+              help=f"擲硬幣基準 50%。已排除預測 0%（無方向）的 {len(vdf) - len(_dir)} 筆")
+    c3.metric("平均絕對誤差", f"{vdf['差距'].abs().mean():.2f} pp",
+              help="|實際% − 預測%| 的平均，pp = 百分點")
+    c4.metric("系統性偏差", f"{vdf['差距'].mean():+.2f} pp",
+              help="正 = 實際普遍比預測強（模型偏保守）；負 = 模型偏樂觀")
+
+    st.markdown(f"### 📋 個股排行（樣本 ≥ {VERIFY_MIN_N} 天）")
+    _rk = []
+    for (_tk, _nm), sub in vdf.groupby(["代碼", "名稱"], dropna=False):
+        sd = sub[sub["預測%"] != 0]
+        _h = (((sd["預測%"] > 0) & (sd["實際%"] > 0)) |
+              ((sd["預測%"] < 0) & (sd["實際%"] < 0))).mean() * 100 if len(sd) else float("nan")
+        _rk.append({"代碼": _tk, "名稱": _nm, "樣本": len(sub),
+                    "命中率%": None if pd.isna(_h) else round(float(_h), 1),
+                    "平均絕對誤差pp": round(float(sub["差距"].abs().mean()), 2),
+                    "偏差pp": round(float(sub["差距"].mean()), 2)})
+    rk = pd.DataFrame(_rk)
+    _shown = rk[rk["樣本"] >= VERIFY_MIN_N].sort_values(
+        ["命中率%", "樣本"], ascending=[False, False], na_position="last")
+    if _shown.empty:
+        st.info(f"ℹ️ 還沒有任何個股累積到 {VERIFY_MIN_N} 天樣本，"
+                f"目前最多的是 {int(rk['樣本'].max())} 天。再記錄幾天就會出現。")
+    else:
+        st.dataframe(_shown.style.format(
+            {"命中率%": "{:.1f}", "平均絕對誤差pp": "{:.2f}", "偏差pp": "{:+.2f}"}, na_rep="—"),
+            width='stretch', hide_index=True)
+        st.caption("命中率只看方向對錯，不看幅度；平均絕對誤差才反映幅度準不準。"
+                   "命中率高但誤差大 = 方向抓得到、幅度抓不準。")
+    _few = int((rk["樣本"] < VERIFY_MIN_N).sum())
+    if _few:
+        st.caption(f"（另有 {_few} 檔樣本不足 {VERIFY_MIN_N} 天，未列入排行）")
+
+
+if cur_t == "__VERIFY__":
+    render_signal_verify()
     st.stop()
 
 
