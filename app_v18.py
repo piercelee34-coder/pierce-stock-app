@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.71", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.72", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -65,7 +65,7 @@ st.markdown("""
 # --- 1. 資料系統 ---
 WATCHLIST_FILE, ANCHOR_FILE, TW_NAMES_FILE = "watchlist.json", "anchors.json", "tw_names.json"
 DEFAULT_WATCHLISTS = {
-    "🇺🇸 美持股": ['^NDX', 'NVDA', 'TSM', 'AMD', 'QQQ', 'CRCL', 'TSLA', 'RXRX', 'MU',
+    "🇺🇸 美持股": ['^IXIC', 'NVDA', 'TSM', 'AMD', 'QQQ', 'CRCL', 'TSLA', 'RXRX', 'MU',
                   'MSFT', 'SOFI', 'ASX', 'NKE', 'INTC', 'GLW', 'SNDK', 'WDC'],
     "🔭 美觀察": ['AAPL', 'BE', 'NFLX', 'META', 'ONDS', 'AMZN', 'CRWV', 'COIN', 'GOOG', 'PLTR'],
     "🔭 觀察股2": ['RKLB', 'LUNR', 'FTNT', 'OUST', 'QUBT'],
@@ -3202,7 +3202,7 @@ with st.sidebar:
             st.caption(f"🔍 失敗原因：{_err_detail}")
     elif _gs == "write_error":
         st.warning("🟠 上次儲存未能同步到雲端 Gist（本機已存）。再編輯一次即會自動重試。")
-    cur_t = st.session_state.get('current_ticker', "^NDX")
+    cur_t = st.session_state.get('current_ticker', "^IXIC")
     act_l = st.session_state.get('active_list')
     wls = st.session_state['watchlists']
 
@@ -3474,7 +3474,7 @@ with st.sidebar:
                     if wls.get(act_l):
                         st.session_state['current_ticker'] = wls[act_l][0]
                     else:
-                        st.session_state['current_ticker'] = "^NDX"
+                        st.session_state['current_ticker'] = "^IXIC"
                 st.session_state['selected_stocks'].clear()
                 st.rerun()
 
@@ -3617,7 +3617,7 @@ with st.sidebar:
         if st.button("❌ 從清單移除目前股票", width='stretch') and cur_t in lst:
             lst.remove(cur_t)
             save_watchlists(wls)
-            st.session_state['current_ticker'] = lst[0] if lst else "^NDX"
+            st.session_state['current_ticker'] = lst[0] if lst else "^IXIC"
             st.rerun()
 
         st.markdown("---")
@@ -3644,9 +3644,9 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.71" if cur_t == "__SCANNER__"
-         else "📊 持倉戰情總表 V26.71" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.71")
+st.title("📡 掃描中心 V26.72" if cur_t == "__SCANNER__"
+         else "📊 持倉戰情總表 V26.72" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.72")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
