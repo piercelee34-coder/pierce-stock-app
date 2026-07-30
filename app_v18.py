@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.74", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.75", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3771,10 +3771,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.74" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V26.74" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V26.74" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.74")
+st.title("📡 掃描中心 V26.75" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V26.75" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V26.75" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.75")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -3828,6 +3828,7 @@ if cur_t == "__DASHBOARD__":
         # ── 先算損益（用已儲存的持倉）供上方總計 + 下方損益表 ──
         _us_pl_usd = 0.0
         _tw_pl_twd = 0.0
+        _cost_twd_total = 0.0  # [V26.75] 總持有成本（台幣口徑）
         _pl_rows = []
         for tk in _all_tk:
             px = _prices.get(tk)
@@ -3839,12 +3840,18 @@ if cur_t == "__DASHBOARD__":
                 if is_tw:
                     pl = (px - cost) * shares
                     _tw_pl_twd += pl
-                    _pl_rows.append({"代碼": tk, "損益%": round(pl_pct, 1),
+                    _cost_twd = cost * shares  # [V26.75] 台股本為台幣，不換算
+                    _cost_twd_total += _cost_twd
+                    _pl_rows.append({"代碼": tk, "持有成本(台)": f"NT${_cost_twd:,.0f}",
+                                     "損益%": round(pl_pct, 1),
                                      "損益(美)": "—", "損益(台)": f"NT${pl:,.0f}"})
                 else:
                     pl = (px - cost) * shares
                     _us_pl_usd += pl
-                    _pl_rows.append({"代碼": tk, "損益%": round(pl_pct, 1),
+                    _cost_twd = cost * shares * USD_TWD  # [V26.75] 美股換台幣
+                    _cost_twd_total += _cost_twd
+                    _pl_rows.append({"代碼": tk, "持有成本(台)": f"NT${_cost_twd:,.0f}",
+                                     "損益%": round(pl_pct, 1),
                                      "損益(美)": f"${pl:,.0f}", "損益(台)": f"NT${pl*USD_TWD:,.0f}"})
         _total_twd = _us_pl_usd * USD_TWD + _tw_pl_twd
 
@@ -4042,13 +4049,15 @@ if cur_t == "__DASHBOARD__":
                          width='stretch', hide_index=True,
                          column_config={
                              "代碼": st.column_config.TextColumn("代碼", width="small"),
+                             "持有成本(台)": st.column_config.TextColumn("持有成本(台)", width="medium"),  # [V26.75]
                              "損益%": st.column_config.NumberColumn("損益%", format="%.1f%%", width="small"),
                              "損益(美)": st.column_config.TextColumn("損益(美)", width="small"),
                              "損益(台)": st.column_config.TextColumn("損益(台)", width="medium"),
                          })
-            _c1, _c2 = st.columns(2)
+            _c1, _c2, _c3 = st.columns(3)  # [V26.75] 加總持有成本
             _c1.metric("美股總損益 (USD)", f"${_us_pl_usd:,.0f}", delta=f"≈ NT${_us_pl_usd*USD_TWD:,.0f}")
             _c2.metric("台股總損益 (TWD)", f"NT${_tw_pl_twd:,.0f}")
+            _c3.metric("總持有成本 (TWD)", f"NT${_cost_twd_total:,.0f}")  # [V26.75]
             st.caption(f"※ 美股以固定匯率 {USD_TWD:.0f} 換算台幣；訊號/現價來自最近一次掃描。")
 
         # ── [V26.67] 💵 已實現損益（了結紀錄，存 Gist）──
