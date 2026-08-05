@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.77", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.75", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -117,72 +117,6 @@ def get_cache_anchor():
     except Exception:
         # 失敗時 fallback 用 8 小時錨點
         return _dt.utcnow().strftime("%Y%m%d_%H")[:11]
-
-
-# ──────────────────────────────────────────────────────
-# [V26.77] 資料日基準 — 「此刻資料應已就緒的最近交易日」
-#   用 pandas-market-calendars 的 NYSE / XTAI 日曆（含國定假日，套件維護，非手動表）。
-#   就緒界線沿用 get_cache_anchor 既有錨點：台股 14:00、美股隔日 08:00。
-#   已知不涵蓋：台股臨時颱風假 → 該日會誤標紅（設計接受：誤報成本=多看一眼）。
-# ──────────────────────────────────────────────────────
-def _pick_expected_trade_date(valid_dates, now_tw, market):
-    """從交易日清單挑「now_tw 時刻資料應已就緒」的最近交易日，回傳 "YYYY-MM-DD" 或 None。
-
-    valid_dates: list[str "YYYY-MM-DD"]（升冪）
-    now_tw:      naive datetime（台灣時間）
-    market:      "US" | "TW"
-    規則：TW 交易日 D 的日 K 在 D 當天 14:00 後應就緒；
-          US 交易日 D 收盤 ≈ 台灣 D+1 凌晨 → D+1 的 08:00 後應就緒。
-    """
-    from datetime import datetime as _dt
-    today = now_tw.strftime("%Y-%m-%d")
-    picked = None
-    for ds in valid_dates:  # 升冪 → 最後一個就緒者即答案
-        if market == "TW":
-            ready = ds < today or (ds == today and now_tw.hour >= 14)
-        else:
-            d_next = (_dt.strptime(ds, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-            ready = d_next < today or (d_next == today and now_tw.hour >= 8)
-        if ready:
-            picked = ds
-    return picked
-
-
-def _find_stale_asof(asof_map, expected_map, tickers):
-    """[V26.77] 回傳 {ticker: (資料日, 預期日)} — 資料日早於該市場預期交易日者。
-
-    刻意不做「整批一致 → 視為休市不報」的推論：8/4 事故正是整批一致慢一天，
-    該推論會把真 bug 消音（漏報成本=反向操作 >> 誤報成本=多看一眼）。
-    市場歸屬沿用既有慣例：".TW" in ticker → 台股（含 .TWO），其餘美股。
-    """
-    stale = {}
-    for tk in tickers:
-        a = asof_map.get(tk)
-        exp = expected_map.get("TW" if ".TW" in tk else "US")
-        if a and exp and a < exp:  # "YYYY-MM-DD" 字典序 = 時間序
-            stale[tk] = (a, exp)
-    return stale
-
-
-@st.cache_data(ttl=21600, show_spinner=False)
-def get_expected_trade_dates(anchor):
-    """[V26.77] 回傳 {"US": "YYYY-MM-DD", "TW": "YYYY-MM-DD"}。
-    anchor 進 cache key — 錨點換了才重算。失敗回 {"_error": 原因}（Rule 12：
-    顯示層負責喊出來，這裡不靜默也不讓整頁掛掉）。"""
-    try:
-        from datetime import datetime as _dt, timezone as _tz
-        import pandas_market_calendars as mcal
-        now_tw = _dt.now(_tz.utc).replace(tzinfo=None) + timedelta(hours=8)
-        out = {}
-        for mk, cal_name in (("US", "NYSE"), ("TW", "XTAI")):
-            cal = mcal.get_calendar(cal_name)
-            days = cal.valid_days(start_date=(now_tw - timedelta(days=14)).date(),
-                                  end_date=now_tw.date())
-            out[mk] = _pick_expected_trade_date(
-                [d.strftime("%Y-%m-%d") for d in days], now_tw, mk)
-        return out
-    except Exception as _e:
-        return {"_error": f"{type(_e).__name__}: {_e}"}
 
 
 FINMIND_TOKEN = _get_secret("FINMIND_TOKEN", "")
@@ -2295,9 +2229,6 @@ def scan_watchlist_icons(tickers, lookback_days=5):
             # [V26.51] 順便記錄現價（持倉總表用）
             try:
                 icons.setdefault("_prices", {})[tk] = round(float(d["Close"].iloc[-1]), 2)
-                # [V26.77] 資料日：最後一根 K 棒自帶的日期。必須 strftime 成字串 —
-                #          date 物件會讓下游 json.dump 丟 TypeError 且被 except pass 吃掉（快取永遠寫不進）。
-                icons.setdefault("_prices_asof", {})[tk] = d.index[-1].strftime("%Y-%m-%d")
                 icons.setdefault("_prices_wk", {})[tk] = round(float(d["Close"].iloc[-6]), 2)  # [V26.63] 5日前收盤
                 icons.setdefault("_prices_yd", {})[tk] = round(float(d["Close"].iloc[-2]), 2)  # [V26.65] 昨日收盤
                 # [V26.69] 鐵板＝結構箱底(find_structural_box_bottom)；前高＝局部高點中高於現價的最近一個
@@ -2432,36 +2363,6 @@ def scan_watchlist_icons(tickers, lookback_days=5):
             icons.setdefault("_errors", {})[tk] = str(_e)[:60]
             continue
     return icons
-
-
-# [V26.76] 訊號方向過濾 — 供持倉 / 未持倉編輯表分別取用。
-#   scan_watchlist_icons() 產出的字串格式為 "{色點前綴}|{空白分隔的訊號}"，
-#   色點前綴是連在一起的字元（🟡🟣），後段是 token（🟢⬆ BUY 💎2 ...）。
-#   direction="exit"  → 持倉關心的：達標 / 死叉 / 過熱
-#   direction="entry" → 未持倉關心的：炒底 / 金叉 / 吸籌
-#   主力進出（🟢⬆ / 🔴⬇）是「狀態」不是「事件」，兩個方向都保留。
-_SIG_MONEYFLOW = ("🟢⬆", "🔴⬇")
-_SIG_PREFIX_KEEP = {"exit": ("🟡",), "entry": ("🟣",)}
-_SIG_TOKEN_KEEP = {
-    "exit":  ("SELL", "💰", "🔥") + _SIG_MONEYFLOW,
-    "entry": ("BUY", "💎", "🤫") + _SIG_MONEYFLOW,
-}
-
-
-def filter_signal_by_direction(raw, direction):
-    """把 scan_watchlist_icons() 的訊號字串濾成單一方向。找不到方向時 fail loud。"""
-    if direction not in _SIG_TOKEN_KEEP:
-        raise ValueError(f"filter_signal_by_direction: 未知方向 {direction!r}")
-    if not raw:
-        return ""
-    _pre, _sep, _rest = str(raw).partition("|")
-    if not _sep:            # 沒有分隔符 = 格式與預期不符，整串原樣退回（不靜默吞掉）
-        _pre, _rest = "", str(raw)
-    _keep_pre = _SIG_PREFIX_KEEP[direction]
-    _keep_tok = _SIG_TOKEN_KEEP[direction]
-    out = [c for c in _pre if c in _keep_pre]
-    out += [t for t in _rest.split() if t.startswith(_keep_tok)]
-    return " ".join(out).strip()
 
 
 
@@ -3446,7 +3347,6 @@ with st.sidebar:
                     st.session_state["_wl_prices"] = _cached["prices"]
                     st.session_state["_wl_prices_wk"] = _cached.get("prices_wk", {})  # [V26.63]
                     st.session_state["_wl_prices_yd"] = _cached.get("prices_yd", {})  # [V26.65]
-                    st.session_state["_wl_prices_asof"] = _cached.get("prices_asof", {})  # [V26.77]
                     st.session_state["_wl_prev_high"] = _cached.get("prev_high", {})  # [V26.69]
                     st.session_state["_wl_iron"] = _cached.get("iron", {})            # [V26.69]
                     st.session_state["_wl_scores"] = _cached.get("scores", {})
@@ -3476,7 +3376,6 @@ with st.sidebar:
             else:
                 _msg_clr = "今日尚無快取檔，直接按「🔍 掃描清單訊號」即可。"
             for _kc in ("_wl_icons", "_wl_prices", "_wl_prices_wk", "_wl_prices_yd",
-                        "_wl_prices_asof",  # [V26.77]
                         "_wl_prev_high", "_wl_iron", "_wl_scores", "_wl_src"):
                 st.session_state.pop(_kc, None)
             st.session_state["_cache_clr_msg"] = _msg_clr
@@ -3492,7 +3391,6 @@ with st.sidebar:
         # [V26.40] 分離診斷資訊
         _scan_errors = _icons.pop("_errors", {}) if isinstance(_icons, dict) else {}
         _scan_prices = _icons.pop("_prices", {}) if isinstance(_icons, dict) else {}
-        _scan_prices_asof = _icons.pop("_prices_asof", {}) if isinstance(_icons, dict) else {}  # [V26.77]
         _scan_prices_wk = _icons.pop("_prices_wk", {}) if isinstance(_icons, dict) else {}
         _scan_prices_yd = _icons.pop("_prices_yd", {}) if isinstance(_icons, dict) else {}
         _scan_prev_high = _icons.pop("_prev_high", {}) if isinstance(_icons, dict) else {}
@@ -3503,7 +3401,6 @@ with st.sidebar:
         st.session_state["_wl_src"] = f"本次掃描 {_dt_wl.now().strftime('%m/%d %H:%M:%S')}"  # [V26.71]
         st.session_state["_wl_prices_wk"] = _scan_prices_wk  # [V26.63] 5日前價
         st.session_state["_wl_prices_yd"] = _scan_prices_yd  # [V26.65] 昨日價
-        st.session_state["_wl_prices_asof"] = _scan_prices_asof  # [V26.77] 資料日
         st.session_state["_wl_prev_high"] = _scan_prev_high  # [V26.69] 前高
         st.session_state["_wl_iron"] = _scan_iron            # [V26.69] 鐵板
         st.session_state["_wl_scores"] = _scan_scores  # [V26.58] 格局分數供總表分組
@@ -3512,8 +3409,7 @@ with st.sidebar:
             _os_wl.makedirs(_wl_icon_dir, exist_ok=True)
             with open(_wl_icon_file, "w") as _fh:
                 json.dump({"icons": _icons, "prices": _scan_prices, "prices_wk": _scan_prices_wk,
-                           "prices_yd": _scan_prices_yd, "prices_asof": _scan_prices_asof,  # [V26.77]
-                           "prev_high": _scan_prev_high,
+                           "prices_yd": _scan_prices_yd, "prev_high": _scan_prev_high,
                            "iron": _scan_iron, "scores": _scan_scores}, _fh)
         except Exception:
             pass
@@ -3875,10 +3771,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.77" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V26.77" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V26.77" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.77")
+st.title("📡 掃描中心 V26.75" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V26.75" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V26.75" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.75")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -3896,35 +3792,11 @@ if cur_t == "__DASHBOARD__":
     if not _prices:
         st.info("尚未掃描現價。請先到左側控制台按「🔍 掃描清單訊號」，總表才有現價與訊號資料。")
     else:
-        # [V26.77] 資料日檢查 — 資料自帶日期 vs 交易日曆基準（8/4 整批慢一天事故的防線）
-        _asof_map = st.session_state.get("_wl_prices_asof", {})
-        if not _asof_map:
-            st.warning("⚠️ 本批資料沒有「資料日」（V26.77 前的舊快取）——無法驗證新舊。"
-                       "請按左側「🔄 清除今日快取」後重掃。")
-        else:
-            _exp_dates = get_expected_trade_dates(get_cache_anchor())
-            if "_error" in _exp_dates:
-                st.warning(f"⚠️ 交易日曆載入失敗，本次無法驗證資料日：{_exp_dates['_error']}"
-                           "（若是 ModuleNotFoundError，requirements.txt 需加 pandas-market-calendars）")
-            else:
-                _stale = _find_stale_asof(_asof_map, _exp_dates, _all_tk)
-                if _stale:
-                    _ex_t, (_ex_a, _ex_e) = sorted(_stale.items())[0]
-                    st.error(f"🔴 資料落後：{len(_stale)} 檔資料日早於最近交易日"
-                             f"（例：{_ex_t} 資料日 {_ex_a}，預期 {_ex_e}）。"
-                             f"落後時「現價」其實是前收、漲跌方向可能全反——先清快取重掃；"
-                             f"重掃仍落後代表上游（Yahoo）延遲，勿依本頁數據下單。"
-                             f"※ 台股臨時休市（颱風假）會誤報，屬預期行為。")
-                else:
-                    st.caption(f"✅ 資料日檢查通過（交易日基準：美股 {_exp_dates.get('US','—')}"
-                               f"｜台股 {_exp_dates.get('TW','—')}）")
-
         # [V26.71] 價格資料診斷 — 抓「現價寫錯」的現行犯
         with st.expander("🔧 價格資料診斷"):
             st.caption(f"資料來源：{st.session_state.get('_wl_src', '未知（可能是舊 session）')}")
             _dbg = [{"代碼": _t,
                      "現價": _prices.get(_t),
-                     "資料日": _asof_map.get(_t),  # [V26.77]
                      "昨日": st.session_state.get("_wl_prices_yd", {}).get(_t),
                      "5日前": st.session_state.get("_wl_prices_wk", {}).get(_t)}
                     for _t in _all_tk]
@@ -4099,16 +3971,11 @@ if cur_t == "__DASHBOARD__":
                 st.info("尚未輸入持倉，或未設定 Gist。可在下方表格填入成本與股數後儲存。")
         # [V26.63] #2 訊號圖示說明（總表補上，原本只在側邊掃描鈕）
         st.caption("訊號圖示：🟡達標　🟣炒底　🟢⬆吸籌　🔴⬇出貨　BUY／SELL（MACD 金／死叉）　🤫吸籌　💎N＝炒底N次　💰達標　🔥過熱（保鮮3交易日）")
-        # [V26.76] 兩張表的訊號欄已分方向過濾，說明清楚免得誤讀「沒訊號」
-        st.caption("⚠️ 訊號欄已分方向：**有持倉只顯示出場向**（🟡 💰 SELL 🔥）、"
-                   "**未持倉只顯示進場向**（🟣 💎 BUY 🤫），主力進出（🟢⬆／🔴⬇）兩邊都顯示。"
-                   "持倉表看不到 BUY 不代表沒有，要看完整訊號請開個股頁。")
         st.caption("💡 直接在「成本」「股數」欄輸入買進成本與持有股數，改完按「💾 儲存持倉」。台股 1 張＝1000 股。")
         # [V26.66] #2 拆兩區：有持倉（成本+股數都有）在上、未持倉在下，兩區皆可編輯、皆可存
         _hold_col_cfg = {
             "代碼": st.column_config.TextColumn("代碼", disabled=True, width="small"),
             "名稱": st.column_config.TextColumn("名稱", disabled=True, width="small"),
-            "訊號": st.column_config.TextColumn("訊號", disabled=True, width="small"),  # [V26.76]
             "現價": st.column_config.NumberColumn("現價", disabled=True, format="%.2f", width="small"),
             "日%": st.column_config.NumberColumn("日%", disabled=True, format="%+.1f%%", width="small"),  # [V26.74]
             "成本": st.column_config.NumberColumn("成本", min_value=0.0, format="%.2f", width="small"),
@@ -4121,15 +3988,7 @@ if cur_t == "__DASHBOARD__":
         else:
             _edit_df_held = _edit_df.copy(); _edit_df_unheld = _edit_df.copy()
 
-        # [V26.76] 訊號欄插在「名稱」後（index 2），持倉取出場向、未持倉取進場向。
-        #          注意：這一插會把後面所有欄位索引 +1，下面兩個 insert() 已同步調整。
-        for _sdf, _sdir in ((_edit_df_held, "exit"), (_edit_df_unheld, "entry")):
-            if "代碼" in _sdf.columns and "訊號" not in _sdf.columns:
-                _sdf.insert(2, "訊號",
-                            [filter_signal_by_direction(_icons_map.get(_t, ""), _sdir)
-                             for _t in _sdf["代碼"]])
-
-        # [V26.68] 有持倉區加「損益金額 / 損益%」兩欄（唯讀，插在 成本 與 股數 之間）
+        # [V26.68] 有持倉區加「損益金額 / 損益%」兩欄（唯讀，插在 訊號 與 成本 之間）
         if len(_edit_df_held):
             _pl_amt_col, _pl_pct_col = [], []
             for _, _hr in _edit_df_held.iterrows():
@@ -4142,8 +4001,8 @@ if cur_t == "__DASHBOARD__":
                 else:
                     _pl_amt_col.append("—")
                     _pl_pct_col.append(None)
-            _edit_df_held.insert(6, "損益金額", _pl_amt_col)  # [V26.76] +1（訊號欄插入後）
-            _edit_df_held.insert(7, "損益%", _pl_pct_col)
+            _edit_df_held.insert(5, "損益金額", _pl_amt_col)  # [V26.74] +1（日%欄插入後）
+            _edit_df_held.insert(6, "損益%", _pl_pct_col)
         _held_col_cfg = dict(_hold_col_cfg)
         _held_col_cfg["損益金額"] = st.column_config.TextColumn("損益金額", disabled=True, width="small")
         _held_col_cfg["損益%"] = st.column_config.NumberColumn("損益%", disabled=True, format="%.1f%%", width="small")
