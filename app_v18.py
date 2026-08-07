@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.78", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.79", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -64,6 +64,7 @@ st.markdown("""
 
 # --- 1. 資料系統 ---
 WATCHLIST_FILE, ANCHOR_FILE, TW_NAMES_FILE = "watchlist.json", "anchors.json", "tw_names.json"
+US_NAMES_FILE = "us_names.json"  # [V26.79] 美股名稱快取（yfinance shortName）
 DEFAULT_WATCHLISTS = {
     "🇺🇸 美持股": ['^IXIC', 'NVDA', 'TSM', 'AMD', 'QQQ', 'CRCL', 'TSLA', 'RXRX', 'MU',
                   'MSFT', 'SOFI', 'ASX', 'NKE', 'INTC', 'GLW', 'SNDK', 'WDC'],
@@ -1034,6 +1035,33 @@ def save_watchlists(data):
 # [修復 #7 v2] cache 只包住 API 網路查詢，file I/O 移到外層 get_stock_name 處理
 _TW_NAME_BAD_WORDS = ["Yahoo", "股市", "走勢", "無符合", "找不到", "代碼或名稱", "html", "TW", "TWO", "INC", "CORP", "LTD", "COMPANY"]
 
+# [V26.79] 美股名稱：yfinance shortName。掃描時本來就會建 Ticker 物件，
+#   邊際成本接近零；失敗一律回 None，由外層決定是否退回顯示代號。
+_US_NAME_BAD = ["N/A", "NONE", "NULL"]
+
+@st.cache_data(ttl=86400)
+def _query_us_name_api(ticker: str) -> str | None:
+    """純 API 查詢，不碰 file I/O。與 _query_tw_name_api 同一慣例。"""
+    try:
+        info = yf.Ticker(ticker).info or {}
+    except Exception:
+        return None
+    for key in ("shortName", "longName"):
+        n = (info.get(key) or "").strip()
+        # shortName 常是 "NVIDIA Corporation"；截掉法人字尾讓表格窄一點，
+        # 但不做更激進的清理——猜錯公司名比顯示得長更糟。
+        if n and n.upper() not in _US_NAME_BAD:
+            for suf in (" Corporation", " Incorporated", " Inc.", " Inc",
+                        " Corp.", " Corp", " Limited", " Ltd.", " Ltd",
+                        " Company", " Co.", " plc", " PLC", " N.V.", " S.A."):
+                if n.endswith(suf):
+                    n = n[: -len(suf)].rstrip(" ,")
+                    break
+            if n:
+                return n
+    return None
+
+
 @st.cache_data(ttl=86400)
 def _query_tw_name_api(ticker: str) -> str | None:
     """純 API 查詢，不碰任何 file I/O；結果由外層決定是否存檔。"""
@@ -1106,6 +1134,18 @@ def get_stock_name(ticker: str) -> str:
     base = ticker.split('.')[0]
     if base in us_map and not (".TW" in ticker or ".TWO" in ticker):
         return us_map[base]
+    if not (".TW" in ticker or ".TWO" in ticker) and not ticker.startswith("^"):
+        # [V26.79] 美股：與台股同結構 —— file cache 命中就不碰 API。
+        #   指數（^ 開頭）跳過：yfinance 對它們的 shortName 常是雜訊。
+        us_local = json_load(US_NAMES_FILE, {})
+        if ticker in us_local:
+            return us_local[ticker]
+        name = _query_us_name_api(ticker)
+        if name:
+            us_local[ticker] = name
+            json_save(US_NAMES_FILE, us_local)
+            return name
+        return ticker
     if ".TW" in ticker or ".TWO" in ticker:
         # --- 1. 讀 file cache，順便清理髒資料 ---
         local_map = json_load(TW_NAMES_FILE, {})
@@ -3876,10 +3916,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.78" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V26.78" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V26.78" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.78")
+st.title("📡 掃描中心 V26.79" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V26.79" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V26.79" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.79")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -3972,11 +4012,16 @@ if cur_t == "__DASHBOARD__":
                     _pe = _r.get("prev_eps_curr_qtr_avg")
                     _dir = (("↑" if _eps > _pe else "↓" if _eps < _pe else "→")
                             if (_eps is not None and _pe is not None) else "—")
+                    # [V26.79] 台廠月營收 YoY。比率在顯示端算，匯出端只送原始值。
+                    _rv, _ry = _r.get("rev_amount"), _r.get("rev_year_ago")
+                    _yoy = round((_rv / _ry - 1) * 100, 1) if (_rv and _ry) else None
                     _l1_rows.append({
                         "代碼": _r["ticker"],
                         "名稱": _r.get("name") or "",
                         "池": "訊號" if _r.get("pool") else _r.get("basket", ""),
                         "持有": "✓" if _r["ticker"] in _hold else "",
+                        "月營收": _r.get("rev_period") or "",
+                        "營收YoY%": _yoy,
                         "錨定收盤": _ac,
                         "目標均價": _tm,
                         "上檔%": _up,
@@ -3990,11 +4035,13 @@ if cur_t == "__DASHBOARD__":
                 _l1_df = pd.DataFrame(_l1_rows).sort_values(
                     ["淨向7d", "上檔%"], ascending=[False, False])
                 st.dataframe(_l1_df.style.format(
-                    {"錨定收盤": "{:.2f}", "目標均價": "{:.2f}", "上檔%": "{:+.1f}"},
+                    {"錨定收盤": "{:.2f}", "目標均價": "{:.2f}", "上檔%": "{:+.1f}",
+                     "營收YoY%": "{:+.1f}"},
                     na_rep="—"), width='stretch', hide_index=True, height=420)
                 st.caption("僅顯示，不構成訊號。淨向7d = Yahoo 統計 7 日內上修減下修的分析師數；"
                            "EPS日向 = 對上一個快照日的方向。x_*（x_semi / x_watch / x_control）"
-                           "不在訊號池，僅供統計量體與對照組。")
+                           "不在訊號池，僅供統計量體與對照組。"
+                           "月營收 = 台廠最新公布月份，YoY 對去年同月；美股無此欄。")
 
         # 組可編輯表格資料
         _editor_rows = []
