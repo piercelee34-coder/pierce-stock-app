@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.79", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.80", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3916,10 +3916,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.79" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V26.79" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V26.79" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.79")
+st.title("📡 掃描中心 V26.80" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V26.80" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V26.80" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.80")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -4034,10 +4034,17 @@ if cur_t == "__DASHBOARD__":
                     })
                 _l1_df = pd.DataFrame(_l1_rows).sort_values(
                     ["淨向7d", "上檔%"], ascending=[False, False])
-                st.dataframe(_l1_df.style.format(
-                    {"錨定收盤": "{:.2f}", "目標均價": "{:.2f}", "上檔%": "{:+.1f}",
-                     "營收YoY%": "{:+.1f}"},
-                    na_rep="—"), width='stretch', hide_index=True, height=420)
+                # [V26.80] 先用數值排序，再把顯示欄轉成字串。
+                #   原本靠 Styler 的 na_rep 呈現空值，但那在 Streamlit Cloud 的
+                #   pandas/Arrow 組合下把 None 直接印成 "None"（本機 pandas 3.0.2
+                #   會轉成 NaN 而正常顯示 —— 環境差異，沙箱測不出來）。
+                #   空字串是「月營收」欄一直以來就正確的做法，統一照抄。
+                for _c, _fmt in (("錨定收盤", "{:.2f}"), ("目標均價", "{:.2f}"),
+                                 ("上檔%", "{:+.1f}"), ("營收YoY%", "{:+.1f}")):
+                    _l1_df[_c] = [
+                        "" if (_v is None or pd.isna(_v)) else _fmt.format(_v)
+                        for _v in _l1_df[_c]]
+                st.dataframe(_l1_df, width='stretch', hide_index=True, height=420)
                 st.caption("僅顯示，不構成訊號。淨向7d = Yahoo 統計 7 日內上修減下修的分析師數；"
                            "EPS日向 = 對上一個快照日的方向。x_*（x_semi / x_watch / x_control）"
                            "不在訊號池，僅供統計量體與對照組。"
