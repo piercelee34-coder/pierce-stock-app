@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.77", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.78", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -758,6 +758,7 @@ def _gist_write(data):
 # 與上方 watchlist 專用函式並存，不互相影響。
 # ──────────────────────────────────────────────────────
 SNAPSHOT_FILE = "snapshots.json"
+CONSENSUS_L1_FILE = "consensus_l1.json"  # [V26.78] L1 共識雷達資料檔
 
 # [V26.48] 美元兌台幣固定匯率（持倉損益換算用；匯率變動時改這個數字即可）
 USD_TWD = 32.0
@@ -3875,10 +3876,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.77" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V26.77" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V26.77" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.77")
+st.title("📡 掃描中心 V26.78" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V26.78" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V26.78" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.78")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -3934,6 +3935,66 @@ if cur_t == "__DASHBOARD__":
             st.caption("比對方式：把可疑的代碼開個股頁，看現價是否一致。"
                        "若此表錯、個股頁對 → 是掃描寫入時出錯，請用左側「🔄 清除今日快取」後重掃，"
                        "並把這張表截圖回報。")
+
+        # ── [V26.78] 共識雷達（L1）─ 讀 sec_pipeline 匯出的 consensus_l1.json（Gist 同步）──
+        #   display-only：只呈現分析師共識與日對日方向，不進訊號、不進燈號。
+        #   L2（revision 方向當可交易訊號）要等 ~11 月驗證；這裡先讓資料可見。
+        with st.expander("🎯 共識雷達（L1）"):
+            if st.button("🔄 重新載入", key="btn_l1_reload"):
+                st.session_state.pop("_l1_data", None)
+            if "_l1_data" not in st.session_state:
+                st.session_state["_l1_data"] = _gist_read_file(CONSENSUS_L1_FILE)
+            _l1 = st.session_state.get("_l1_data")
+            if not (isinstance(_l1, dict) and _l1.get("rows")):
+                st.info("尚無共識資料。到本機管線目錄執行："
+                        "python consensus_log.py export --db sec.db --push")
+            else:
+                _l1_snap = _l1.get("snapshot_date", "?")
+                try:
+                    _l1_age = (datetime.now(timezone.utc).date()
+                               - datetime.strptime(_l1_snap, "%Y-%m-%d").date()).days
+                except Exception:
+                    _l1_age = None
+                    st.warning(f"⚠️ 共識快照日期無法解析：{_l1_snap}")
+                if _l1_age is not None and _l1_age > 3:
+                    st.warning(f"⚠️ 共識資料已 {_l1_age} 天未更新（快照日 {_l1_snap}）"
+                               "——檢查本機 sec_pipeline 排程是否停了。")
+                elif _l1_age is not None:
+                    st.caption(f"快照日（ET）：{_l1_snap}｜{_l1.get('n_rows')} 檔"
+                               f"｜匯出於 {_l1.get('exported_at', '?')}（UTC）")
+                _l1_rows = []
+                for _r in _l1["rows"]:
+                    _tm = _r.get("target_mean"); _ac = _r.get("anchor_close")
+                    _up = round((_tm / _ac - 1) * 100, 1) if (_tm and _ac) else None
+                    _u7 = _r.get("eps_rev_up_7d") or 0
+                    _d7 = _r.get("eps_rev_down_7d") or 0
+                    _eps = _r.get("eps_curr_qtr_avg")
+                    _pe = _r.get("prev_eps_curr_qtr_avg")
+                    _dir = (("↑" if _eps > _pe else "↓" if _eps < _pe else "→")
+                            if (_eps is not None and _pe is not None) else "—")
+                    _l1_rows.append({
+                        "代碼": _r["ticker"],
+                        "名稱": _r.get("name") or "",
+                        "池": "訊號" if _r.get("pool") else _r.get("basket", ""),
+                        "持有": "✓" if _r["ticker"] in _hold else "",
+                        "錨定收盤": _ac,
+                        "目標均價": _tm,
+                        "上檔%": _up,
+                        "EPS日向": _dir,
+                        "上修7d": _u7,
+                        "下修7d": _d7,
+                        "淨向7d": _u7 - _d7,
+                        "分析師": _r.get("n_analysts"),
+                        "財報日": _r.get("next_earnings_date") or "",
+                    })
+                _l1_df = pd.DataFrame(_l1_rows).sort_values(
+                    ["淨向7d", "上檔%"], ascending=[False, False])
+                st.dataframe(_l1_df.style.format(
+                    {"錨定收盤": "{:.2f}", "目標均價": "{:.2f}", "上檔%": "{:+.1f}"},
+                    na_rep="—"), width='stretch', hide_index=True, height=420)
+                st.caption("僅顯示，不構成訊號。淨向7d = Yahoo 統計 7 日內上修減下修的分析師數；"
+                           "EPS日向 = 對上一個快照日的方向。x_*（x_semi / x_watch / x_control）"
+                           "不在訊號池，僅供統計量體與對照組。")
 
         # 組可編輯表格資料
         _editor_rows = []
