@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.80", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.81", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1867,7 +1867,13 @@ def calculate_volume_profile(df, bins=40, filter_mask=None):
 
 
 def calculate_indicators(df):
-    if len(df) < 50:
+    # [V26.81] 門檻 50 -> 30。50 根會讓剛 IPO 的標的（SPCX 2026-06 掛牌，
+    #   當時約 40 根）整個 df 沒有任何指標欄，呼叫端拿 latest['MACD'] 直接
+    #   KeyError 炸掉整個 app。30 根足以讓 MACD(26)、RSI(14)、Vol_SMA5(5)
+    #   有意義；SMA_60 / SMA_200 這類長週期欄位仍會是 NaN，那是誠實的。
+    #   注意：這是下限閘門，對 30 根以上的標的執行路徑完全不變。
+    #   仍然保留閘門而非全拿掉：20 根算出來的均線是雜訊不是資料。
+    if len(df) < 30:
         return df
     df['SMA_5'] = df['Close'].rolling(5).mean()
     df['SMA_10'] = df['Close'].rolling(10).mean()
@@ -2205,6 +2211,13 @@ def get_relative_strength(ticker, stock_df):
 
 def detect_smart_money_status(df):
     if len(df) < 10:
+        return None
+    # [V26.81] 行數守衛不等於欄位守衛：calculate_indicators 對過短歷史
+    #   直接原樣返回，所以 10~29 根的 df 會通過上面那關卻沒有任何指標欄，
+    #   下面第一個 latest['AD_Line'] 就 KeyError。這是 analyze_strategic_
+    #   signals 同一個 bug 的第二個出口，一起堵。
+    _need = ('AD_Line', 'RSI', 'Bollinger_Lower')
+    if any(c not in df.columns for c in _need):
         return None
     latest = df.iloc[-1]
     price_now = latest['Close']
@@ -2583,7 +2596,27 @@ def analyze_strategic_signals(df):
     if df.empty:
         return {}
     latest = df.iloc[-1]
-    macd, signal = latest['MACD'], latest['Signal_Line']
+
+    # [V26.81] 指標欄可能不存在（calculate_indicators 對過短歷史提前返回）
+    #   或存在但為 NaN。兩種都不能直接進下面的 if/elif 鏈：NaN 的比較
+    #   全部回傳 False，會一路掉到 else，把「沒有資料」渲染成紅色空頭
+    #   訊號 —— 那比 KeyError 更糟，因為它不會叫。
+    #   取值方式沿用本檔既有慣例（見 analyze_* 其餘函式的
+    #   "in df.columns and not pd.isna" 寫法）。
+    def _ind(col):
+        if col not in df.columns:
+            return None
+        v = latest[col]
+        return None if pd.isna(v) else float(v)
+
+    macd, signal = _ind('MACD'), _ind('Signal_Line')
+    if macd is None or signal is None:
+        return {
+            "MACD_Text": "資料不足", "MACD_Color": "sig-gray",
+            "Vol_Text": "資料不足", "Vol_Color": "sig-gray",
+            "RSI_Text": "資料不足", "RSI_Color": "sig-gray",
+            "Summary": "📋 歷史過短，未計算", "Summary_Color": "sig-gray",
+        }
     if macd > signal and macd > 0:
         macd_text, macd_color = "零軸上金叉", "sig-green"
     elif macd > signal:
@@ -2593,16 +2626,20 @@ def analyze_strategic_signals(df):
     else:
         macd_text, macd_color = "零軸下死叉", "sig-red"
 
-    vol, vol_ma = latest['Volume'], latest['Vol_SMA5']
-    if vol > vol_ma * 1.5:
+    vol, vol_ma = _ind('Volume'), _ind('Vol_SMA5')
+    if vol is None or vol_ma is None or vol_ma <= 0:
+        vol_text, vol_color = "資料不足", "sig-gray"
+    elif vol > vol_ma * 1.5:
         vol_text, vol_color = "爆量", "sig-green"
     elif vol > vol_ma * 1.1:
         vol_text, vol_color = "量增", "sig-green"
     else:
         vol_text, vol_color = "量縮", "sig-gray"
 
-    rsi = latest['RSI']
-    if rsi > 70:
+    rsi = _ind('RSI')
+    if rsi is None:
+        rsi_text, rsi_color = "資料不足", "sig-gray"
+    elif rsi > 70:
         rsi_text, rsi_color = f"{rsi:.0f} 過熱", "sig-red"
     elif rsi < 30:
         rsi_text, rsi_color = f"{rsi:.0f} 超賣", "sig-green"
@@ -3916,10 +3953,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.80" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V26.80" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V26.80" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.80")
+st.title("📡 掃描中心 V26.81" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V26.81" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V26.81" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.81")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
