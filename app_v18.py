@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.81", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.82", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3953,10 +3953,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.81" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V26.81" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V26.81" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.81")
+st.title("📡 掃描中心 V26.82" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V26.82" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V26.82" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.82")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -4052,6 +4052,13 @@ if cur_t == "__DASHBOARD__":
                     # [V26.79] 台廠月營收 YoY。比率在顯示端算，匯出端只送原始值。
                     _rv, _ry = _r.get("rev_amount"), _r.get("rev_year_ago")
                     _yoy = round((_rv / _ry - 1) * 100, 1) if (_rv and _ry) else None
+                    # [V26.82] 財測 vs 共識落差。公司自己給的營收指引中點，
+                    #   對上分析師對同一季的共識。匯出端已處理配對（哪一筆指引
+                    #   還有效、財報日是否已過），這裡只算比率。
+                    #   絕大多數會是 ±1% —— 賣方共識通常照抄指引中點。
+                    #   會偏離的才值得看，稀有本身就是這欄的價值。
+                    _gm, _cr = _r.get("guid_rev_mid"), _r.get("rev_curr_qtr_avg")
+                    _gap = round((_gm / _cr - 1) * 100, 1) if (_gm and _cr) else None
                     _l1_rows.append({
                         "代碼": _r["ticker"],
                         "名稱": _r.get("name") or "",
@@ -4059,6 +4066,8 @@ if cur_t == "__DASHBOARD__":
                         "持有": "✓" if _r["ticker"] in _hold else "",
                         "月營收": _r.get("rev_period") or "",
                         "營收YoY%": _yoy,
+                        "財測季": _r.get("guid_period_end") or "",
+                        "財測差%": _gap,
                         "錨定收盤": _ac,
                         "目標均價": _tm,
                         "上檔%": _up,
@@ -4077,7 +4086,8 @@ if cur_t == "__DASHBOARD__":
                 #   會轉成 NaN 而正常顯示 —— 環境差異，沙箱測不出來）。
                 #   空字串是「月營收」欄一直以來就正確的做法，統一照抄。
                 for _c, _fmt in (("錨定收盤", "{:.2f}"), ("目標均價", "{:.2f}"),
-                                 ("上檔%", "{:+.1f}"), ("營收YoY%", "{:+.1f}")):
+                                 ("上檔%", "{:+.1f}"), ("營收YoY%", "{:+.1f}"),
+                                 ("財測差%", "{:+.1f}")):
                     _l1_df[_c] = [
                         "" if (_v is None or pd.isna(_v)) else _fmt.format(_v)
                         for _v in _l1_df[_c]]
@@ -4085,7 +4095,9 @@ if cur_t == "__DASHBOARD__":
                 st.caption("僅顯示，不構成訊號。淨向7d = Yahoo 統計 7 日內上修減下修的分析師數；"
                            "EPS日向 = 對上一個快照日的方向。x_*（x_semi / x_watch / x_control）"
                            "不在訊號池，僅供統計量體與對照組。"
-                           "月營收 = 台廠最新公布月份，YoY 對去年同月；美股無此欄。")
+                           "月營收 = 台廠最新公布月份，YoY 對去年同月；美股無此欄。"
+                           "財測差% = 公司營收指引中點 vs 分析師共識；空白代表無有效指引、"
+                           "或財報剛公布尚未更新。多數落在 ±1%（共識照抄指引），偏離才值得看。")
 
         # 組可編輯表格資料
         _editor_rows = []
