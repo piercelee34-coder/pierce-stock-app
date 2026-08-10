@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.82", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.83", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3953,10 +3953,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.82" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V26.82" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V26.82" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.82")
+st.title("📡 掃描中心 V26.83" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V26.83" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V26.83" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.83")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -4052,6 +4052,25 @@ if cur_t == "__DASHBOARD__":
                     # [V26.79] 台廠月營收 YoY。比率在顯示端算，匯出端只送原始值。
                     _rv, _ry = _r.get("rev_amount"), _r.get("rev_year_ago")
                     _yoy = round((_rv / _ry - 1) * 100, 1) if (_rv and _ry) else None
+                    # [V26.83] 覆蓋分層。上檔%排行榜天生偏袒薄覆蓋：目標均價
+                    #   是少數人的平均，人越少越容易被單一樂觀假設拉開。實測
+                    #   前段幾乎都是 1-3 位的檔（6442 +151%/1 位、POET +105%/
+                    #   1 位、SKHY +78%/3 位），而 INTC +15%/30 位反而在後段。
+                    #   不標的話，這張表會持續把「最少人看的」呈現成「最有潛力的」。
+                    #   注意 n_analysts 來自 earnings_estimate，是給 EPS 預估的
+                    #   人數，與給目標價的人數不必然相同 —— 所以標籤寫「覆蓋」
+                    #   而非「N 人給價」。
+                    _n = _r.get("n_analysts")
+                    if _n is None:
+                        _cov = ""
+                    elif _n <= 2:
+                        # 分歧度算不出來（high=low=mean），淨向7d 也失去意義：
+                        # 一個人改變主意就是 100% 修正。
+                        _cov = "⚠單一"
+                    elif _n <= 4:
+                        _cov = "薄"
+                    else:
+                        _cov = ""
                     # [V26.82] 財測 vs 共識落差。公司自己給的營收指引中點，
                     #   對上分析師對同一季的共識。匯出端已處理配對（哪一筆指引
                     #   還有效、財報日是否已過），這裡只算比率。
@@ -4071,6 +4090,7 @@ if cur_t == "__DASHBOARD__":
                         "錨定收盤": _ac,
                         "目標均價": _tm,
                         "上檔%": _up,
+                        "覆蓋": _cov,
                         "EPS日向": _dir,
                         "上修7d": _u7,
                         "下修7d": _d7,
@@ -4087,7 +4107,13 @@ if cur_t == "__DASHBOARD__":
                 #   空字串是「月營收」欄一直以來就正確的做法，統一照抄。
                 for _c, _fmt in (("錨定收盤", "{:.2f}"), ("目標均價", "{:.2f}"),
                                  ("上檔%", "{:+.1f}"), ("營收YoY%", "{:+.1f}"),
-                                 ("財測差%", "{:+.1f}")):
+                                 ("財測差%", "{:+.1f}"),
+                                 # [V26.83] 整數欄也要走這條路。缺分析師數的檔
+                                 # （LWLG 這類無覆蓋者）原本會讓 pandas 把整欄
+                                 # 轉成 float 並印出 NaN —— 跟 V26.80 修掉的
+                                 # None 外洩是同一個病，只是發生在另一欄。
+                                 ("上修7d", "{:.0f}"), ("下修7d", "{:.0f}"),
+                                 ("淨向7d", "{:.0f}"), ("分析師", "{:.0f}")):
                     _l1_df[_c] = [
                         "" if (_v is None or pd.isna(_v)) else _fmt.format(_v)
                         for _v in _l1_df[_c]]
@@ -4096,6 +4122,7 @@ if cur_t == "__DASHBOARD__":
                            "EPS日向 = 對上一個快照日的方向。x_*（x_semi / x_watch / x_control）"
                            "不在訊號池，僅供統計量體與對照組。"
                            "月營收 = 台廠最新公布月份，YoY 對去年同月；美股無此欄。"
+                           "覆蓋 ⚠單一 = 分析師 ≤2，其上檔%／淨向7d 不可與厚覆蓋檔比大小；薄 = 3-4 位。"
                            "財測差% = 公司營收指引中點 vs 分析師共識；空白代表無有效指引、"
                            "或財報剛公布尚未更新。多數落在 ±1%（共識照抄指引），偏離才值得看。")
 
