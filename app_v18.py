@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.83", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.84", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3953,10 +3953,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.83" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V26.83" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V26.83" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.83")
+st.title("📡 掃描中心 V26.84" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V26.84" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V26.84" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.84")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -4052,6 +4052,35 @@ if cur_t == "__DASHBOARD__":
                     # [V26.79] 台廠月營收 YoY。比率在顯示端算，匯出端只送原始值。
                     _rv, _ry = _r.get("rev_amount"), _r.get("rev_year_ago")
                     _yoy = round((_rv / _ry - 1) * 100, 1) if (_rv and _ry) else None
+                    # [V26.84] 共識重算偵測。Yahoo 的 eps_trend 是它自己對
+                    #   當季 EPS 預估的 90 日回顧，所以 current 與 7d 的差距
+                    #   直接告訴你「這個數字最近幾天被大幅改過」。
+                    #
+                    #   實測（ALAB，指引 2026-08-04 20:09 發布）：
+                    #     08-04 共識 360.8M → 08-07 479.2M → 08-09 550.6M
+                    #   共識花了 3 天開始動、5 天收斂到指引中點 550M。期間
+                    #   「財測差%」從 +14.8% 掉到 -0.1% —— 那 14.8% 不是機會，
+                    #   是共識還沒更新完。
+                    #
+                    #   所以這欄不是訊號，是**該列的資料品質旗標**：重算期間
+                    #   target_mean 同樣在變，上檔%、淨向7d 那幾欄一併不可信。
+                    #   優於「財測差%」之處在覆蓋率 —— 每一檔都有 eps_trend，
+                    #   而配得上有效指引的只有 13 檔。
+                    _tc, _t7, _t30 = (_r.get("eps_trend_current"),
+                                      _r.get("eps_trend_7d"),
+                                      _r.get("eps_trend_30d"))
+                    _chg = None
+                    if _tc is not None and _t7 not in (None, 0):
+                        _chg = abs(_tc / _t7 - 1) * 100
+                    if _chg is None:
+                        _fresh = ""
+                    elif _chg >= 10:
+                        # 7 日內變動 ≥10%：正在重算，整列數字都還在飄
+                        _fresh = "⚡重算中"
+                    elif _chg >= 3:
+                        _fresh = "微調"
+                    else:
+                        _fresh = ""
                     # [V26.83] 覆蓋分層。上檔%排行榜天生偏袒薄覆蓋：目標均價
                     #   是少數人的平均，人越少越容易被單一樂觀假設拉開。實測
                     #   前段幾乎都是 1-3 位的檔（6442 +151%/1 位、POET +105%/
@@ -4091,6 +4120,7 @@ if cur_t == "__DASHBOARD__":
                         "目標均價": _tm,
                         "上檔%": _up,
                         "覆蓋": _cov,
+                        "共識": _fresh,
                         "EPS日向": _dir,
                         "上修7d": _u7,
                         "下修7d": _d7,
@@ -4123,6 +4153,8 @@ if cur_t == "__DASHBOARD__":
                            "不在訊號池，僅供統計量體與對照組。"
                            "月營收 = 台廠最新公布月份，YoY 對去年同月；美股無此欄。"
                            "覆蓋 ⚠單一 = 分析師 ≤2，其上檔%／淨向7d 不可與厚覆蓋檔比大小；薄 = 3-4 位。"
+                           "共識 ⚡重算中 = EPS 預估 7 日內變動 ≥10%，通常是財報後分析師正在改；"
+                           "此時整列（上檔%、淨向7d、財測差%）都還在飄，約 5 天後穩定。"
                            "財測差% = 公司營收指引中點 vs 分析師共識；空白代表無有效指引、"
                            "或財報剛公布尚未更新。多數落在 ±1%（共識照抄指引），偏離才值得看。")
 
