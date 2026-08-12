@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.85", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.87", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3953,10 +3953,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.85" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V26.85" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V26.85" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.85")
+st.title("📡 掃描中心 V26.87" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V26.87" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V26.87" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.87")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -4147,7 +4147,62 @@ if cur_t == "__DASHBOARD__":
                     _l1_df[_c] = [
                         "" if (_v is None or pd.isna(_v)) else _fmt.format(_v)
                         for _v in _l1_df[_c]]
-                st.dataframe(_l1_df, width='stretch', hide_index=True, height=420)
+                # [V26.87] 從雷達直接跳到走勢圖。
+                #   st.dataframe 的儲存格無法觸發回呼，所以「點代碼」做不到；
+                #   改成兩條路：選列（on_select，Streamlit 1.35+）與下拉選單。
+                #   兩者都走既有的 current_ticker + st.rerun() 機制 —— 不開新
+                #   分頁、不重掃、瞬間切換。用超連結開新分頁會起一個獨立的
+                #   session，整個 app 連同資料抓取重跑一次，那反而更慢。
+                _l1_sel = None
+                try:
+                    _l1_ev = st.dataframe(
+                        _l1_df, width='stretch', hide_index=True, height=420,
+                        on_select="rerun", selection_mode="single-row",
+                        key="l1_table")
+                    _rows_sel = (_l1_ev.selection.rows
+                                 if hasattr(_l1_ev, "selection") else [])
+                    if _rows_sel:
+                        _l1_sel = str(_l1_df.iloc[_rows_sel[0]]["代碼"])
+                except TypeError:
+                    # 舊版 Streamlit 沒有 on_select；退回純顯示，下方選單仍可用。
+                    st.dataframe(_l1_df, width='stretch', hide_index=True,
+                                 height=420)
+
+                def _l1_goto(_code):
+                    """雷達存無後綴的 canonical 代碼（2330），但 app 的自選股
+                    與價格抓取用 Yahoo 符號（2330.TW / 3455.TWO）。這裡照
+                    exchange 補回後綴，補完若仍不在任何清單中就直接用原碼
+                    —— 個股頁本來就能顯示不在清單裡的標的。"""
+                    _ex = next((r.get("exchange") for r in _l1["rows"]
+                                if r["ticker"] == _code), None)
+                    _cand = (f"{_code}.TW" if _ex == "TWSE" else
+                             f"{_code}.TWO" if _ex == "TPEX" else _code)
+                    _known = {t for lst in load_watchlists().values() for t in lst}
+                    st.session_state['current_ticker'] = (
+                        _cand if _cand in _known or _ex in ("TWSE", "TPEX")
+                        else _code)
+
+                def _l1_goto_now(_code):
+                    """按鈕直接呼叫用（非 on_click 回呼）。回呼結束後 Streamlit
+                    本來就會自動重跑，在回呼裡呼叫 st.rerun() 會拋錯，所以
+                    兩種用法要分開。"""
+                    _l1_goto(_code)
+                    st.rerun()
+
+                _c1, _c2 = st.columns([3, 2])
+                with _c1:
+                    _pick = st.selectbox(
+                        "跳到走勢圖", ["（選擇代碼）"] + list(_l1_df["代碼"]),
+                        key="l1_jump_pick", label_visibility="collapsed")
+                with _c2:
+                    if st.button("📈 查看走勢圖", key="btn_l1_jump",
+                                 width='stretch',
+                                 disabled=_pick == "（選擇代碼）"):
+                        _l1_goto_now(_pick)
+                if _l1_sel:
+                    st.button(f"📈 查看 {_l1_sel} 走勢圖", key="btn_l1_rowjump",
+                              type="primary", width='stretch',
+                              on_click=_l1_goto, args=(_l1_sel,))
                 st.caption("僅顯示，不構成訊號。淨向7d = Yahoo 統計 7 日內上修減下修的分析師數；"
                            "EPS日向 = 對上一個快照日的方向。x_*（x_semi / x_watch / x_control）"
                            "不在訊號池，僅供統計量體與對照組。"
@@ -4534,7 +4589,10 @@ def _fred_latest(sid):
     """FRED CSV。表頭是 observation_date（不是舊文件的 DATE，2026-08-10 對
     實際回應確認過）；缺值寫成單一個 '.'，不跳過的話 float('.') 會在某個
     未來的假日才炸。"""
-    r = requests.get(_FRED_CSV.format(sid=sid), timeout=20,
+    # timeout 60：FRED 的 CSV 端點是即時產生檔案，冷啟動常超過 20 秒，
+    # 而 Streamlit Cloud 到 FRED 的延遲比本機高 —— 本機管線 timeout=25
+    # 從未逾時，雲端 20 秒兩項同時 ReadTimeout。這是慢，不是壞。
+    r = requests.get(_FRED_CSV.format(sid=sid), timeout=60,
                      headers={"User-Agent": "Mozilla/5.0"})
     r.raise_for_status()
     lines = [l for l in r.text.strip().splitlines() if l.strip()]
@@ -4558,7 +4616,7 @@ def _fred_latest(sid):
 def _cape_latest():
     """multpl 的 #current 區塊。刻意不掃全頁找數字：頁面上還有歷史極值
     44.19，掃描式解析會抓到它而不自知。"""
-    r = requests.get("https://www.multpl.com/shiller-pe", timeout=20,
+    r = requests.get("https://www.multpl.com/shiller-pe", timeout=30,
                      headers={"User-Agent": "Mozilla/5.0"})
     r.raise_for_status()
     m = re.search(r'id="current".{0,400}?Shiller PE Ratio</span>:</b>\s*'
