@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.84", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.85", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3953,10 +3953,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.84" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V26.84" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V26.84" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.84")
+st.title("📡 掃描中心 V26.85" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V26.85" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V26.85" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.85")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -4509,10 +4509,149 @@ if cur_t == "__DASHBOARD__":
 #   從個股頁底部移出，改由側邊欄「📡 掃描中心」(cur_t == "__SCANNER__") 進入。
 #   個股頁不再無條件跑全市場掃描；此函式所有相依 helper 均定義於呼叫點之前。
 # ==========================================================
+# ── [V26.85] 宏觀風險：掃描中心用，現抓不經管線 ──────────────────
+#   放在掃描中心而非雷達，是因為兩者回答不同問題：雷達是「哪一檔值得看」，
+#   宏觀是「我現在要不要動」。宏觀只在你準備出手前才需要，每天掛在眼前
+#   反而會被忽略 —— CAPE 目前 42.37 遠超閾值且一年可能不變號，放雷達會變成
+#   永遠亮著的紅字。
+#
+#   資料現抓、不依賴 sec_pipeline：管線那邊的 macro_pulse.py 繼續累積歷史，
+#   但兩邊互不依賴，一邊壞不影響另一邊。
+#
+#   原始的 17 項掃描清單裡只有這四項程式抓得到；其餘 13 項擋爬蟲、在 PDF 裡、
+#   或已改訂閱制。介面永遠不得顯示「7 項中觸發 N 項」—— 7 個硬閾值裡有 3 個
+#   根本沒被量測，把分母寫成 7 是製造假的安心。
+_MACRO_SPEC = {
+    "vix":         ("VIX", 25.0, "above", "short", "yfinance"),
+    "hy_oas":      ("HY 利差", 4.5, "above", "short", "FRED"),
+    "yield_curve": ("10Y-2Y", 0.0, "below", "short", "FRED"),
+    "cape":        ("Shiller CAPE", 30.0, "above", "long", "multpl"),
+}
+_FRED_CSV = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}"
+
+
+def _fred_latest(sid):
+    """FRED CSV。表頭是 observation_date（不是舊文件的 DATE，2026-08-10 對
+    實際回應確認過）；缺值寫成單一個 '.'，不跳過的話 float('.') 會在某個
+    未來的假日才炸。"""
+    r = requests.get(_FRED_CSV.format(sid=sid), timeout=20,
+                     headers={"User-Agent": "Mozilla/5.0"})
+    r.raise_for_status()
+    lines = [l for l in r.text.strip().splitlines() if l.strip()]
+    if len(lines) < 2 or not lines[0].split(",")[0].lower().startswith("observation"):
+        raise RuntimeError(f"{sid} 表頭非預期")
+    good = []
+    for l in lines[1:]:
+        p = l.split(",")
+        if len(p) < 2 or p[1].strip() in (".", ""):
+            continue
+        try:
+            good.append((p[0].strip(), float(p[1])))
+        except ValueError:
+            continue
+    if not good:
+        raise RuntimeError(f"{sid} 無有效觀測值")
+    d, v = good[-1]
+    return d, v, (good[-2][1] if len(good) > 1 else None)
+
+
+def _cape_latest():
+    """multpl 的 #current 區塊。刻意不掃全頁找數字：頁面上還有歷史極值
+    44.19，掃描式解析會抓到它而不自知。"""
+    r = requests.get("https://www.multpl.com/shiller-pe", timeout=20,
+                     headers={"User-Agent": "Mozilla/5.0"})
+    r.raise_for_status()
+    m = re.search(r'id="current".{0,400}?Shiller PE Ratio</span>:</b>\s*'
+                  r'([0-9]+\.[0-9]+)', r.text, re.S)
+    if not m:
+        raise RuntimeError("multpl 版面改變")
+    v = float(m.group(1))
+    if not 5 < v < 100:
+        raise RuntimeError(f"CAPE 解析出 {v}，超出合理範圍")
+    return datetime.now().strftime("%Y-%m-%d"), v, None
+
+
+def _vix_latest():
+    df = yf.Ticker("^VIX").history(period="1mo", auto_adjust=False)
+    c = df["Close"].dropna() if not df.empty else None
+    if c is None or c.empty:
+        raise RuntimeError("^VIX 無資料")
+    return (c.index[-1].date().strftime("%Y-%m-%d"), float(c.iloc[-1]),
+            float(c.iloc[-2]) if len(c) > 1 else None)
+
+
+@st.cache_data(ttl=3600)
+def fetch_macro_risk():
+    """四項各自獨立抓，一項失敗不影響其他三項（Rule 12：失敗要說出來）。"""
+    out = {}
+    for k, fn in (("vix", _vix_latest),
+                  ("hy_oas", lambda: _fred_latest("BAMLH0A0HYM2")),
+                  ("yield_curve", lambda: _fred_latest("T10Y2Y")),
+                  ("cape", _cape_latest)):
+        try:
+            d, v, prev = fn()
+            out[k] = {"date": d, "value": v, "prev": prev, "err": None}
+        except Exception as e:
+            out[k] = {"date": None, "value": None, "prev": None,
+                      "err": f"{type(e).__name__}: {e}"}
+    return out
+
+
+def render_macro_risk():
+    with st.expander("🌡️ 宏觀風險（4 項可自動取得）", expanded=False):
+        if st.button("🔄 重新抓取", key="btn_macro_reload"):
+            fetch_macro_risk.clear()
+        data = fetch_macro_risk()
+
+        short_ok, fired, failed = 0, 0, []
+        for k, (label, thresh, direction, horizon, _src) in _MACRO_SPEC.items():
+            d = data.get(k, {})
+            if d.get("err"):
+                failed.append(label)
+                continue
+            v = d["value"]
+            hit = v > thresh if direction == "above" else v < thresh
+            if horizon == "short":
+                short_ok += 1
+                fired += 1 if hit else 0
+
+        light = "🔴" if fired >= 2 else "🟡" if fired == 1 else "🟢"
+        st.markdown(f"### {light} 短期風險：可量測 {short_ok} 項中觸發 {fired} 項")
+
+        cols = st.columns(4)
+        for col, (k, (label, thresh, direction, horizon, src)) in zip(
+                cols, _MACRO_SPEC.items()):
+            d = data.get(k, {})
+            with col:
+                if d.get("err"):
+                    st.metric(label, "—")
+                    st.caption(f"🔴 {d['err'][:60]}")
+                    continue
+                v, prev = d["value"], d["prev"]
+                hit = v > thresh if direction == "above" else v < thresh
+                delta = f"{v - prev:+.2f}" if prev is not None else None
+                st.metric(f"{label}{' 🔴' if hit else ''}", f"{v:,.2f}", delta,
+                          delta_color="off")
+                sign = ">" if direction == "above" else "<"
+                tag = "長期" if horizon == "long" else "短期"
+                st.caption(f"[{tag}] 閾值 {sign}{thresh}｜{d['date']}｜{src}")
+
+        if failed:
+            st.warning(f"⚠️ {len(failed)} 項抓取失敗：{', '.join(failed)}"
+                       "（其餘仍可用，非全部失效）")
+        st.caption(
+            "長期指標（CAPE）不計入觸發統計：它一年可能都不變號，"
+            "併進去會讓計數永久卡住，整區就沒人看了。")
+        st.caption(
+            "ⓘ 另有 3 項硬閾值無法自動取得：BofA Bull & Bear、Insider Buy/Sell、"
+            "Margin Debt 連續 3 月。完整 17 項掃描請用原本的 prompt 手動跑。")
+
+
 def render_scanner_center():
     # ==========================================
     # 🎯 [V26.28] 個人清單訊號掃描器（按鈕觸發，掃自選股 / AI 目標）
     # ==========================================
+    render_macro_risk()
     st.markdown("---")
     st.header("🎯 個人清單訊號掃描")
 
