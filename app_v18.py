@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.93", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.94", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1129,26 +1129,40 @@ def resolve_tw_input(raw):
 
 
 # ── [V26.93] 分析師目標均價 ─────────────────────────────────────
-#   來源是 yfinance 的 targetMeanPrice。逐檔一次 .info 請求（約 1 秒），
-#   所以只對「有訊號的」個股查 —— 掃 1,000 檔美股不代表發 1,000 次請求。
-#   @st.cache_data 讓同一天重掃不重複付這個成本。
+#   來源是 yfinance 的 targetMeanPrice。逐檔一次 .info 請求（約 1 秒）。
+#
+#   [V26.94] 實跑證據：美股全市場掃出 778 檔命中，逐檔打 .info 後
+#   AAPL / ABNB / ACGL 全數回不到值 —— 這三檔不可能沒有分析師覆蓋，
+#   所以那是**限流**，不是無覆蓋。兩件事必須分開回報，否則畫面上的
+#   空白會被讀成「華爾街沒人追蹤蘋果」。
+#
+#   回傳 (value, state)：
+#     ("ok",   float)  有覆蓋
+#     ("none", None)   info 拿得到但沒有 targetMeanPrice → 真的無覆蓋
+#     ("fail", None)   請求失敗 / info 是空的 → 限流或網路問題，可重試
 #
 #   刻意不吃 pipeline 的 consensus_l1：那份只涵蓋 123 檔，且是否載入取決
 #   於使用者有沒有去過持倉總表。同一欄位在不同 session 有不同來源，比
 #   慢一點更糟 —— 你會不知道螢幕上的數字是哪來的。
 @st.cache_data(ttl=21600, show_spinner=False)
 def _query_target_mean(ticker: str):
-    """回傳 float 或 None。沒有分析師覆蓋、抓取失敗、值非正 → 一律 None，
-    由呼叫端決定退回技術目標。"""
+    """回傳 (state, value)，state ∈ {'ok', 'none', 'fail'}。"""
     try:
-        info = yf.Ticker(ticker).info or {}
+        info = yf.Ticker(ticker).info
     except Exception:
-        return None
+        return ("fail", None)
+    # info 是 None 或空 dict：Yahoo 沒回東西，不是「這檔沒有目標價」。
+    #   限流時走的就是這條路 —— 當成無覆蓋會把限流偽裝成事實。
+    if not info:
+        return ("fail", None)
+    raw_v = info.get("targetMeanPrice")
+    if raw_v is None:
+        return ("none", None)
     try:
-        v = float(info.get("targetMeanPrice"))
+        v = float(raw_v)
     except (TypeError, ValueError):
-        return None
-    return v if v > 0 else None
+        return ("none", None)
+    return ("ok", v) if v > 0 else ("none", None)
 
 
 def get_stock_name(ticker: str) -> str:
@@ -2367,38 +2381,50 @@ def scan_personal_signals(tickers, lookback_days=3):
             # 去重（同訊號同日只留一筆），日期新到舊
             uniq = list(dict.fromkeys(hits))
 
-            # [V26.93] 目標均價：分析師優先，抓不到退回技術目標。
-            #   兩者不是同一件事 —— 一個是「分析師覺得值多少」，一個是
-            #   「技術面下一個壓力在哪」。所以來源必須標出來，混在同一欄
-            #   而不說明哪個是哪個，等於讓你拿技術壓力當共識目標在看。
-            _tm = _query_target_mean(tk)
-            if _tm:
-                _tgt, _src = _tm, "👥 分析師"
-            elif threshold:
-                _tgt, _src = float(threshold), "📐 技術"
-            else:
-                _tgt, _src = None, "—"
-            _up = round((_tgt / price - 1) * 100, 1) if (_tgt and price) else None
-
             # [V26.93] 乖離抄底的迷你圖資料：掃描時已經算完指標，這裡留下
             #   尾段 120 根就不必為了畫圖再抓一次（命中 24 檔約省 10-20 秒）。
             #   只留乖離抄底、只留畫圖要用的欄位 —— 全部訊號全部欄位塞進
             #   session_state 會變成幾百萬個 cell。
+            _is_dip = any("乖離抄底" in s[0] for s in uniq)
             _mini = None
-            if any("乖離抄底" in s[0] for s in uniq):
+            if _is_dip:
                 _mc_cols = ["Open", "High", "Low", "Close", "SMA_20", "SMA_60",
                             "Bollinger_Upper", "Bollinger_Lower",
                             "ATR_Trailing_Stop", "MACD", "Signal_Line",
                             "MACD_Hist"]
                 _mini = d[[c for c in _mc_cols if c in d.columns]].tail(120).copy()
 
+            # [V26.94] 分析師目標與技術目標分成兩欄，不再互相取代 —— 一個是
+            #   「分析師覺得值多少」，一個是「技術面下一個壓力在哪」，讓後者
+            #   在前者缺席時頂上，等於默默換掉欄位語意。
+            #
+            #   分析師目標**只對乖離抄底那幾檔查**。778 檔逐檔打 .info 必被
+            #   限流（V26.93 實跑：AAPL/ABNB/ACGL 全數失敗），而限流回來的
+            #   空值跟「真的沒覆蓋」長得一模一樣。少打幾百次請求，剩下的才
+            #   信得過。沒查的標「未查」，不是空白 —— 空白會被讀成無覆蓋。
+            if _is_dip:
+                _an_state, _an = _query_target_mean(tk)
+            else:
+                _an_state, _an = "skip", None
+            _an_up = round((_an / price - 1) * 100, 1) if (_an and price) else None
+            _an_txt = {"ok": (f"{_an:.2f}" if _an else "—"),
+                       "none": "— 無覆蓋",
+                       "fail": "⚠ 抓取失敗",
+                       "skip": "未查"}[_an_state]
+
+            _tech = float(threshold) if threshold else None
+            _tech_up = round((_tech / price - 1) * 100, 1) if (_tech and price) else None
+
             out.append({
                 "代碼": tk,
                 "名稱": get_stock_name(tk),
                 "現價": round(price, 2),
-                "目標均價": round(_tgt, 2) if _tgt else None,
-                "上檔%": _up,
-                "來源": _src,
+                "分析師目標": _an_txt,
+                "分析師上檔%": _an_up,
+                "技術目標": round(_tech, 2) if _tech else None,
+                "技術上檔%": _tech_up,
+                "_an_state": _an_state,
+                "_an_value": _an,
                 "訊號": uniq,
                 "金叉": cross_info,
                 "_mini": _mini,
@@ -4051,10 +4077,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.93" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V26.93" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V26.93" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.93")
+st.title("📡 掃描中心 V26.94" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V26.94" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V26.94" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.94")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -5096,11 +5122,19 @@ def _render_dip_charts(res):
             with _col:
                 _dates = "、".join(
                     s[1] for s in _r["訊號"] if "乖離抄底" in s[0])
-                _tgt = _r.get("目標均價")
+                # [V26.94] 兩個目標都秀。分析師缺席時只寫狀態文字，不拿
+                #   技術目標頂上去冒充 —— 圖牆比表格更容易只掃一眼就下單。
+                _an_v, _tech_v = _r.get("_an_value"), _r.get("技術目標")
+                _bits = []
+                if _an_v:
+                    _bits.append(f"👥 {_an_v:.2f}（{_r.get('分析師上檔%')}%）")
+                else:
+                    _bits.append(f"👥 {_r.get('分析師目標', '未查')}")
+                if _tech_v:
+                    _bits.append(f"📐 {_tech_v}（{_r.get('技術上檔%')}%）")
                 st.markdown(
-                    f"**{_r['代碼']}**　{_r['名稱']}　`{_r['現價']}`"
-                    + (f"　→ {_tgt}（{_r.get('來源', '')}"
-                       f" {_r.get('上檔%')}%）" if _tgt else "")
+                    f"**{_r['代碼']}**　{_r['名稱']}　`{_r['現價']}`　"
+                    + "　".join(_bits)
                     + (f"　💎 {_dates}" if _dates else ""))
                 try:
                     st.plotly_chart(
@@ -5209,15 +5243,34 @@ def _render_personal_scan():
                     _table_rows.append({
                         "代碼": r["代碼"], "名稱": r["名稱"],
                         "現價": r["現價"],
-                        "目標均價": r.get("目標均價"),
-                        "上檔%": r.get("上檔%"),
-                        "來源": r.get("來源", "—"),
+                        "分析師目標": r.get("分析師目標", "未查"),
+                        "分析師上檔%": r.get("分析師上檔%"),
+                        "技術目標": r.get("技術目標"),
+                        "技術上檔%": r.get("技術上檔%"),
                         "訊號（類型 日期 金額）": _sig_txt,
                     })
                 st.dataframe(pd.DataFrame(_table_rows), width='stretch', hide_index=True)
-                st.caption("目標均價：👥 分析師 = yfinance targetMeanPrice；"
-                           "📐 技術 = 布林上軌／60 日高點（該檔無分析師覆蓋時的"
-                           "退路，不是共識目標）。上檔% 以現價為基準。")
+
+                # [V26.94] 分析師欄的三種缺值原因要用數字講清楚。只寫一句
+                #   「部分無資料」，你分不出是 Yahoo 沒覆蓋還是被限流擋掉 ——
+                #   前者是事實，後者重跑一次就有（Rule 12）。
+                _cnt = {"ok": 0, "none": 0, "fail": 0, "skip": 0}
+                for r in _res:
+                    _cnt[r.get("_an_state", "skip")] = _cnt.get(
+                        r.get("_an_state", "skip"), 0) + 1
+                st.caption(
+                    f"分析師目標（yfinance targetMeanPrice）只對 💎 乖離抄底 的"
+                    f" {_cnt['ok'] + _cnt['none'] + _cnt['fail']} 檔查詢："
+                    f"✅ 有覆蓋 {_cnt['ok']}｜— 無覆蓋 {_cnt['none']}｜"
+                    f"⚠ 抓取失敗 {_cnt['fail']}；其餘 {_cnt['skip']} 檔標「未查」"
+                    "（逐檔打 .info 會被 Yahoo 限流，全掃反而拿到一片假空值）。")
+                if _cnt["fail"]:
+                    st.warning(
+                        f"⚠️ {_cnt['fail']} 檔分析師目標抓取失敗（多半是限流，"
+                        "不是無覆蓋）。重按「開始掃描」可重試；已成功的有 6 小時"
+                        "快取，不會重複付成本。")
+                st.caption("技術目標 = 布林上軌／60 日高點，是技術面的下一個"
+                           "壓力位，不是共識目標。兩欄的上檔% 都以現價為基準。")
                 _render_dip_charts(_res)
 
 
