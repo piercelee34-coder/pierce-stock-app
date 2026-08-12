@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.87", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.88", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2295,6 +2295,46 @@ def scan_personal_signals(tickers, lookback_days=3):
                     elif "抄底" in status or "破底翻" in status:
                         hits.append(("💎 乖離抄底", md, round(float(row["Close"]), 2)))
 
+            # [V26.88] MACD 金叉分類，供雷達的「位階」欄使用。
+            #   ⭐/▲ 的差別經回測（1,691 筆、2 年）確認：兩者的 10 日勝率
+            #   都與隨機進場無顯著差異（55.5% vs 54.6%，差 0.8 個標準誤內），
+            #   **沒有預測力**。真正顯著的是進場位階 —— ▲ 平均落在前 20 日
+            #   高低區間的 51%，⭐ 落在 86%（差距是標準誤的 40 倍）。
+            #   所以它標的是「這個進場點貴不貴」，不是「會不會漲」。
+            # 先初始化，不依賴 for/else：那個結構在 break 離開時不會執行
+            # else，若第一圈就因資料過短 break，cross_info 會是未定義而
+            # NameError —— 而且只在短歷史的標的上發生（SPCX 這類新上市）。
+            cross_info = None
+            for back in range(lookback_days):
+                end = len(d) - back
+                if end < 61:
+                    break
+                sl = d.iloc[:end]
+                cur_, prv_ = sl.iloc[-1], sl.iloc[-2]
+                if not (cur_["MACD"] > cur_["Signal_Line"]
+                        and prv_["MACD"] <= prv_["Signal_Line"]):
+                    continue          # 這一天沒有金叉
+                ma20_, ma60_ = cur_["SMA_20"], cur_["SMA_60"]
+                if pd.isna(ma20_) or pd.isna(ma60_) or ma60_ <= 0:
+                    continue
+                _pos_zone = (cur_["MACD"] > 0
+                             and not pd.isna(cur_["Signal_Line"])
+                             and cur_["Signal_Line"] > 0)
+                _zero_x = cur_["MACD"] >= 0 and prv_["MACD"] < 0
+                _ma60_up = ma60_ > sl.iloc[max(0, end - 6)]["SMA_60"]
+                _star = (ma20_ >= ma60_) and (_pos_zone or _zero_x) and _ma60_up
+                _w20 = sl.iloc[-21:]
+                _lo, _hi = float(_w20["Low"].min()), float(_w20["High"].max())
+                _rank = ((float(cur_["Close"]) - _lo) / (_hi - _lo) * 100
+                         if _hi > _lo else None)
+                _dt = sl.index[-1]
+                hits.append(("⭐ 起漲確認" if _star else "▲ 零軸下金叉",
+                             f"{_dt.month}/{_dt.day}",
+                             round(float(cur_["Close"]), 2)))
+                cross_info = {"star": bool(_star), "rank": _rank,
+                              "date": f"{_dt.month}/{_dt.day}"}
+                break                 # 只取最近一次
+
             if not hits:
                 continue
             # 去重（同訊號同日只留一筆），日期新到舊
@@ -2304,6 +2344,7 @@ def scan_personal_signals(tickers, lookback_days=3):
                 "名稱": get_stock_name(tk),
                 "現價": round(price, 2),
                 "訊號": uniq,
+                "金叉": cross_info,
             })
         except Exception:
             continue
@@ -3953,10 +3994,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.87" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V26.87" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V26.87" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.87")
+st.title("📡 掃描中心 V26.88" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V26.88" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V26.88" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.88")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -4717,7 +4758,8 @@ def render_scanner_center():
         st.caption("掃描你的清單中，最近 3 個交易日出現 💰達標 / 🤫吸籌 / 💎乖離抄底 的個股")
         _scan_scope = st.radio(
             "掃描範圍",
-            ["📌 自選股清單", "🎯 AI 目標清單（242 檔，約 2-4 分鐘）"],
+            ["📌 自選股清單", "🎯 AI 目標清單（242 檔，約 2-4 分鐘）",
+             "🎯 共識雷達（管線 universe，約 2 分鐘）"],
             horizontal=True, key="sig_scan_scope",
         )
         if st.button("🔍 開始掃描", width='stretch', key="sig_scan_btn"):
@@ -4725,6 +4767,22 @@ def render_scanner_center():
             if _scan_scope.startswith("📌"):
                 _wls = st.session_state.get("watchlists", {})
                 _scan_tickers = [t for lst in _wls.values() for t in lst]
+            elif "共識雷達" in _scan_scope:
+                # [V26.88] 掃管線 universe。雷達有 120 檔而自選股只有 65，
+                #   兩邊的差集（記憶體線、x_watch、x_control 等）從來沒被掃過
+                #   —— 那些正是「你沒在追但管線在收」的標的。
+                #   代碼要補 Yahoo 後綴：雷達存無後綴的 canonical 代碼。
+                _l1c = st.session_state.get("_l1_data") or _gist_read_file(
+                    CONSENSUS_L1_FILE)
+                _rows_l1 = (_l1c or {}).get("rows") or []
+                _scan_tickers = [
+                    (f"{r['ticker']}.TW" if r.get("exchange") == "TWSE" else
+                     f"{r['ticker']}.TWO" if r.get("exchange") == "TPEX" else
+                     r["ticker"])
+                    for r in _rows_l1]
+                if not _scan_tickers:
+                    st.warning("讀不到共識雷達資料。先到持倉總表展開「共識雷達」"
+                               "載入一次，或確認管線已執行 export --push。")
             else:
                 # AI 目標清單：與 AI 目標掃描器同一份來源（去重）
                 _scan_tickers = list(dict.fromkeys(_SP100_CORE_TICKERS + _EXTRA_POPULAR_TICKERS))
