@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.91", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.92", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3998,10 +3998,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.91" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V26.91" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V26.91" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.91")
+st.title("📡 掃描中心 V26.92" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V26.92" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V26.92" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.92")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -4690,6 +4690,76 @@ def fetch_tw_universe(min_value: int = _TW_MIN_TRADE_VALUE):
     return list(dict.fromkeys(out)), diag
 
 
+# ── [V26.92] 美股全市場清單 ─────────────────────────────────────
+#   與台股同一個缺口：AI 目標清單只有 215 檔美股，全市場 5,000+ 檔
+#   普通股從來沒進過掃描範圍。
+#
+#   端點：Nasdaq 官方 screener（NYSE + NASDAQ + AMEX），download=true
+#   一次回全量。兩個已知限制，先講清楚：
+#     1. 伺服器檢查 User-Agent，不帶瀏覽器 UA 會無回應直到 timeout。
+#     2. 本端點的回應格式**尚未對實際回應驗證**（開發沙箱的 egress
+#        白名單沒有 api.nasdaq.com，連不出去）。首次實跑就是驗證：
+#        格式不符會走 ValueError 進 errors 顯示在畫面上，不會默默
+#        回空清單假裝成功（Rule 12）。
+#   rows 的兩種變體都接：data.rows（download=true）與
+#   data.table.rows（分頁模式）。
+_US_LIST_URL = ("https://api.nasdaq.com/api/screener/stocks"
+                "?tableonly=true&limit=25&offset=0&download=true")
+
+# 流動性門檻：日成交金額（lastsale × volume）≥ 2,000 萬美元。
+#   台股那個 3,000 萬台幣是對當日分位數量出來的；美股這個數字是
+#   **暫定值**，沙箱拿不到全量資料算不了分位數。首次實跑畫面會顯示
+#   留下幾檔，若遠離 800-1,500 檔的可掃區間，下一輪再校準。
+_US_MIN_DOLLAR_VOLUME = 20_000_000
+
+
+def _us_num(x):
+    """screener 的數字欄位帶 $ 與千分位逗號；空值是 '' 或 'NA'。"""
+    try:
+        return float(str(x).replace("$", "").replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+# 已知限制：「1-5 位純大寫字母」擋掉特別股（ABC^A）、權證（ABC+）、
+#   單位（ABC/U）與多股類代碼（BRK/A、BRK/B）。波克夏兩類都會被排除，
+#   但它本來就在 AI 目標清單裡，不靠這條路。ETF 不在 stocks screener
+#   端點內，不必另外濾。
+
+
+@st.cache_data(ttl=21600, show_spinner=False)   # 6 小時，與台股清單一致
+def fetch_us_universe(min_dollar_vol: int = _US_MIN_DOLLAR_VOLUME):
+    """回傳 (代碼清單, 診斷字典)。格式異常一律進 errors，不吞。"""
+    out, diag = [], {"us": None, "errors": []}
+    try:
+        resp = requests.get(_US_LIST_URL, timeout=90, headers={
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) "
+                           "Chrome/124.0 Safari/537.36"),
+            "Accept": "application/json",
+        })
+        data = resp.json().get("data") or {}
+        rows = data.get("rows") or (data.get("table") or {}).get("rows")
+        if not rows:
+            raise ValueError(
+                f"回應裡找不到 rows（HTTP {resp.status_code}，"
+                f"keys={list(data.keys())[:6]}）——端點格式可能已改")
+        plain = [r for r in rows
+                 if re.fullmatch(r"[A-Z]{1,5}", str(r.get("symbol", "")).strip())]
+        kept = []
+        for r in plain:
+            price = _us_num(r.get("lastsale"))
+            vol = _us_num(r.get("volume"))
+            if price and vol and price * vol >= min_dollar_vol:
+                kept.append(str(r["symbol"]).strip())
+        out = kept
+        diag["us"] = {"total": len(rows), "plain": len(plain), "kept": len(kept)}
+    except Exception as e:
+        diag["errors"].append(f"美股清單: {type(e).__name__}: {e}")
+
+    return list(dict.fromkeys(out)), diag
+
+
 _MACRO_SPEC = {
     "vix":         ("VIX", 25.0, "above", "short", "yfinance"),
     "hy_oas":      ("HY 利差", 4.5, "above", "short", "FRED"),
@@ -4840,6 +4910,18 @@ def render_macro_risk():
         "Margin Debt 連續 3 月。完整 17 項掃描請用原本的 prompt 手動跑。")
 
 
+# ── [V26.92] reversal_scanner 模組層級載入 ─────────────────────
+#   V26.89 把掃描中心拆成三個函式後，import guard 留在
+#   _render_personal_scan 的區域範圍裡，但 _render_ai_target_scan
+#   仍引用 _REV_AVAILABLE 與 _rev —— 兩顆 NameError（第一顆頁面
+#   載入即炸，第二顆修掉第一顆後按掃描才炸）。移到模組層級一次解決。
+try:
+    import reversal_scanner as _rev
+    _REV_AVAILABLE = True
+except ImportError:
+    _REV_AVAILABLE = False
+
+
 def render_scanner_center():
     # ==========================================
     # 🎯 [V26.28] 個人清單訊號掃描器（按鈕觸發，掃自選股 / AI 目標）
@@ -4867,7 +4949,8 @@ def _render_personal_scan():
             "掃描範圍",
             ["📌 自選股清單", "🎯 AI 目標清單（242 檔，約 2-4 分鐘）",
              "🎯 共識雷達（管線 universe，約 2 分鐘）",
-             "🇹🇼 台股全市場（約 900 檔，5-10 分鐘）"],
+             "🇹🇼 台股全市場（約 900 檔，5-10 分鐘）",
+             "🇺🇸 美股全市場（約 1,000 檔，5-12 分鐘）"],
             horizontal=True, key="sig_scan_scope",
         )
         if st.button("🔍 開始掃描", width='stretch', key="sig_scan_btn"):
@@ -4893,6 +4976,22 @@ def _render_personal_scan():
                     st.warning(_e)
                 if not _scan_tickers:
                     st.error("兩個市場的清單都取不到，無法掃描。")
+            elif "美股全市場" in _scan_scope:
+                # [V26.92] Nasdaq screener 全量 + 成交金額門檻。診斷數字
+                #   一律顯示：留下幾檔、原始幾筆，是判斷「門檻抓對沒」
+                #   的唯一依據，藏起來就沒得校準了。
+                _us_list, _us_diag = fetch_us_universe()
+                _scan_tickers = _us_list
+                _du = _us_diag.get("us")
+                st.caption(
+                    f"美股 {_du['kept']}/{_du['plain']} 檔"
+                    f"（原始 {_du['total']} 筆，其餘為特別股、權證與多股類代碼）"
+                    if _du else "美股：取得失敗")
+                st.caption(f"流動性門檻：日成交金額 ≥ ${_US_MIN_DOLLAR_VOLUME:,}")
+                for _e in _us_diag.get("errors", []):
+                    st.error(_e)
+                if not _scan_tickers:
+                    st.error("美股清單取不到，無法掃描。")
             elif "共識雷達" in _scan_scope:
                 # [V26.88] 掃管線 universe。雷達有 120 檔而自選股只有 65，
                 #   兩邊的差集（記憶體線、x_watch、x_control 等）從來沒被掃過
@@ -5249,12 +5348,6 @@ def _render_personal_scan():
     # ==========================================
     # 💡 反轉預警掃描器（v6 限定 S&P 100 成長股 + 訊號追蹤）
     # ==========================================
-    try:
-        import reversal_scanner as _rev
-        _REV_AVAILABLE = True
-    except ImportError:
-        _REV_AVAILABLE = False
-
     if _REV_AVAILABLE:
         st.markdown("---")
         rev_col1, rev_col2 = st.columns([5, 1])
