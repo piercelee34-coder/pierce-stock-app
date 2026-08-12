@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.88", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.90", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2328,9 +2328,13 @@ def scan_personal_signals(tickers, lookback_days=3):
                 _rank = ((float(cur_["Close"]) - _lo) / (_hi - _lo) * 100
                          if _hi > _lo else None)
                 _dt = sl.index[-1]
-                hits.append(("⭐ 起漲確認" if _star else "▲ 零軸下金叉",
-                             f"{_dt.month}/{_dt.day}",
-                             round(float(cur_["Close"]), 2)))
+                # [V26.89] 金叉不再進「訊號」欄。回測（1,691 筆、2 年）顯示
+                #   ⭐/▲ 的 10 日勝率與隨機進場沒有顯著差異 —— 它們沒有預測
+                #   力，放進訊號欄會被讀成買賣建議。達標與炒底不同：那兩個
+                #   描述的是「價格現在在哪」，是事實而非預測，不會誤導。
+                #   金叉的分類仍算出來存進 cross_info，供雷達顯示「進場位階」
+                #   —— 那是唯一在統計上顯著的維度（▲ 51% vs ⭐ 86%，差距是
+                #   標準誤的 40 倍）。
                 cross_info = {"star": bool(_star), "rank": _rank,
                               "date": f"{_dt.month}/{_dt.day}"}
                 break                 # 只取最近一次
@@ -3994,10 +3998,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.88" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V26.88" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V26.88" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.88")
+st.title("📡 掃描中心 V26.90" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V26.90" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V26.90" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.90")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -4697,61 +4701,95 @@ def fetch_macro_risk():
 
 
 def render_macro_risk():
-    with st.expander("🌡️ 宏觀風險（4 項可自動取得）", expanded=False):
-        if st.button("🔄 重新抓取", key="btn_macro_reload"):
+    st.header("🌡️ 宏觀風險")
+    st.caption("4 項可自動取得的指標。FRED 的 CSV 端點是即時產生檔案，"
+               "冷啟動可能要 30-60 秒。")
+
+    # [V26.90] 按了才抓。分頁化之後「切過去才執行」已經擋掉大部分不必要的
+    #   請求，但切過去那一次仍會抓 —— 而 FRED 冷啟動要半分鐘以上，只是
+    #   路過看一眼也得等。宏觀資料一天更新一次就夠，沒有即時性可言。
+    _mc1, _mc2 = st.columns([1, 3])
+    with _mc1:
+        if st.button("📡 抓取宏觀指標", key="btn_macro_fetch",
+                     type="primary", width='stretch'):
             fetch_macro_risk.clear()
-        data = fetch_macro_risk()
+            st.session_state["_macro_data"] = fetch_macro_risk()
+    with _mc2:
+        if st.session_state.get("_macro_data"):
+            st.caption("已載入。再按一次「抓取」可強制更新。")
 
-        short_ok, fired, failed = 0, 0, []
-        for k, (label, thresh, direction, horizon, _src) in _MACRO_SPEC.items():
-            d = data.get(k, {})
+    data = st.session_state.get("_macro_data")
+    if not data:
+        st.info("按上方「📡 抓取宏觀指標」載入。VIX 走 yfinance、"
+                "HY 利差與殖利率曲線走 FRED、CAPE 走 multpl。")
+        st.caption("ⓘ 另有 3 項硬閾值無法自動取得：BofA Bull & Bear、"
+                   "Insider Buy/Sell、Margin Debt 連續 3 月。"
+                   "完整 17 項掃描請用原本的 prompt 手動跑。")
+        return
+
+    short_ok, fired, failed = 0, 0, []
+    for k, (label, thresh, direction, horizon, _src) in _MACRO_SPEC.items():
+        d = data.get(k, {})
+        if d.get("err"):
+            failed.append(label)
+            continue
+        v = d["value"]
+        hit = v > thresh if direction == "above" else v < thresh
+        if horizon == "short":
+            short_ok += 1
+            fired += 1 if hit else 0
+
+    light = "🔴" if fired >= 2 else "🟡" if fired == 1 else "🟢"
+    st.markdown(f"### {light} 短期風險：可量測 {short_ok} 項中觸發 {fired} 項")
+
+    cols = st.columns(4)
+    for col, (k, (label, thresh, direction, horizon, src)) in zip(
+            cols, _MACRO_SPEC.items()):
+        d = data.get(k, {})
+        with col:
             if d.get("err"):
-                failed.append(label)
+                st.metric(label, "—")
+                st.caption(f"🔴 {d['err'][:60]}")
                 continue
-            v = d["value"]
+            v, prev = d["value"], d["prev"]
             hit = v > thresh if direction == "above" else v < thresh
-            if horizon == "short":
-                short_ok += 1
-                fired += 1 if hit else 0
+            delta = f"{v - prev:+.2f}" if prev is not None else None
+            st.metric(f"{label}{' 🔴' if hit else ''}", f"{v:,.2f}", delta,
+                      delta_color="off")
+            sign = ">" if direction == "above" else "<"
+            tag = "長期" if horizon == "long" else "短期"
+            st.caption(f"[{tag}] 閾值 {sign}{thresh}｜{d['date']}｜{src}")
 
-        light = "🔴" if fired >= 2 else "🟡" if fired == 1 else "🟢"
-        st.markdown(f"### {light} 短期風險：可量測 {short_ok} 項中觸發 {fired} 項")
-
-        cols = st.columns(4)
-        for col, (k, (label, thresh, direction, horizon, src)) in zip(
-                cols, _MACRO_SPEC.items()):
-            d = data.get(k, {})
-            with col:
-                if d.get("err"):
-                    st.metric(label, "—")
-                    st.caption(f"🔴 {d['err'][:60]}")
-                    continue
-                v, prev = d["value"], d["prev"]
-                hit = v > thresh if direction == "above" else v < thresh
-                delta = f"{v - prev:+.2f}" if prev is not None else None
-                st.metric(f"{label}{' 🔴' if hit else ''}", f"{v:,.2f}", delta,
-                          delta_color="off")
-                sign = ">" if direction == "above" else "<"
-                tag = "長期" if horizon == "long" else "短期"
-                st.caption(f"[{tag}] 閾值 {sign}{thresh}｜{d['date']}｜{src}")
-
-        if failed:
-            st.warning(f"⚠️ {len(failed)} 項抓取失敗：{', '.join(failed)}"
-                       "（其餘仍可用，非全部失效）")
-        st.caption(
-            "長期指標（CAPE）不計入觸發統計：它一年可能都不變號，"
-            "併進去會讓計數永久卡住，整區就沒人看了。")
-        st.caption(
-            "ⓘ 另有 3 項硬閾值無法自動取得：BofA Bull & Bear、Insider Buy/Sell、"
-            "Margin Debt 連續 3 月。完整 17 項掃描請用原本的 prompt 手動跑。")
+    if failed:
+        st.warning(f"⚠️ {len(failed)} 項抓取失敗：{', '.join(failed)}"
+                   "（其餘仍可用，非全部失效）")
+    st.caption(
+        "長期指標（CAPE）不計入觸發統計：它一年可能都不變號，"
+        "併進去會讓計數永久卡住，整區就沒人看了。")
+    st.caption(
+        "ⓘ 另有 3 項硬閾值無法自動取得：BofA Bull & Bear、Insider Buy/Sell、"
+        "Margin Debt 連續 3 月。完整 17 項掃描請用原本的 prompt 手動跑。")
 
 
 def render_scanner_center():
     # ==========================================
     # 🎯 [V26.28] 個人清單訊號掃描器（按鈕觸發，掃自選股 / AI 目標）
     # ==========================================
-    render_macro_risk()
-    st.markdown("---")
+    # [V26.89] 三個功能改用分頁隔開。原本是三段循序排列，共用同一個捲動
+    #   位置：跑完個人掃描要往下捲很久才看得到 AI 目標掃描器，而宏觀風險
+    #   在最上面每次都先擋一次。分頁讓三者互不干擾，也讓「宏觀不要一進來
+    #   就自己抓」變成自然的行為 —— 沒切到那一頁就不會執行。
+    _sc_tabs = st.tabs(["🎯 個人清單訊號掃描", "🎯 AI 目標掃描器", "🌡️ 宏觀風險"])
+
+    with _sc_tabs[0]:
+        _render_personal_scan()
+    with _sc_tabs[1]:
+        _render_ai_target_scan()
+    with _sc_tabs[2]:
+        render_macro_risk()
+
+
+def _render_personal_scan():
     st.header("🎯 個人清單訊號掃描")
 
     if True:  # [V26.64] 新掃描器一律顯示（toggle 已移除）
@@ -5247,12 +5285,16 @@ def render_scanner_center():
             else:
                 st.caption("尚無歷史訊號紀錄（每次掃描到新訊號會自動加入）")
 
+
 
+def _render_ai_target_scan():
     # ==========================================
     # 🎯 [V26.02] AI 目標掃描器（可切換股票池：S&P 100 核心 / 擴大熱門 ~200）
     # ==========================================
+    if not _REV_AVAILABLE:
+        st.info("AI 目標掃描器需要 reversal_scanner 模組（未載入）。")
+        return
     if _REV_AVAILABLE:  # 共用 reversal_scanner 的 generate_monte_carlo_bands
-        st.markdown("---")
         tgt_hdr_col1, tgt_hdr_col2 = st.columns([5, 1])
         tgt_hdr_col1.header("🎯 AI 目標掃描器")
         if tgt_hdr_col2.button("🔄 強制刷新", key="target_force_refresh",
