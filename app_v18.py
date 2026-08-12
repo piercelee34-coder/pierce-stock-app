@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.92", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.93", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1126,6 +1126,29 @@ def resolve_tw_input(raw):
     # 試大寫後是否為代碼格式（含數字或英文）→ 視為代碼
     up = s.upper()
     return up
+
+
+# ── [V26.93] 分析師目標均價 ─────────────────────────────────────
+#   來源是 yfinance 的 targetMeanPrice。逐檔一次 .info 請求（約 1 秒），
+#   所以只對「有訊號的」個股查 —— 掃 1,000 檔美股不代表發 1,000 次請求。
+#   @st.cache_data 讓同一天重掃不重複付這個成本。
+#
+#   刻意不吃 pipeline 的 consensus_l1：那份只涵蓋 123 檔，且是否載入取決
+#   於使用者有沒有去過持倉總表。同一欄位在不同 session 有不同來源，比
+#   慢一點更糟 —— 你會不知道螢幕上的數字是哪來的。
+@st.cache_data(ttl=21600, show_spinner=False)
+def _query_target_mean(ticker: str):
+    """回傳 float 或 None。沒有分析師覆蓋、抓取失敗、值非正 → 一律 None，
+    由呼叫端決定退回技術目標。"""
+    try:
+        info = yf.Ticker(ticker).info or {}
+    except Exception:
+        return None
+    try:
+        v = float(info.get("targetMeanPrice"))
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 else None
 
 
 def get_stock_name(ticker: str) -> str:
@@ -2343,12 +2366,42 @@ def scan_personal_signals(tickers, lookback_days=3):
                 continue
             # 去重（同訊號同日只留一筆），日期新到舊
             uniq = list(dict.fromkeys(hits))
+
+            # [V26.93] 目標均價：分析師優先，抓不到退回技術目標。
+            #   兩者不是同一件事 —— 一個是「分析師覺得值多少」，一個是
+            #   「技術面下一個壓力在哪」。所以來源必須標出來，混在同一欄
+            #   而不說明哪個是哪個，等於讓你拿技術壓力當共識目標在看。
+            _tm = _query_target_mean(tk)
+            if _tm:
+                _tgt, _src = _tm, "👥 分析師"
+            elif threshold:
+                _tgt, _src = float(threshold), "📐 技術"
+            else:
+                _tgt, _src = None, "—"
+            _up = round((_tgt / price - 1) * 100, 1) if (_tgt and price) else None
+
+            # [V26.93] 乖離抄底的迷你圖資料：掃描時已經算完指標，這裡留下
+            #   尾段 120 根就不必為了畫圖再抓一次（命中 24 檔約省 10-20 秒）。
+            #   只留乖離抄底、只留畫圖要用的欄位 —— 全部訊號全部欄位塞進
+            #   session_state 會變成幾百萬個 cell。
+            _mini = None
+            if any("乖離抄底" in s[0] for s in uniq):
+                _mc_cols = ["Open", "High", "Low", "Close", "SMA_20", "SMA_60",
+                            "Bollinger_Upper", "Bollinger_Lower",
+                            "ATR_Trailing_Stop", "MACD", "Signal_Line",
+                            "MACD_Hist"]
+                _mini = d[[c for c in _mc_cols if c in d.columns]].tail(120).copy()
+
             out.append({
                 "代碼": tk,
                 "名稱": get_stock_name(tk),
                 "現價": round(price, 2),
+                "目標均價": round(_tgt, 2) if _tgt else None,
+                "上檔%": _up,
+                "來源": _src,
                 "訊號": uniq,
                 "金叉": cross_info,
+                "_mini": _mini,
             })
         except Exception:
             continue
@@ -3998,10 +4051,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.92" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V26.92" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V26.92" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.92")
+st.title("📡 掃描中心 V26.93" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V26.93" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V26.93" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.93")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -4940,6 +4993,127 @@ def render_scanner_center():
         render_macro_risk()
 
 
+# ── [V26.93] 乖離抄底走勢圖牆 ───────────────────────────────────
+#   主走勢圖是第 6600 行起、987 行的主流程 inline 程式碼，外部依賴 45 個
+#   變數（_mc、_funda、sr_info、ern_date、iron_price、vol_poc…）。要原封
+#   不動搬過來就得先把它抽成函式 —— 那是被明確延後的 modularization。
+#   而且主圖有 53 個 add_trace／標註，塞進一排三格的小圖是一團糊。
+#   所以這裡是「迷你版」：同一份指標、同一套配色慣例（布林黃虛線、
+#   MA20 洋紅、MA60 藍、ATR 橘虛線、MACD 白／黃線 + 綠紅柱），只留看
+#   趨勢必要的線。配色刻意與主圖一致，切過去不用重新認識圖表。
+_DIP_PER_PAGE = 24          # 一頁 24 檔，超過分頁
+_DIP_COLS = 3               # 一排三個
+
+
+def _mini_dip_fig(mini):
+    """單檔迷你圖：K 線 + MA20/60 + 布林通道 + ATR 停損，副圖 MACD。"""
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                        vertical_spacing=0.04, row_heights=[0.68, 0.32])
+
+    if "Bollinger_Upper" in mini.columns and "Bollinger_Lower" in mini.columns:
+        fig.add_trace(go.Scatter(
+            x=mini.index, y=mini["Bollinger_Upper"], mode="lines",
+            line=dict(color="rgba(253, 224, 71, 0.5)", width=1, dash="dot"),
+            hoverinfo="skip"), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=mini.index, y=mini["Bollinger_Lower"], mode="lines",
+            line=dict(color="rgba(253, 224, 71, 0.5)", width=1, dash="dot"),
+            fill="tonexty", fillcolor="rgba(253, 224, 71, 0.05)",
+            hoverinfo="skip"), row=1, col=1)
+
+    fig.add_trace(go.Candlestick(
+        x=mini.index, open=mini["Open"], high=mini["High"],
+        low=mini["Low"], close=mini["Close"], name="K線"), row=1, col=1)
+
+    for _c, _color, _w in (("SMA_20", "#d946ef", 1.6),
+                           ("SMA_60", "#2563eb", 1.6)):
+        if _c in mini.columns:
+            fig.add_trace(go.Scatter(
+                x=mini.index, y=mini[_c], mode="lines",
+                line=dict(color=_color, width=_w), hoverinfo="skip"),
+                row=1, col=1)
+
+    if "ATR_Trailing_Stop" in mini.columns:
+        fig.add_trace(go.Scatter(
+            x=mini.index, y=mini["ATR_Trailing_Stop"], mode="lines",
+            line=dict(color="#FF5F1F", width=1.2, dash="dot"),
+            hoverinfo="skip"), row=1, col=1)
+
+    if "MACD_Hist" in mini.columns:
+        _bar_colors = ["green" if v >= 0 else "red" for v in mini["MACD_Hist"]]
+        fig.add_trace(go.Bar(x=mini.index, y=mini["MACD_Hist"],
+                             marker_color=_bar_colors, hoverinfo="skip"),
+                      row=2, col=1)
+    for _c, _color in (("MACD", "white"), ("Signal_Line", "yellow")):
+        if _c in mini.columns:
+            fig.add_trace(go.Scatter(
+                x=mini.index, y=mini[_c], mode="lines",
+                line=dict(color=_color, width=1), hoverinfo="skip"),
+                row=2, col=1)
+
+    fig.update_layout(
+        height=260, template="plotly_dark", showlegend=False,
+        dragmode=False, xaxis_rangeslider_visible=False,
+        margin=dict(t=4, b=4, l=4, r=4), bargap=0)
+    fig.update_xaxes(showticklabels=False, row=1, col=1)
+    fig.update_yaxes(showgrid=False, row=2, col=1)
+    return fig
+
+
+def _render_dip_charts(res):
+    """一鍵展開所有「💎 乖離抄底」的走勢圖，一排三個、超過 24 檔分頁。"""
+    dips = [r for r in (res or []) if r.get("_mini") is not None]
+    if not dips:
+        return
+
+    st.markdown("---")
+    _hc1, _hc2 = st.columns([4, 1])
+    _hc1.markdown(f"#### 💎 乖離抄底走勢圖（{len(dips)} 檔）")
+    _open = st.session_state.get("_dip_charts_open", False)
+    if _hc2.button("📉 收合" if _open else "📉 一鍵展開",
+                   key="dip_charts_toggle", width='stretch'):
+        st.session_state["_dip_charts_open"] = not _open
+        st.rerun()
+    if not _open:
+        st.caption(f"展開後一排 {_DIP_COLS} 個，每頁最多 {_DIP_PER_PAGE} 檔。"
+                   "資料是掃描時就算好的，不會重抓。")
+        return
+
+    pages = (len(dips) + _DIP_PER_PAGE - 1) // _DIP_PER_PAGE
+    page = 1
+    if pages > 1:
+        page = st.selectbox(
+            "分頁", list(range(1, pages + 1)), key="dip_charts_page",
+            format_func=lambda p: (
+                f"第 {p} 頁（第 {(p - 1) * _DIP_PER_PAGE + 1}"
+                f"–{min(p * _DIP_PER_PAGE, len(dips))} 檔）"))
+    shown = dips[(page - 1) * _DIP_PER_PAGE: page * _DIP_PER_PAGE]
+
+    for _i in range(0, len(shown), _DIP_COLS):
+        _row = shown[_i:_i + _DIP_COLS]
+        _cols = st.columns(_DIP_COLS)
+        for _col, _r in zip(_cols, _row):
+            with _col:
+                _dates = "、".join(
+                    s[1] for s in _r["訊號"] if "乖離抄底" in s[0])
+                _tgt = _r.get("目標均價")
+                st.markdown(
+                    f"**{_r['代碼']}**　{_r['名稱']}　`{_r['現價']}`"
+                    + (f"　→ {_tgt}（{_r.get('來源', '')}"
+                       f" {_r.get('上檔%')}%）" if _tgt else "")
+                    + (f"　💎 {_dates}" if _dates else ""))
+                try:
+                    st.plotly_chart(
+                        _mini_dip_fig(_r["_mini"]), width='stretch',
+                        key=f"dipfig_{_r['代碼']}",
+                        config={"displayModeBar": False})
+                except Exception as _e:
+                    # Rule 12：單一檔畫不出來就講清楚是哪一檔為什麼，
+                    #   不要整面牆消失、也不要留一格空白讓人以為沒訊號。
+                    st.error(f"{_r['代碼']} 繪圖失敗："
+                             f"{type(_e).__name__}: {_e}")
+
+
 def _render_personal_scan():
     st.header("🎯 個人清單訊號掃描")
 
@@ -5034,9 +5208,17 @@ def _render_personal_scan():
                     )
                     _table_rows.append({
                         "代碼": r["代碼"], "名稱": r["名稱"],
-                        "現價": r["現價"], "訊號（類型 日期 金額）": _sig_txt,
+                        "現價": r["現價"],
+                        "目標均價": r.get("目標均價"),
+                        "上檔%": r.get("上檔%"),
+                        "來源": r.get("來源", "—"),
+                        "訊號（類型 日期 金額）": _sig_txt,
                     })
                 st.dataframe(pd.DataFrame(_table_rows), width='stretch', hide_index=True)
+                st.caption("目標均價：👥 分析師 = yfinance targetMeanPrice；"
+                           "📐 技術 = 布林上軌／60 日高點（該檔無分析師覆蓋時的"
+                           "退路，不是共識目標）。上檔% 以現價為基準。")
+                _render_dip_charts(_res)
 
 
     # ==========================================
