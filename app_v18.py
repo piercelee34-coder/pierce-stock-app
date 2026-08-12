@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.90", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.91", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3998,10 +3998,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.90" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V26.90" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V26.90" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.90")
+st.title("📡 掃描中心 V26.91" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V26.91" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V26.91" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.91")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -4621,7 +4621,76 @@ if cur_t == "__DASHBOARD__":
 #   原始的 17 項掃描清單裡只有這四項程式抓得到；其餘 13 項擋爬蟲、在 PDF 裡、
 #   或已改訂閱制。介面永遠不得顯示「7 項中觸發 N 項」—— 7 個硬閾值裡有 3 個
 #   根本沒被量測，把分母寫成 7 是製造假的安心。
-_MACRO_SPEC = {
+# ── [V26.91] 台股全市場清單 ─────────────────────────────────────
+#   AI 目標清單 215 檔全是美股，自選股 11 檔台股，共識雷達 27 檔台股 ——
+#   三個範圍加起來也掃不到川湖 2059（成交額 58.8 億、上市第 36 大）。
+#   缺的不是過濾邏輯，是清單本身從來沒有全市場。
+#
+#   端點與格式於 2026-08-12 對實際回應確認：
+#     上市 STOCK_DAY_ALL          1,379 筆 → 1,096 檔 4 位純數字普通股
+#     上櫃 daily_close_quotes    10,400 筆 →   889 檔（其餘 9,394 筆是
+#                                 020xxx/700xxx 權證，117 檔 00 開頭 ETF）
+#   兩邊的代碼欄位名不同（Code vs SecuritiesCompanyCode），成交額欄位名
+#   也不同（TradeValue vs TransactionAmount），不能共用解析。
+_TW_LIST_TWSE = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+_TW_LIST_TPEX = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
+
+# 流動性門檻。由當日成交額分位數決定，不是挑一個好看的數字：
+#   P10 79 萬 / P25 376 萬 / P50 2,429 萬 / P75 1.98 億
+#   P50 到 P75 之間跳了 8 倍 —— 那個斷層就是「有量」與「沒量」的分界。
+#   3,000 萬落在斷層起點，留下上市 516 檔（47%）。低於中位數的那一半
+#   最低八檔成交額是 0 到 4.8 萬，技術訊號在那種標的上沒有意義：你的
+#   掛單本身就會推動價格。
+_TW_MIN_TRADE_VALUE = 30_000_000
+
+
+def _tw_num(x):
+    """TWSE/TPEX 的金額欄位帶千分位逗號，停牌日則是 '--' 或空字串。"""
+    try:
+        return float(str(x).replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+# 已知限制：「4 位純數字」擋掉權證（020xxx/700xxx）、ETF（00xxxx）與
+# 特別股，但擋不掉 DR —— 9110 越南控-DR 也是四位數。實務上 DR 成交清淡，
+# 幾乎都會被流動性門檻濾掉（9110 當日成交額 33,190 元），所以不另外處理；
+# 若哪天有成交熱絡的 DR 混進掃描結果，這裡是原因。
+
+
+@st.cache_data(ttl=21600, show_spinner=False)   # 6 小時，與其他掃描器一致
+def fetch_tw_universe(min_value: int = _TW_MIN_TRADE_VALUE):
+    """回傳 (代碼清單, 診斷字典)。兩市場各自獨立抓，一邊失敗不影響另一邊。"""
+    out, diag = [], {"twse": None, "tpex": None, "errors": []}
+
+    try:
+        rows = requests.get(_TW_LIST_TWSE, timeout=60,
+                            headers={"User-Agent": "Mozilla/5.0"}).json()
+        plain = [r for r in rows if re.fullmatch(r"\d{4}", str(r.get("Code", "")))]
+        kept = [r for r in plain
+                if (_tw_num(r.get("TradeValue")) or 0) >= min_value]
+        out += [f"{r['Code']}.TW" for r in kept]
+        diag["twse"] = {"total": len(rows), "plain": len(plain), "kept": len(kept)}
+    except Exception as e:
+        diag["errors"].append(f"上市清單: {type(e).__name__}: {e}")
+
+    try:
+        rows = requests.get(_TW_LIST_TPEX, timeout=90,
+                            headers={"User-Agent": "Mozilla/5.0"}).json()
+        plain = [r for r in rows
+                 if re.fullmatch(r"\d{4}",
+                                 str(r.get("SecuritiesCompanyCode", "")))]
+        kept = [r for r in plain
+                if (_tw_num(r.get("TransactionAmount")) or 0) >= min_value]
+        out += [f"{r['SecuritiesCompanyCode']}.TWO" for r in kept]
+        diag["tpex"] = {"total": len(rows), "plain": len(plain), "kept": len(kept)}
+    except Exception as e:
+        diag["errors"].append(f"上櫃清單: {type(e).__name__}: {e}")
+
+    return list(dict.fromkeys(out)), diag
+
+
+_MACRO_SPEC = {
     "vix":         ("VIX", 25.0, "above", "short", "yfinance"),
     "hy_oas":      ("HY 利差", 4.5, "above", "short", "FRED"),
     "yield_curve": ("10Y-2Y", 0.0, "below", "short", "FRED"),
@@ -4797,7 +4866,8 @@ def _render_personal_scan():
         _scan_scope = st.radio(
             "掃描範圍",
             ["📌 自選股清單", "🎯 AI 目標清單（242 檔，約 2-4 分鐘）",
-             "🎯 共識雷達（管線 universe，約 2 分鐘）"],
+             "🎯 共識雷達（管線 universe，約 2 分鐘）",
+             "🇹🇼 台股全市場（約 900 檔，5-10 分鐘）"],
             horizontal=True, key="sig_scan_scope",
         )
         if st.button("🔍 開始掃描", width='stretch', key="sig_scan_btn"):
@@ -4805,6 +4875,24 @@ def _render_personal_scan():
             if _scan_scope.startswith("📌"):
                 _wls = st.session_state.get("watchlists", {})
                 _scan_tickers = [t for lst in _wls.values() for t in lst]
+            elif "台股全市場" in _scan_scope:
+                # [V26.91] 上市 + 上櫃普通股，過濾流動性。門檻與端點格式的
+                #   依據見 fetch_tw_universe 的註解 —— 都是對實際回應量出來
+                #   的，不是猜的。
+                _tw_list, _tw_diag = fetch_tw_universe()
+                _scan_tickers = _tw_list
+                _d1, _d2 = _tw_diag.get("twse"), _tw_diag.get("tpex")
+                st.caption(
+                    f"上市 {_d1['kept']}/{_d1['plain']} 檔" if _d1 else "上市：取得失敗")
+                st.caption(
+                    f"上櫃 {_d2['kept']}/{_d2['plain']} 檔"
+                    f"（原始 {_d2['total']} 筆，其餘為權證與 ETF）"
+                    if _d2 else "上櫃：取得失敗")
+                st.caption(f"流動性門檻：日成交額 ≥ {_TW_MIN_TRADE_VALUE:,} 元")
+                for _e in _tw_diag.get("errors", []):
+                    st.warning(_e)
+                if not _scan_tickers:
+                    st.error("兩個市場的清單都取不到，無法掃描。")
             elif "共識雷達" in _scan_scope:
                 # [V26.88] 掃管線 universe。雷達有 120 檔而自選股只有 65，
                 #   兩邊的差集（記憶體線、x_watch、x_control 等）從來沒被掃過
