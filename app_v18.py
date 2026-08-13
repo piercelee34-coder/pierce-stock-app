@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.94", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.95", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -4077,10 +4077,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.94" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V26.94" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V26.94" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.94")
+st.title("📡 掃描中心 V26.95" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V26.95" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V26.95" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.95")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -4786,10 +4786,16 @@ _US_LIST_URL = ("https://api.nasdaq.com/api/screener/stocks"
                 "?tableonly=true&limit=25&offset=0&download=true")
 
 # 流動性門檻：日成交金額（lastsale × volume）≥ 2,000 萬美元。
-#   台股那個 3,000 萬台幣是對當日分位數量出來的；美股這個數字是
-#   **暫定值**，沙箱拿不到全量資料算不了分位數。首次實跑畫面會顯示
-#   留下幾檔，若遠離 800-1,500 檔的可掃區間，下一輪再校準。
+#
+#   [V26.95] 實跑結果 2,099 檔，遠超預期的 800-1,500。原因是固定金額門檻
+#   會隨大盤量能漂移 —— 市場一熱，同一個 $20M 就放進兩倍的標的，掃描時間
+#   跟著失控，而你並沒有改任何設定。
+#
+#   改成「先過門檻、再取成交金額前 N 名」。門檻留著當地板（大盤極冷時
+#   擋掉爛標的），實際檔數由 N 決定，所以**每次掃描的規模是可預期的**。
+#   N 取 1,200：落在原本估的 800-1,500 區間，且約為 $20M 門檻結果的六成。
 _US_MIN_DOLLAR_VOLUME = 20_000_000
+_US_TOP_N = 1_200
 
 
 def _us_num(x):
@@ -4807,9 +4813,15 @@ def _us_num(x):
 
 
 @st.cache_data(ttl=21600, show_spinner=False)   # 6 小時，與台股清單一致
-def fetch_us_universe(min_dollar_vol: int = _US_MIN_DOLLAR_VOLUME):
-    """回傳 (代碼清單, 診斷字典)。格式異常一律進 errors，不吞。"""
-    out, diag = [], {"us": None, "errors": []}
+def fetch_us_universe(min_dollar_vol: int = _US_MIN_DOLLAR_VOLUME,
+                      top_n: int = _US_TOP_N):
+    """回傳 (代碼清單, 名稱對照, 診斷字典)。格式異常一律進 errors，不吞。
+
+    [V26.95] 名稱對照直接來自 screener 回應的 name 欄位 —— 這份資料本來就
+    在手上，之前卻丟掉，改去逐檔打 yfinance .info 查名字，結果整批被限流，
+    畫面上就變成 AA、AAOI、ABCL 這種「名稱等於代碼」。零額外請求就能解。
+    """
+    out, names, diag = [], {}, {"us": None, "errors": []}
     try:
         resp = requests.get(_US_LIST_URL, timeout=90, headers={
             "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -4825,18 +4837,33 @@ def fetch_us_universe(min_dollar_vol: int = _US_MIN_DOLLAR_VOLUME):
                 f"keys={list(data.keys())[:6]}）——端點格式可能已改")
         plain = [r for r in rows
                  if re.fullmatch(r"[A-Z]{1,5}", str(r.get("symbol", "")).strip())]
-        kept = []
+        passed = []          # (成交金額, 代碼, 名稱)
         for r in plain:
             price = _us_num(r.get("lastsale"))
             vol = _us_num(r.get("volume"))
             if price and vol and price * vol >= min_dollar_vol:
-                kept.append(str(r["symbol"]).strip())
-        out = kept
-        diag["us"] = {"total": len(rows), "plain": len(plain), "kept": len(kept)}
+                sym = str(r["symbol"]).strip()
+                passed.append((price * vol, sym, str(r.get("name") or "").strip()))
+        # 取成交金額前 N 名。先去重再截斷 —— 反過來的話重複代碼會佔掉名額，
+        # 實際檔數就會少於 N，而且少多少不固定。
+        passed.sort(key=lambda t: t[0], reverse=True)
+        seen = set()
+        for dv, sym, nm in passed:
+            if sym in seen:
+                continue
+            seen.add(sym)
+            out.append(sym)
+            if nm:
+                names[sym] = nm
+            if len(out) >= top_n:
+                break
+        diag["us"] = {"total": len(rows), "plain": len(plain),
+                      "passed": len(passed), "kept": len(out),
+                      "cutoff": passed[len(out) - 1][0] if out else None}
     except Exception as e:
         diag["errors"].append(f"美股清單: {type(e).__name__}: {e}")
 
-    return list(dict.fromkeys(out)), diag
+    return out, names, diag
 
 
 _MACRO_SPEC = {
@@ -5158,7 +5185,7 @@ def _render_personal_scan():
             ["📌 自選股清單", "🎯 AI 目標清單（242 檔，約 2-4 分鐘）",
              "🎯 共識雷達（管線 universe，約 2 分鐘）",
              "🇹🇼 台股全市場（約 900 檔，5-10 分鐘）",
-             "🇺🇸 美股全市場（約 1,000 檔，5-12 分鐘）"],
+             f"🇺🇸 美股全市場（成交金額前 {_US_TOP_N} 檔，4-8 分鐘）"],
             horizontal=True, key="sig_scan_scope",
         )
         if st.button("🔍 開始掃描", width='stretch', key="sig_scan_btn"):
@@ -5188,14 +5215,43 @@ def _render_personal_scan():
                 # [V26.92] Nasdaq screener 全量 + 成交金額門檻。診斷數字
                 #   一律顯示：留下幾檔、原始幾筆，是判斷「門檻抓對沒」
                 #   的唯一依據，藏起來就沒得校準了。
-                _us_list, _us_diag = fetch_us_universe()
+                _us_list, _us_names, _us_diag = fetch_us_universe()
                 _scan_tickers = _us_list
+
+                # [V26.95] screener 回應本來就帶公司名，寫進既有的美股名稱
+                #   快取檔，get_stock_name 就會 file cache 命中、完全不碰
+                #   yfinance .info —— 這是「名稱顯示成代碼」的根因。
+                #   已存在的名稱不覆蓋：手動修過或 yfinance 查到的優先。
+                if _us_names:
+                    try:
+                        _un_local = json_load(US_NAMES_FILE, {})
+                        _un_new = {k: v for k, v in _us_names.items()
+                                   if k not in _un_local}
+                        if _un_new:
+                            _un_local.update(_un_new)
+                            json_save(US_NAMES_FILE, _un_local)
+                        st.caption(f"名稱來源：screener 直接提供 {len(_us_names)} 檔"
+                                   f"（本次新增 {len(_un_new)} 筆到本地快取，"
+                                   "不需逐檔查 yfinance）")
+                    except Exception as _ne:
+                        # Rule 12：名稱寫檔失敗只會讓畫面顯示代碼，不該中斷
+                        #   掃描 —— 但也不能默默吞掉，否則你會以為根因沒修好。
+                        st.warning(f"名稱快取寫入失敗（畫面可能顯示代碼）："
+                                   f"{type(_ne).__name__}: {_ne}")
+
                 _du = _us_diag.get("us")
-                st.caption(
-                    f"美股 {_du['kept']}/{_du['plain']} 檔"
-                    f"（原始 {_du['total']} 筆，其餘為特別股、權證與多股類代碼）"
-                    if _du else "美股：取得失敗")
-                st.caption(f"流動性門檻：日成交金額 ≥ ${_US_MIN_DOLLAR_VOLUME:,}")
+                if _du:
+                    _cut = _du.get("cutoff")
+                    st.caption(
+                        f"美股 {_du['kept']} 檔 ＝ 過門檻 {_du['passed']} 檔中"
+                        f"成交金額前 {_US_TOP_N} 名"
+                        f"（普通股 {_du['plain']} 檔／原始 {_du['total']} 筆，"
+                        "其餘為特別股、權證與多股類代碼）")
+                    st.caption(
+                        f"門檻：日成交金額 ≥ ${_US_MIN_DOLLAR_VOLUME:,}"
+                        + (f"；本次實際入選線 ${_cut:,.0f}" if _cut else ""))
+                else:
+                    st.caption("美股：取得失敗")
                 for _e in _us_diag.get("errors", []):
                     st.error(_e)
                 if not _scan_tickers:
