@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.95", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.96", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2277,7 +2277,7 @@ def detect_smart_money_status(df):
     return None
 
 
-def scan_personal_signals(tickers, lookback_days=3):
+def scan_personal_signals(tickers, lookback_days=3, stats=None):
     """[V26.28] 掃描指定清單在『最近 lookback_days 個交易日』內出現的
     達標 / 吸籌 / 乖離抄底訊號。回傳 list of dict（一檔可多訊號合併一列）。
 
@@ -2285,8 +2285,32 @@ def scan_personal_signals(tickers, lookback_days=3):
       - 達標 = High >= get_technical_target_threshold(df)
       - 吸籌 / 乖離 = detect_smart_money_status(df)（對逐日切片各跑一次）
     批次下載（沿用 AI 目標掃描器作法），對 ~242 檔約 2-4 分鐘。
+
+    [V26.96] stats：傳一個 dict 進來就會被填上分布統計，不傳則行為完全不變
+    （回傳值的結構沒有動，既有呼叫端不受影響）。存在的理由是命中率無法從
+    回傳值反推 —— out 只有命中的檔，分母（實際成功評估幾檔）在函式裡才知道。
+    命中率若拿「清單長度」當分母會被低估：下載失敗與資料不足的檔本來就沒被
+    判定過，把它們算進分母等於把資料問題偽裝成訊號嚴格。
+
+    stats 欄位：
+      listed / evaluated              清單檔數、實際完成判定的檔數
+      skipped_no_data / skipped_short 下載空、歷史不足 80 根
+      skipped_nan / errors            指標算不出、逐檔例外
+      hit                             有任一訊號的檔數
+      hit_today                       訊號落在「最新一根 K」的檔數
+                                      （= 若把 lookback 收成 1 天會剩幾檔）
+      by_type   {訊號: 檔數}          同一檔多類型會各記一次
+      by_days   {天數: 檔數}          該檔在 lookback 窗內有幾個不同日子命中
+      by_combo  {類型組合: 檔數}      單一類型 vs 多類型並存
     """
     tickers = list(dict.fromkeys(tickers))
+    if stats is not None:
+        stats.update({"listed": len(tickers), "evaluated": 0,
+                      "skipped_no_data": 0, "skipped_short": 0,
+                      "skipped_nan": 0, "errors": 0,
+                      "hit": 0, "hit_today": 0,
+                      "by_type": {}, "by_days": {}, "by_combo": {},
+                      "lookback_days": lookback_days})
     try:
         batch = yf.download(tickers, period="1y", auto_adjust=False,
                             group_by="ticker", progress=False, threads=True)
@@ -2301,16 +2325,30 @@ def scan_personal_signals(tickers, lookback_days=3):
                 d = batch[tk].dropna(how="all").copy()
             else:
                 d = yf.Ticker(tk).history(period="1y", auto_adjust=False)
-            if d is None or d.empty or len(d) < 80:
+            if d is None or d.empty:
+                if stats is not None:
+                    stats["skipped_no_data"] += 1
+                continue
+            if len(d) < 80:
+                if stats is not None:
+                    stats["skipped_short"] += 1
                 continue
             if isinstance(d.columns, pd.MultiIndex):
                 d.columns = d.columns.get_level_values(0)
             d = calculate_indicators(d)
             if pd.isna(d["SMA_20"].iloc[-1]):
+                if stats is not None:
+                    stats["skipped_nan"] += 1
                 continue
+            if stats is not None:
+                stats["evaluated"] += 1
             threshold = get_technical_target_threshold(d)
             price = float(d["Close"].iloc[-1])
             hits = []   # (訊號, 日期, 金額)
+            # [V26.96] 分布統計用：這一檔命中了哪些「天」與哪些「類型」。
+            #   只寫進 stats，不進 hits/回傳值 —— 訊號欄的結構一動，
+            #   顯示端與 _render_dip_charts 都要跟著改，那不是這次要做的事。
+            _hit_backs, _hit_types = set(), set()
 
             # 對最近 lookback_days 天，各自模擬「那天是最後一根」的狀態
             for back in range(lookback_days):
@@ -2324,13 +2362,27 @@ def scan_personal_signals(tickers, lookback_days=3):
                 # 達標（最高價觸及技術目標）
                 if threshold and row["High"] >= threshold:
                     hits.append(("💰 達標", md, round(float(row["Close"]), 2)))
+                    _hit_backs.add(back); _hit_types.add("💰 達標")
                 # 吸籌 / 乖離抄底 / 破底翻（復用 detect_smart_money_status）
                 status = detect_smart_money_status(slice_df)
                 if status:
                     if "吸籌" in status:
                         hits.append(("🤫 吸籌", md, round(float(row["Close"]), 2)))
+                        _hit_backs.add(back); _hit_types.add("🤫 吸籌")
                     elif "抄底" in status or "破底翻" in status:
                         hits.append(("💎 乖離抄底", md, round(float(row["Close"]), 2)))
+                        _hit_backs.add(back); _hit_types.add("💎 乖離抄底")
+
+            if stats is not None and hits:
+                stats["hit"] += 1
+                if 0 in _hit_backs:
+                    stats["hit_today"] += 1
+                for _t in _hit_types:
+                    stats["by_type"][_t] = stats["by_type"].get(_t, 0) + 1
+                _nd = len(_hit_backs)
+                stats["by_days"][_nd] = stats["by_days"].get(_nd, 0) + 1
+                _combo = " + ".join(sorted(_hit_types))
+                stats["by_combo"][_combo] = stats["by_combo"].get(_combo, 0) + 1
 
             # [V26.88] MACD 金叉分類，供雷達的「位階」欄使用。
             #   ⭐/▲ 的差別經回測（1,691 筆、2 年）確認：兩者的 10 日勝率
@@ -2430,6 +2482,8 @@ def scan_personal_signals(tickers, lookback_days=3):
                 "_mini": _mini,
             })
         except Exception:
+            if stats is not None:
+                stats["errors"] += 1
             continue
     return out
 
@@ -4077,10 +4131,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.95" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V26.95" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V26.95" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.95")
+st.title("📡 掃描中心 V26.96" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V26.96" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V26.96" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.96")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -4866,7 +4920,7 @@ def fetch_us_universe(min_dollar_vol: int = _US_MIN_DOLLAR_VOLUME,
     return out, names, diag
 
 
-_MACRO_SPEC = {
+_MACRO_SPEC = {
     "vix":         ("VIX", 25.0, "above", "short", "yfinance"),
     "hy_oas":      ("HY 利差", 4.5, "above", "short", "FRED"),
     "yield_curve": ("10Y-2Y", 0.0, "below", "short", "FRED"),
@@ -5279,10 +5333,16 @@ def _render_personal_scan():
             if not _scan_tickers:
                 st.warning("清單為空，無可掃描的股票。")
             else:
+                # [V26.96] 帶一個 stats dict 進去收分布。掃描本身完全沒變 ——
+                #   訊號判定、門檻、lookback 都沒動，這一版只是把「命中率長什麼
+                #   樣」量出來，作為下一步要收緊訊號定義還是收緊當初篩的依據。
+                _sig_stats = {}
                 with st.spinner(f"正在掃描 {len(_scan_tickers)} 檔（批次下載中）..."):
-                    _sig_results = scan_personal_signals(_scan_tickers, lookback_days=3)
+                    _sig_results = scan_personal_signals(
+                        _scan_tickers, lookback_days=3, stats=_sig_stats)
                 st.session_state["_sig_scan_results"] = _sig_results
                 st.session_state["_sig_scan_scope_done"] = _scan_scope
+                st.session_state["_sig_scan_stats"] = _sig_stats
 
         # 顯示上次掃描結果
         _res = st.session_state.get("_sig_scan_results")
@@ -5327,6 +5387,84 @@ def _render_personal_scan():
                         "快取，不會重複付成本。")
                 st.caption("技術目標 = 布林上軌／60 日高點，是技術面的下一個"
                            "壓力位，不是共識目標。兩欄的上檔% 都以現價為基準。")
+
+                # ── [V26.96] 訊號分布診斷 ──────────────────────────────
+                #   問題：美股全市場 2,099 檔掃出 778 檔命中，三分之一亮燈，
+                #   等於沒有篩選力。但「該收緊訊號定義」還是「該收緊當初篩」
+                #   得看分布才知道 —— 兩者對訊號語意的影響完全不同：
+                #     收緊訊號定義 = 改變「什麼叫達標／抄底」，全站連動
+                #     收緊當初篩   = 訊號語意不變，只是少掃一些爛標的
+                #   在拿到這張表之前調任何一邊都是猜的。
+                _st = st.session_state.get("_sig_scan_stats") or {}
+                if _st.get("evaluated"):
+                    with st.expander("📐 訊號分布診斷（判斷篩選力用）", expanded=False):
+                        _ev = _st["evaluated"]
+                        _hit = _st.get("hit", 0)
+                        _d1, _d2, _d3 = st.columns(3)
+                        _d1.metric("命中率", f"{_hit/_ev*100:.1f}%",
+                                   f"{_hit} / {_ev} 檔")
+                        _today = _st.get("hit_today", 0)
+                        _d2.metric("若只看最新一日", f"{_today/_ev*100:.1f}%",
+                                   f"{_today} 檔（少 {_hit - _today}）",
+                                   delta_color="off")
+                        _multi = sum(v for k, v in (_st.get("by_days") or {}).items()
+                                     if k >= 2)
+                        _d3.metric("連續 ≥2 日命中",
+                                   f"{_multi/_hit*100:.1f}%" if _hit else "—",
+                                   f"{_multi} 檔", delta_color="off")
+
+                        st.caption(
+                            f"分母是**實際完成判定的 {_ev} 檔**，不是清單的 "
+                            f"{_st.get('listed', 0)} 檔 —— 下載空 "
+                            f"{_st.get('skipped_no_data', 0)}、歷史不足 80 根 "
+                            f"{_st.get('skipped_short', 0)}、指標 NaN "
+                            f"{_st.get('skipped_nan', 0)}、逐檔例外 "
+                            f"{_st.get('errors', 0)} 檔沒被判定過，"
+                            "把它們算進分母會讓命中率虛低。")
+
+                        _bt = _st.get("by_type") or {}
+                        if _bt:
+                            st.markdown("**各訊號類型命中檔數**（同一檔多類型各記一次）")
+                            st.dataframe(
+                                pd.DataFrame(
+                                    [{"訊號": k, "檔數": v,
+                                      "佔已判定%": round(v / _ev * 100, 1),
+                                      "佔命中%": round(v / _hit * 100, 1) if _hit else None}
+                                     for k, v in sorted(_bt.items(),
+                                                        key=lambda x: -x[1])]),
+                                hide_index=True, width='stretch')
+
+                        _bd = _st.get("by_days") or {}
+                        _bc = _st.get("by_combo") or {}
+                        _cc1, _cc2 = st.columns(2)
+                        with _cc1:
+                            st.markdown(
+                                f"**命中天數分布**（lookback "
+                                f"{_st.get('lookback_days', 3)} 日內有幾個不同日子命中）")
+                            st.dataframe(
+                                pd.DataFrame(
+                                    [{"命中天數": k, "檔數": v,
+                                      "佔命中%": round(v / _hit * 100, 1) if _hit else None}
+                                     for k, v in sorted(_bd.items())]),
+                                hide_index=True, width='stretch')
+                        with _cc2:
+                            st.markdown("**類型組合分布**")
+                            st.dataframe(
+                                pd.DataFrame(
+                                    [{"組合": k, "檔數": v,
+                                      "佔命中%": round(v / _hit * 100, 1) if _hit else None}
+                                     for k, v in sorted(_bc.items(),
+                                                        key=lambda x: -x[1])]),
+                                hide_index=True, width='stretch')
+
+                        st.caption(
+                            "**怎麼讀**：① 若某一類型單獨就佔掉大部分命中，"
+                            "問題在那一條判定式，收緊它就夠，不必動掃描母體。"
+                            "② 若「只看最新一日」就掉掉大半，那三日 OR 才是"
+                            "放大器，收 lookback 比改門檻便宜。"
+                            "③ 若三者都均勻且多為單日單類型，代表判定式本身"
+                            "在這個母體上就是鬆的，得改當初篩或加強度門檻。")
+
                 _render_dip_charts(_res)
 
 
@@ -5757,7 +5895,7 @@ def _render_personal_scan():
             else:
                 st.caption("尚無歷史訊號紀錄（每次掃描到新訊號會自動加入）")
 
-
+
 
 def _render_ai_target_scan():
     # ==========================================
@@ -8499,10 +8637,20 @@ if _CRISIS_AVAILABLE:
 # ==========================================
 if _INSIDER_AVAILABLE:
     st.markdown("---")
+    # [V26.96] 改按鈕觸發。原本每次進個股頁都無條件跑 _cached_insider()，
+    #   首次 2-3 分鐘、之後每次 rerun 也要重讀一次 disk cache —— 但你多數
+    #   時候進來只是看 K 線，根本沒要看內部人。
+    #
+    #   位置刻意不動（仍在個股頁這一段）：移到別頁不會讓查詢變快，只會讓
+    #   你多點一次；真正省時間的是「不按就不查」。
     # [V26.01] 標題列加強制刷新按鈕
-    ins_hdr_col1, ins_hdr_col2 = st.columns([5, 1])
+    ins_hdr_col1, ins_hdr_col2, ins_hdr_col3 = st.columns([4, 1, 1])
     ins_hdr_col1.header("🕵️ 內部人賣壓指數 (SEC Form 4)")
-    _force_insider_refresh = ins_hdr_col2.button(
+    _query_insider = ins_hdr_col2.button(
+        "🔍 查詢", key="insider_query",
+        help="抓 SEC Form 4（首次約 2-3 分鐘，同錨點內走快取）",
+    )
+    _force_insider_refresh = ins_hdr_col3.button(
         "🔄 強制刷新", key="insider_force_refresh",
         help="清除 cache 重新抓 SEC 資料（約 2-3 分鐘）",
     )
@@ -8533,6 +8681,12 @@ if _INSIDER_AVAILABLE:
     def _cached_insider(anchor):
         return insider_sentiment.get_insider_pressure_index(anchor=anchor)
 
+    # [V26.96] 查詢結果存 session_state：Streamlit 每次互動都重跑整份 script，
+    #   不存的話按鈕的效果活不過下一次 rerun（換個 tab 就白按了）。
+    #   連同抓取時的 anchor 一起存 —— 錨點換過就是舊資料，必須講出來
+    #   而不是靜靜地繼續顯示（Rule 12）。
+    insider = None
+    _ins_cached_at = None
     if _force_insider_refresh:
         # 清 Streamlit cache + 強制 module 端 force_refresh（會跳過 disk cache 重抓）
         st.cache_data.clear()
@@ -8545,12 +8699,34 @@ if _INSIDER_AVAILABLE:
             insider = None
         else:
             st.success("✅ 已重新抓取 SEC Form 4 資料")
-    else:
+        st.session_state["_insider_result"] = {
+            "anchor": _ins_anchor, "payload": insider}
+        _ins_cached_at = _ins_anchor
+    elif _query_insider:
         try:
             insider = _cached_insider(_ins_anchor)
         except Exception as e:
             st.error(f"內部人賣壓計算失敗：{e}")
             insider = None
+        st.session_state["_insider_result"] = {
+            "anchor": _ins_anchor, "payload": insider}
+        _ins_cached_at = _ins_anchor
+    else:
+        _ins_prev = st.session_state.get("_insider_result")
+        if _ins_prev:
+            insider = _ins_prev.get("payload")
+            _ins_cached_at = _ins_prev.get("anchor")
+            if _ins_cached_at != _ins_anchor:
+                st.warning(
+                    f"⚠️ 畫面上是錨點 `{_ins_cached_at}` 抓的資料，"
+                    f"目前錨點已是 `{_ins_anchor}`。按「🔍 查詢」更新。")
+        else:
+            st.info(
+                "🔍 **尚未查詢**。按上方「查詢」抓 SEC Form 4"
+                "（首次約 2-3 分鐘，同一錨點內再按走快取）。\n\n"
+                "未查詢時，下方「💼 資金面綜合風險指數」的美股欄不會給分數 —— "
+                "少了內部人這 40% 權重算出來的數字不是同一個指標，"
+                "不會用縮水版本冒充。")
 
     if insider and insider.get("data_status"):
         score = insider["score"]
@@ -8694,12 +8870,26 @@ if _CRISIS_AVAILABLE and _INSIDER_AVAILABLE:
     except Exception:
         _us_score = _tw_score = _ins_score = None
 
-    if _us_score is not None and _ins_score is not None:
+    # [V26.96] Form 4 改按鈕觸發後，_ins_score 在「還沒按查詢」時是 None。
+    #   原本的條件會讓整塊消失 —— 那等於用「區塊不見了」來表達「你還沒查」，
+    #   而它跟「crisis 引擎壞了」在畫面上長得一模一樣。
+    #
+    #   改成：只要空頭距離有分數就渲染整塊，美股欄在缺內部人時顯示等待提示。
+    #   刻意不退化成純空頭距離的數字 —— 0.6/0.4 的合成分跟 1.0 的空頭距離分
+    #   不是同一個指標，套同一張離場比例對應表會給出不同的減碼建議，而畫面上
+    #   看起來一樣。寧可不給數字，也不給一個會被當成綜合分的數字。
+    _ins_pending = _ins_score is None
+    if _us_score is not None or _tw_score is not None:
         st.markdown("---")
         st.header("💼 資金面綜合風險指數")
         # [V26.16] 指數/ETF 頁有大盤走勢崩跌資料 → 3 構面；個股頁無 → 維持 2 構面
         _has_crash = ("crash" in dir()) and isinstance(crash, dict) and (crash.get("score") is not None)
-        if _has_crash:
+        if _ins_pending:
+            st.caption(
+                "⏸️ **美股欄待解鎖**：綜合分數需要內部人賣壓，請先按上方"
+                "「🕵️ 內部人賣壓指數」的 **🔍 查詢**。台股欄不使用 SEC Form 4，照常顯示。"
+            )
+        elif _has_crash:
             st.caption(
                 "結合 **走勢崩跌（40%）+ 空頭距離（35%）+ 內部人賣壓（25%）** 給出單一綜合風險分數。"
                 "**離場比例** = 建議從股市撤出的部位百分比。"
@@ -8712,7 +8902,10 @@ if _CRISIS_AVAILABLE and _INSIDER_AVAILABLE:
 
         # 計算綜合風險
         # [V26.16] 走勢崩跌正規化：原始 0–18 → 0–100（上限 18 已查證）
-        if _has_crash:
+        if _ins_pending or _us_score is None:
+            _crash_norm = None
+            combined_us = None
+        elif _has_crash:
             _crash_norm = round(min(100.0, max(0.0, crash["score"] * 100.0 / 18.0)), 1)
             combined_us = round(0.40 * _crash_norm + 0.35 * _us_score + 0.25 * _ins_score, 1)
         else:
@@ -8791,7 +8984,29 @@ if _CRISIS_AVAILABLE and _INSIDER_AVAILABLE:
                     unsafe_allow_html=True,
                 )
 
-        _render_combined(c_us, combined_us, "美股綜合風險", "🇺🇸", has_insider=True)
+        # [V26.96] 等待提示要跟「資料不足」分開：前者按一下就有，後者是引擎
+        #   真的算不出來。共用一個 st.info("資料不足") 會讓你去查一個沒壞的東西。
+        if _ins_pending and _us_score is not None:
+            with c_us:
+                st.markdown(
+                    '<div style="background:#1a1a1c;padding:22px;border-radius:12px;'
+                    'border:2px dashed #555;text-align:center;min-height:210px;'
+                    'display:flex;flex-direction:column;justify-content:center;">'
+                    '<div style="color:#ddd;font-size:15px;font-weight:bold;'
+                    'margin-bottom:10px;">🇺🇸 美股綜合風險</div>'
+                    '<div style="color:#666;font-size:40px;line-height:1;">—</div>'
+                    '<div style="color:#facc15;font-size:13px;margin-top:12px;">'
+                    '⏸️ 等待內部人賣壓資料</div>'
+                    '<div style="color:#888;font-size:12px;margin-top:8px;'
+                    'line-height:1.5;">按上方「🕵️ 內部人賣壓指數」的<br>'
+                    '<b>🔍 查詢</b> 後即可計算</div>'
+                    f'<div style="color:#555;font-size:11px;margin-top:10px;">'
+                    f'（空頭距離已就緒：{_us_score:.1f}／缺內部人這一項）</div>'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+        else:
+            _render_combined(c_us, combined_us, "美股綜合風險", "🇺🇸", has_insider=True)
         _render_combined(c_tw, combined_tw, "台股綜合風險", "🇹🇼", has_insider=False)
 
         # [V26.19] 危險分項提示：列出當前 >=75 分的子指標，避免被平穩的綜合分埋沒
@@ -8817,12 +9032,19 @@ if _CRISIS_AVAILABLE and _INSIDER_AVAILABLE:
             st.markdown(_danger_hint("tw"), unsafe_allow_html=True)
 
         # [V26.16] 公式說明文字依構面數切換
+        # [V26.96] combined_us 可能是 None（尚未查內部人）→ 這裡不能無條件
+        #   f-string 格式化，否則 TypeError 會把整個 expander 炸掉。
         if _has_crash:
             _us_formula_label = "綜合風險 = 0.40 × 走勢崩跌 + 0.35 × 空頭距離 + 0.25 × 內部人賣壓"
-            _us_formula_now = f"0.40 × {_crash_norm:.1f} + 0.35 × {_us_score:.1f} + 0.25 × {_ins_score:.1f} = {combined_us:.1f}"
         else:
             _us_formula_label = "綜合風險 = 0.6 × 空頭距離 + 0.4 × 內部人賣壓"
+        if combined_us is None:
+            _us_formula_now = "尚未查詢內部人賣壓，無法計算（不以縮水權重代算）"
+        elif _has_crash:
+            _us_formula_now = f"0.40 × {_crash_norm:.1f} + 0.35 × {_us_score:.1f} + 0.25 × {_ins_score:.1f} = {combined_us:.1f}"
+        else:
             _us_formula_now = f"0.6 × {_us_score:.1f} + 0.4 × {_ins_score:.1f} = {combined_us:.1f}"
+        _tw_formula_now = f"{_tw_score:.1f}" if _tw_score is not None else "資料不足"
         with st.expander("💡 綜合風險指數怎麼算？", expanded=False):
             st.markdown(f"""
             #### 計算公式
@@ -8833,8 +9055,8 @@ if _CRISIS_AVAILABLE and _INSIDER_AVAILABLE:
             
             **台股**：直接用空頭距離分數（台股無 SEC Form 4 資料）
             
-            目前：`{_tw_score:.1f}` 
-            
+            目前：`{_tw_formula_now}`
+
             #### 離場比例對應表
             
             | 風險分數 | 建議離場 | 含義 |
