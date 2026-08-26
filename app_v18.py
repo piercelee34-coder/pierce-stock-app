@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.96", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V26.98", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1108,6 +1108,83 @@ def _query_tw_name_api(ticker: str) -> str | None:
     return None
 
 
+# ── [V26.98] 台股中文名：交易所官方端點一次撈全市場 ──────────────────
+#   實跑證據（2026-08-14 台股全市場掃描，251 檔命中）：
+#     .TW   167 檔 → 中文 156 (93.4%)｜英文 4｜只有代碼 7
+#     .TWO   84 檔 → 中文   6 ( 7.1%)｜英文 36 (42.9%)｜只有代碼 42 (50.0%)
+#   上櫃有中文名的比例只有 7%。原因是 _query_tw_name_api 的第一順位
+#   twse.com.tw/zh/api/codeQuery 是**上市**的查詢端點，上櫃代碼查不到；
+#   第二順位 cnyes 從 Streamlit Cloud（美國機房）常被擋；掉到第三順位
+#   Yahoo search 就只剩英文名。
+#
+#   而 fetch_tw_universe() 早就在打這兩個官方端點，**回應裡本來就帶中文
+#   公司名，卻被整個丟掉** —— 跟 V26.95 修掉的美股 screener 是同一個 bug，
+#   只是台股這邊沒人發現。零額外請求就能補上。
+#
+#   兩個端點的名稱欄位鍵名不同，而且我沒辦法在沙箱裡對實際回應驗證
+#   （連不到外網）。所以**不寫死單一鍵名**：候選鍵逐一嘗試，並把實際命中
+#   的鍵名記進 diag 回報。全部落空時回空表 + 原因，不假裝成功（Rule 12）。
+_TW_LIST_TWSE = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
+_TW_LIST_TPEX = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
+
+_TW_BULK_CODE_KEYS = ("Code", "SecuritiesCompanyCode")
+_TW_BULK_NAME_KEYS = ("Name", "CompanyName", "SecuritiesCompanyName",
+                      "CompanyChineseName")
+
+
+def _tw_pick(row, keys):
+    """從候選鍵裡取第一個非空值。端點改欄位名時不會整份靜默變空。"""
+    for k in keys:
+        v = row.get(k)
+        if v is not None and str(v).strip():
+            return str(v).strip()
+    return None
+
+
+@st.cache_data(ttl=86400, show_spinner=False)   # 一天一次；全市場只撈一趟
+def _query_tw_name_bulk():
+    """回傳 (代碼→中文名 dict, diag)。代碼含 .TW / .TWO 後綴。
+
+    只收含中文字的名稱 —— 這兩個端點偶爾會給英文簡稱，那種留給
+    _query_tw_name_api 的既有順位去處理，不要混進來假裝是官方中文名。
+    """
+    out, diag = {}, {"twse": None, "tpex": None, "errors": []}
+    for label, url, suffix, timeout in (
+            ("twse", _TW_LIST_TWSE, ".TW", 60),
+            ("tpex", _TW_LIST_TPEX, ".TWO", 90)):
+        try:
+            rows = requests.get(url, timeout=timeout,
+                                headers={"User-Agent": "Mozilla/5.0"}).json()
+            if not isinstance(rows, list) or not rows:
+                raise ValueError(f"回應不是非空 list（type={type(rows).__name__}）")
+            hit_key = None
+            n = 0
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                code = _tw_pick(r, _TW_BULK_CODE_KEYS)
+                name = _tw_pick(r, _TW_BULK_NAME_KEYS)
+                if not code or not name:
+                    continue
+                if not re.fullmatch(r"\d{4}", code):
+                    continue          # 權證 / ETF / 特別股，與清單同一條規則
+                if not re.search(r"[\u4e00-\u9fff]", name):
+                    continue          # 非中文不收
+                out[f"{code}{suffix}"] = name
+                n += 1
+                if hit_key is None:
+                    hit_key = next((k for k in _TW_BULK_NAME_KEYS
+                                    if str(r.get(k) or "").strip() == name), None)
+            diag[label] = {"total": len(rows), "named": n, "name_key": hit_key}
+            if n == 0:
+                diag["errors"].append(
+                    f"{label}: {len(rows)} 筆回應裡沒有任何中文名 —— "
+                    f"欄位名可能已改（試過 {list(_TW_BULK_NAME_KEYS)}）")
+        except Exception as e:
+            diag["errors"].append(f"{label}: {type(e).__name__}: {e}")
+    return out, diag
+
+
 # [V26.46] 台股中文名 → 代碼對照（226 檔，含 ETF；用於中文搜尋輸入）
 _TW_NAME_TO_CODE = {"台泥":"1101.TW", "亞泥":"1102.TW", "嘉泥":"1103.TW", "環泥":"1104.TW", "幸福":"1108.TW", "信大":"1109.TW", "東泥":"1110.TW", "味全":"1201.TW", "味王":"1203.TW", "大成":"1210.TW", "大飲":"1213.TW", "卜蜂":"1215.TW", "統一":"1216.TW", "愛之味":"1217.TW", "泰山":"1218.TW", "福壽":"1219.TW", "台榮":"1220.TW", "福懋油":"1225.TW", "佳格":"1227.TW", "聯華":"1229.TW", "聯華食":"1231.TW", "大統益":"1232.TW", "天仁":"1233.TW", "黑松":"1234.TW", "宏亞":"1236.TW", "台塑":"1301.TW", "南亞":"1303.TW", "台聚":"1304.TW", "華夏":"1305.TW", "亞聚":"1308.TW", "台達化":"1309.TW", "台苯":"1310.TW", "國喬":"1312.TW", "聯成":"1313.TW", "中石化":"1314.TW", "達新":"1315.TW", "東陽":"1319.TW", "台化":"1326.TW", "遠東新":"1402.TW", "新纖":"1409.TW", "新紡":"1419.TW", "福懋":"1434.TW", "南紡":"1440.TW", "力麗":"1444.TW", "力鵬":"1447.TW", "年興":"1451.TW", "宏益":"1452.TW", "集盛":"1455.TW", "聯發":"1459.TW", "台南":"1473.TW", "儒鴻":"1476.TW", "聚陽":"1477.TW", "士電":"1503.TW", "東元":"1504.TW", "中興電":"1513.TW", "亞力":"1514.TW", "力山":"1515.TW", "華城":"1519.TW", "堤維西":"1522.TW", "勤美":"1532.TW", "和大":"1536.TW", "中砂":"1560.TW", "信錦":"1582.TW", "亞德客-KY":"1590.TW", "華電":"1603.TW", "聲寶":"1604.TW", "華新":"1605.TW", "華榮":"1608.TW", "大亞":"1609.TW", "南僑":"1702.TW", "葡萄王":"1707.TW", "東聯":"1710.TW", "永光":"1711.TW", "興農":"1712.TW", "長興":"1717.TW", "台肥":"1722.TW", "中碳":"1723.TW", "喬山":"1736.TW", "美時":"1795.TW", "台玻":"1802.TW", "中釉":"1809.TW", "正隆":"1904.TW", "華紙":"1905.TW", "永豐餘":"1907.TW", "榮成":"1909.TW", "中鋼":"2002.TW", "東和鋼鐵":"2006.TW", "中鴻":"2014.TW", "豐興":"2015.TW", "大成鋼":"2027.TW", "新光鋼":"2031.TW", "上銀":"2049.TW", "南港":"2101.TW", "台橡":"2103.TW", "國際中橡":"2104.TW", "正新":"2105.TW", "建大":"2106.TW", "裕隆":"2201.TW", "中華":"2204.TW", "三陽工業":"2206.TW", "和泰車":"2207.TW", "耿鼎":"2222.TW", "光寶科":"2301.TW", "聯電":"2303.TW", "台達電":"2308.TW", "金寶":"2312.TW", "華通":"2313.TW", "鴻海":"2317.TW", "中環":"2323.TW", "仁寶":"2324.TW", "國巨":"2327.TW", "台積電":"2330.TW", "旺宏":"2337.TW", "華邦電":"2344.TW", "智邦":"2345.TW", "佳世達":"2352.TW", "宏碁":"2353.TW", "鴻準":"2354.TW", "英業達":"2356.TW", "華碩":"2357.TW", "致茂":"2360.TW", "藍天":"2362.TW", "金像電":"2368.TW", "大同":"2371.TW", "技嘉":"2376.TW", "微星":"2377.TW", "瑞昱":"2379.TW", "廣達":"2382.TW", "台光電":"2383.TW", "群光":"2385.TW", "研華":"2395.TW", "漢唐":"2404.TW", "南亞科":"2408.TW", "友達":"2409.TW", "中華電":"2412.TW", "京元電子":"2449.TW", "聯發科":"2454.TW", "可成":"2474.TW", "華新科":"2492.TW", "國產":"2504.TW", "興富發":"2542.TW", "長榮":"2603.TW", "裕民":"2606.TW", "陽明":"2609.TW", "華航":"2610.TW", "萬海":"2615.TW", "長榮航":"2618.TW", "台灣高鐵":"2633.TW", "彰銀":"2801.TW", "華南金":"2880.TW", "富邦金":"2881.TW", "國泰金":"2882.TW", "凱基金":"2883.TW", "玉山金":"2884.TW", "元大金":"2885.TW", "兆豐金":"2886.TW", "台新金":"2887.TW", "新光金":"2888.TW", "永豐金":"2890.TW", "中信金":"2891.TW", "第一金":"2892.TW", "統一超":"2912.TW", "大立光":"3008.TW", "聯詠":"3034.TW", "欣興":"3037.TW", "健鼎":"3044.TW", "台灣大":"3045.TW", "穩懋":"3105.TWO", "緯創":"3231.TW", "威剛":"3260.TWO", "欣銓":"3264.TWO", "鈊象":"3293.TWO", "創意":"3443.TW", "群創":"3481.TW", "力旺":"3529.TWO", "世芯-KY":"3661.TW", "日月光投控":"3711.TW", "東洋":"4105.TWO", "遠傳":"4904.TW", "和碩":"4938.TW", "臻鼎-KY":"4958.TW", "譜瑞-KY":"4966.TWO", "信驊":"5274.TWO", "世界":"5347.TWO", "中美晶":"5483.TWO", "中租-KY":"5871.TW", "上海商銀":"5876.TW", "合庫金":"5880.TW", "寶雅":"5904.TWO", "新普":"6121.TWO", "頎邦":"6147.TWO", "合晶":"6182.TWO", "力成":"6239.TW", "矽力*-KY":"6415.TW", "環球晶":"6488.TWO", "台塑化":"6505.TW", "緯穎":"6669.TW", "南電":"8046.TW", "元太":"8069.TWO", "群聯":"8299.TWO", "富邦媒":"8454.TW", "寶成":"9904.TW", "豐泰":"9910.TW", "美利達":"9914.TW", "巨大":"9921.TW", "裕融":"9941.TW", "潤泰新":"9945.TW", "元大台灣50":"0050.TW", "元大高股息":"0056.TW", "國泰永續高股息":"00878.TW", "群益台灣精選高息":"00919.TW", "復華台灣科技優息":"00929.TW", "富邦台50":"006208.TW", "元大台灣高息低波":"00713.TW", "國泰台灣5G+":"00881.TW", "元大台灣價值高息":"00940.TW", "統一台灣高息動能":"00939.TW", "長虹":"5534.TW", "汎銓":"6830.TW", "南茂":"8150.TW", "晶彩科":"3535.TW", "尖點":"8021.TW", "聯友金屬-創":"7610.TW", "明基材":"8215.TW", "富喬":"1815.TWO", "主動統一升級50":"00403A.TW"}
 
@@ -1166,7 +1243,14 @@ def _query_target_mean(ticker: str):
 
 
 def get_stock_name(ticker: str) -> str:
-    """外層負責 file cache 讀寫；API 查詢交給有 @st.cache_data 的 _query_tw_name_api。"""
+    """外層負責 file cache 讀寫；API 查詢交給有 @st.cache_data 的查詢函式。
+
+    [V26.98] 台股名稱的查詢順位（前面命中就不碰後面）：
+      1. tw_names.json  file cache
+      2. _query_tw_name_bulk()   交易所官方全市場中文名表（一天一趟）
+      3. _query_tw_name_api()    逐檔三段 fallback（TWSE codeQuery / cnyes / Yahoo）
+    2 擺在 3 前面是因為上櫃走 3 只有 7.1% 拿得到中文名，而且最壞每檔要 9 秒。
+    """
     us_map = {'NVDA': '輝達', 'TSLA': '特斯拉', 'AAPL': '蘋果', 'MU': '美光', 'TSM': '台積電', 'GOOGL': '谷歌'}
     base = ticker.split('.')[0]
     if base in us_map and not (".TW" in ticker or ".TWO" in ticker):
@@ -1196,7 +1280,21 @@ def get_stock_name(ticker: str) -> str:
         # --- 2. file cache 命中 → 直接回傳，不碰 API ---
         if ticker in local_map:
             return local_map[ticker]
-        # --- 3. file cache 未命中 → 走 API（有 st.cache_data 保護）---
+        # --- 2.5 [V26.98] 交易所官方全市場名稱表 ---
+        #   擺在逐檔 API 之前有兩個理由：
+        #   (a) 覆蓋率：上櫃中文名只有 7% 走得通逐檔那條路，官方端點是全的
+        #   (b) 速度：逐檔那條最壞要打 3 個 API（各 3 秒 timeout）＝ 每檔 9 秒，
+        #       84 檔上櫃就是 12 分鐘；bulk 一天只撈一趟，之後全走記憶體
+        try:
+            _bulk, _ = _query_tw_name_bulk()
+        except Exception:
+            _bulk = {}          # bulk 壞掉不該讓名稱解析整條斷掉
+        _bulk_name = _bulk.get(ticker)
+        if _bulk_name:
+            local_map[ticker] = _bulk_name
+            json_save(TW_NAMES_FILE, local_map)
+            return _bulk_name
+        # --- 3. 官方表也沒有 → 走逐檔 API（有 st.cache_data 保護）---
         name = _query_tw_name_api(ticker)
         # --- 4. 查到名稱才存檔，存檔與 API cache 完全分離 ---
         if name:
@@ -2277,7 +2375,30 @@ def detect_smart_money_status(df):
     return None
 
 
-def scan_personal_signals(tickers, lookback_days=3, stats=None):
+# ── [V26.97] 「達標」從狀態改成事件 ──────────────────────────────
+#   實跑證據（2026-08-14，兩個市場同時掃）：
+#     🇺🇸 前 1,200 檔 → 命中 366（30.5%），其中 279 檔有達標、275 檔**只有**達標
+#     🇹🇼 約 900 檔   → 命中 251（27.9%），其中 218 檔有達標、217 檔**只有**達標
+#   更關鍵的是母體從 2,099 砍到 1,200（-43%）後，命中率只從 37% 掉到 30% ——
+#   **縮小當初篩對篩選力幾乎沒有效果**，因為判定式對流動性不敏感。問題從頭
+#   到尾都在達標這一條。
+#
+#   為什麼舊定義會亮三成：threshold = min(布林上軌, 60 日高)，判定是
+#   High >= threshold。這在多頭盤等於「近期在高點附近」——本來就有三成。
+#   達標檔的技術上檔% 中位數只有 +1.0%（美）/ +3.1%（台），美股有 33% 現價
+#   已經超過目標、48% 貼在 ±2% 內。那是**狀態**（價格現在在哪），不是事件。
+#
+#   改法：加「近 tap_fresh_days 根都沒碰過」的新鮮度閘門，把「一直在高檔」
+#   跟「剛突破」分開。10 根 ≈ 兩週，聲稱的是「近兩週第一次觸及這個壓力位」。
+#
+#   ⚠️ 10 這個數字是推理來的，不是量出來的（沙箱連不到 Yahoo，無法實跑）。
+#   下面的 stats 會同時回報新舊兩套命中數，跑一次就知道該往哪調 —— 別再猜
+#   第二次。
+_TAP_FRESH_DAYS = 10
+
+
+def scan_personal_signals(tickers, lookback_days=3, stats=None,
+                          tap_fresh_days=_TAP_FRESH_DAYS):
     """[V26.28] 掃描指定清單在『最近 lookback_days 個交易日』內出現的
     達標 / 吸籌 / 乖離抄底訊號。回傳 list of dict（一檔可多訊號合併一列）。
 
@@ -2302,6 +2423,13 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None):
       by_type   {訊號: 檔數}          同一檔多類型會各記一次
       by_days   {天數: 檔數}          該檔在 lookback 窗內有幾個不同日子命中
       by_combo  {類型組合: 檔數}      單一類型 vs 多類型並存
+
+    [V26.97] 新增「舊規則對照」欄位。改動效果不能靠回憶上一版的數字比較 ——
+    同一次掃描裡把兩套規則都算出來，差異才是這個改動真正做到的事：
+      hit_legacy / by_type_legacy     若沒有新鮮度閘門會是幾檔
+      tap_suppressed                  被閘門擋掉達標的檔數
+      tap_suppressed_to_zero          被擋掉後整檔完全沒訊號的檔數
+      tap_fresh_days                  當次用的閘門長度（回報出來才校準得了）
     """
     tickers = list(dict.fromkeys(tickers))
     if stats is not None:
@@ -2310,7 +2438,10 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None):
                       "skipped_nan": 0, "errors": 0,
                       "hit": 0, "hit_today": 0,
                       "by_type": {}, "by_days": {}, "by_combo": {},
-                      "lookback_days": lookback_days})
+                      "lookback_days": lookback_days,
+                      "hit_legacy": 0, "by_type_legacy": {},
+                      "tap_suppressed": 0, "tap_suppressed_to_zero": 0,
+                      "tap_fresh_days": tap_fresh_days})
     try:
         batch = yf.download(tickers, period="1y", auto_adjust=False,
                             group_by="ticker", progress=False, threads=True)
@@ -2349,6 +2480,10 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None):
             #   只寫進 stats，不進 hits/回傳值 —— 訊號欄的結構一動，
             #   顯示端與 _render_dip_charts 都要跟著改，那不是這次要做的事。
             _hit_backs, _hit_types = set(), set()
+            # [V26.97] 舊規則（無新鮮度閘門）的平行帳，只餵 stats、不進 hits。
+            #   目的是讓「這個改動擋掉了多少」變成同一次掃描裡的可比數字。
+            _legacy_types = set()
+            _tap_blocked = False
 
             # 對最近 lookback_days 天，各自模擬「那天是最後一根」的狀態
             for back in range(lookback_days):
@@ -2361,17 +2496,40 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None):
                 md = f"{dt.month}/{dt.day}"
                 # 達標（最高價觸及技術目標）
                 if threshold and row["High"] >= threshold:
-                    hits.append(("💰 達標", md, round(float(row["Close"]), 2)))
-                    _hit_backs.add(back); _hit_types.add("💰 達標")
+                    _legacy_types.add("💰 達標")
+                    # [V26.97] 新鮮度閘門：往前 tap_fresh_days 根都沒碰過這個
+                    #   門檻才算「達標」。碰過 = 這檔一直待在壓力位，那是狀態
+                    #   不是事件。切片保證 >= 60 根（上面的 end < 60 守衛），
+                    #   所以這段一定取得到，不必再判空。
+                    _prior_high = float(
+                        slice_df["High"].iloc[-(1 + tap_fresh_days):-1].max())
+                    if _prior_high >= threshold:
+                        _tap_blocked = True
+                    else:
+                        hits.append(("💰 達標", md, round(float(row["Close"]), 2)))
+                        _hit_backs.add(back); _hit_types.add("💰 達標")
                 # 吸籌 / 乖離抄底 / 破底翻（復用 detect_smart_money_status）
                 status = detect_smart_money_status(slice_df)
                 if status:
                     if "吸籌" in status:
                         hits.append(("🤫 吸籌", md, round(float(row["Close"]), 2)))
                         _hit_backs.add(back); _hit_types.add("🤫 吸籌")
+                        _legacy_types.add("🤫 吸籌")
                     elif "抄底" in status or "破底翻" in status:
                         hits.append(("💎 乖離抄底", md, round(float(row["Close"]), 2)))
                         _hit_backs.add(back); _hit_types.add("💎 乖離抄底")
+                        _legacy_types.add("💎 乖離抄底")
+
+            if stats is not None:
+                if _legacy_types:
+                    stats["hit_legacy"] += 1
+                    for _t in _legacy_types:
+                        stats["by_type_legacy"][_t] = \
+                            stats["by_type_legacy"].get(_t, 0) + 1
+                if _tap_blocked:
+                    stats["tap_suppressed"] += 1
+                    if not hits:
+                        stats["tap_suppressed_to_zero"] += 1
 
             if stats is not None and hits:
                 stats["hit"] += 1
@@ -4131,10 +4289,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.96" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V26.96" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V26.96" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.96")
+st.title("📡 掃描中心 V26.98" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V26.98" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V26.98" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V26.98")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -4765,8 +4923,8 @@ if cur_t == "__DASHBOARD__":
 #                                 020xxx/700xxx 權證，117 檔 00 開頭 ETF）
 #   兩邊的代碼欄位名不同（Code vs SecuritiesCompanyCode），成交額欄位名
 #   也不同（TradeValue vs TransactionAmount），不能共用解析。
-_TW_LIST_TWSE = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL"
-_TW_LIST_TPEX = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"
+#   [V26.98] 兩個常數已上移到 _query_tw_name_bulk 附近 —— 名稱查詢也要用
+#   同樣的端點，寫兩份 URL 遲早會漂移（Rule 7）。這裡只留指標。
 
 # 流動性門檻。由當日成交額分位數決定，不是挑一個好看的數字：
 #   P10 79 萬 / P25 376 萬 / P50 2,429 萬 / P75 1.98 億
@@ -5233,7 +5391,13 @@ def _render_personal_scan():
     st.header("🎯 個人清單訊號掃描")
 
     if True:  # [V26.64] 新掃描器一律顯示（toggle 已移除）
-        st.caption("掃描你的清單中，最近 3 個交易日出現 💰達標 / 🤫吸籌 / 💎乖離抄底 的個股")
+        # [V26.97] 說明必須跟著判定式一起改。達標已從「價格在壓力位」（狀態）
+        #   收成「近兩週第一次觸及」（事件）—— 說明沒改的話，畫面上少掉的那
+        #   幾百檔會被當成掃描壞了。
+        st.caption(
+            f"掃描你的清單中，最近 3 個交易日出現 💰達標 / 🤫吸籌 / 💎乖離抄底 的個股。"
+            f"**💰達標＝近 {_TAP_FRESH_DAYS} 根 K 內第一次觸及技術目標**（剛突破），"
+            "一直待在壓力位的不算。")
         _scan_scope = st.radio(
             "掃描範圍",
             ["📌 自選股清單", "🎯 AI 目標清單（242 檔，約 2-4 分鐘）",
@@ -5263,6 +5427,28 @@ def _render_personal_scan():
                 st.caption(f"流動性門檻：日成交額 ≥ {_TW_MIN_TRADE_VALUE:,} 元")
                 for _e in _tw_diag.get("errors", []):
                     st.warning(_e)
+
+                # [V26.98] 中文名覆蓋率診斷。這是判斷「官方端點的名稱欄位鍵名
+                #   有沒有猜對」的唯一依據 —— 藏起來的話，欄位改名會表現成
+                #   「名稱又變回代碼了」，而你會去查錯的地方。
+                try:
+                    _nm_map, _nm_diag = _query_tw_name_bulk()
+                except Exception as _nme:
+                    _nm_map, _nm_diag = {}, {"errors": [f"{type(_nme).__name__}: {_nme}"]}
+                _n1, _n2 = _nm_diag.get("twse"), _nm_diag.get("tpex")
+                st.caption(
+                    "中文名（交易所官方端點，零額外請求）："
+                    + (f"上市 {_n1['named']} 檔（欄位 `{_n1['name_key']}`）" if _n1 else "上市：失敗")
+                    + "｜"
+                    + (f"上櫃 {_n2['named']} 檔（欄位 `{_n2['name_key']}`）" if _n2 else "上櫃：失敗"))
+                if _scan_tickers and _nm_map:
+                    _cov = sum(1 for _t in _scan_tickers if _t in _nm_map)
+                    st.caption(
+                        f"本次掃描清單的中文名覆蓋：{_cov}/{len(_scan_tickers)} "
+                        f"（{_cov/len(_scan_tickers)*100:.1f}%）"
+                        "　※ 改版前上櫃只有 7.1%")
+                for _e in _nm_diag.get("errors", []):
+                    st.warning(f"中文名表：{_e}")
                 if not _scan_tickers:
                     st.error("兩個市場的清單都取不到，無法掃描。")
             elif "美股全市場" in _scan_scope:
@@ -5400,6 +5586,28 @@ def _render_personal_scan():
                     with st.expander("📐 訊號分布診斷（判斷篩選力用）", expanded=False):
                         _ev = _st["evaluated"]
                         _hit = _st.get("hit", 0)
+                        # [V26.97] 新舊規則並排。單看新命中率無法判斷閘門是
+                        #   太鬆還是太緊 —— 要跟「沒有閘門會是幾檔」比才有意義。
+                        _leg = _st.get("hit_legacy", 0)
+                        _sup = _st.get("tap_suppressed", 0)
+                        _fd = _st.get("tap_fresh_days", "?")
+                        if _leg:
+                            _g1, _g2, _g3 = st.columns(3)
+                            _g1.metric(f"新規則命中（達標需近 {_fd} 根首次觸及）",
+                                       f"{_hit/_ev*100:.1f}%", f"{_hit} / {_ev} 檔")
+                            _g2.metric("舊規則（無新鮮度閘門）",
+                                       f"{_leg/_ev*100:.1f}%", f"{_leg} 檔",
+                                       delta_color="off")
+                            _g3.metric("閘門擋掉的達標",
+                                       f"{_sup} 檔",
+                                       f"其中 {_st.get('tap_suppressed_to_zero', 0)} 檔"
+                                       "因此完全無訊號", delta_color="off")
+                            st.caption(
+                                f"⚙️ 閘門長度目前 {_fd} 根 K。**太多檔就調大、"
+                                "少到不夠看就調小** —— 常數在 `_TAP_FRESH_DAYS`。"
+                                "調整前請先看下面的類型分布，確認達標仍是大宗才有調的必要。")
+                            st.markdown("---")
+
                         _d1, _d2, _d3 = st.columns(3)
                         _d1.metric("命中率", f"{_hit/_ev*100:.1f}%",
                                    f"{_hit} / {_ev} 檔")
