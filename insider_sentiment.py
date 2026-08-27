@@ -165,6 +165,28 @@ def get_cik_map():
 
 
 # ──────────────────────────────────────────────────────
+# [V26.99] 代碼 → CIK 的寫法容錯
+# ──────────────────────────────────────────────────────
+#   SEC 的 company_tickers.json 用「-」分隔多股類（BRK-B），而上面的
+#   SP100_TICKERS 寫的是「BRK.B」。舊版是這樣挑的：
+#
+#       target = [(t, cik_map[t]) for t in SP100_TICKERS[:top_n] if t in cik_map]
+#
+#   `if t in cik_map` 對不上就**靜默跳過**：不報錯、不計數。結果是波克夏從來
+#   沒被掃過，而畫面上的「掃描 N 家公司」只會少一，沒有任何人被告知。
+#   （app_v18.py 的 _SP100_CORE_TICKERS 寫的是 BRK-B，reversal_scanner 也是
+#     BRK-B —— 三份清單裡只有這裡不同步，這正是 Rule 7 的實例。）
+#
+#   這裡不去賭哪一種寫法才對：兩種都試，並且把**真的對不上的**回報出去。
+def _resolve_cik(ticker, cik_map):
+    """回傳 (SEC 端實際使用的代碼, cik)；都對不上回 (None, None)。"""
+    for cand in (ticker, ticker.replace(".", "-"), ticker.replace("-", ".")):
+        if cand in cik_map:
+            return cand, cik_map[cand]
+    return None, None
+
+
+# ──────────────────────────────────────────────────────
 # 抓單一公司的 Form 4
 # ──────────────────────────────────────────────────────
 def _fetch_company_filings(cik, days=LOOKBACK_DAYS):
@@ -382,21 +404,31 @@ def get_insider_pressure_index(force_refresh=False, top_n=100, anchor=None):
     if not cik_map:
         return _empty_result("無法取得 SEC CIK 對照表")
 
-    # 篩選 SP100 中有 CIK 的
-    target = [(t, cik_map[t]) for t in SP100_TICKERS[:top_n] if t in cik_map]
+    # [V26.99] 篩選 SP100 中有 CIK 的 —— 對不上的要記下來，不能靜默跳過
+    requested = SP100_TICKERS[:top_n]
+    target, unresolved = [], []
+    for t in requested:
+        _sym, cik = _resolve_cik(t, cik_map)
+        if cik:
+            # key 用原始 t（跟清單一致，畫面對得上）；請求用 SEC 那邊的 cik
+            target.append((t, cik))
+        else:
+            unresolved.append(t)
     if not target:
         return _empty_result("CIK 對照表為空")
 
     by_ticker = {}
+    failed = []           # [V26.99] 抓取/解析階段掉的檔，一樣不許靜默消失
     # 用 ThreadPoolExecutor 但限制 worker 數，避免超出 SEC rate limit
     with ThreadPoolExecutor(max_workers=4) as ex:
         futures = {ex.submit(_process_ticker, t, c): t for t, c in target}
         for fut in as_completed(futures):
+            tk = futures[fut]
             try:
                 ticker, data = fut.result(timeout=120)
                 by_ticker[ticker] = data
-            except Exception:
-                pass
+            except Exception as e:
+                failed.append(f"{tk}: {type(e).__name__}")
 
     # 彙總
     total_buy = sum(v["buy_value"] for v in by_ticker.values())
@@ -476,6 +508,16 @@ def get_insider_pressure_index(force_refresh=False, top_n=100, anchor=None):
             }
             for t, v in buyers
         ],
+        # [V26.99] 覆蓋率明細。分母不誠實的指數比沒有指數更糟 ——
+        #   「掃描 99 家」跟「清單有 100 家但 1 家對不上 CIK」在畫面上
+        #   長得一樣，但後者是可以修的。
+        "coverage": {
+            "requested": len(requested),
+            "resolved": len(target),
+            "scanned": len(by_ticker),
+            "unresolved": unresolved,   # CIK 對照表找不到（寫法不合或已下市）
+            "failed": failed,           # 找得到 CIK 但抓取/解析失敗
+        },
         "data_status": True,
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
@@ -490,6 +532,8 @@ def _empty_result(reason):
         "stats": {},
         "top_sellers": [],
         "top_buyers": [],
+        "coverage": {"requested": 0, "resolved": 0, "scanned": 0,
+                     "unresolved": [], "failed": []},
         "data_status": False,
         "reason": reason,
     }
