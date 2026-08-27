@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V26.98", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.00", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -4289,10 +4289,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V26.98" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V26.98" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V26.98" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V26.98")
+st.title("📡 掃描中心 V27.00" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.00" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.00" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.00")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -5078,6 +5078,105 @@ def fetch_us_universe(min_dollar_vol: int = _US_MIN_DOLLAR_VOLUME,
     return out, names, diag
 
 
+# ── [V27.00] 產業分類（sector 大分類）─────────────────────────────
+#   第三次遇到同一個 pattern：資料本來就在回應裡，只是沒撿。
+#     V26.95 美股公司名（Nasdaq screener 的 name）
+#     V26.98 台股中文名（TWSE/TPEX 的公司名）
+#     V27.00 產業別 ← 現在
+#   Nasdaq screener 每一列都帶 sector / industry，fetch_us_universe 只取了
+#   成交金額、代碼、名稱。逐檔打 yfinance .info 拿 sector 會重演 V26.94
+#   的限流慘案（1,200 檔必掛），而這裡零額外請求。
+#
+#   粒度刻意停在 sector（Technology / Health Care / Finance …）：
+#   industry 有上百種、分組會碎到看不完；「記憶體」那種細分兩邊都沒有，
+#   要的話得另建主題字典，那是另一個決定。
+#
+#   台股沒有等價欄位在日成交端點裡，要另外接公開資訊觀測站的基本資料。
+#   ⚠️ 這兩個台股端點的欄位名我**無法在沙箱驗證**（連不到外網），
+#   所以跟 V26.98 中文名同一套寫法：候選鍵逐一試 + 回報實際命中的鍵名 +
+#   全落空時 fail loud，不假裝成功。
+_TW_INFO_TWSE = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
+_TW_INFO_TPEX = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
+
+_SECTOR_CODE_KEYS = ("公司代號", "SecuritiesCompanyCode", "Code", "company_id")
+_SECTOR_NAME_KEYS = ("產業別", "SecuritiesIndustryCode", "industry_category",
+                     "IndustryCategory")
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _query_sector_map():
+    """回傳 (代碼→sector dict, diag)。美股用原代碼，台股帶 .TW / .TWO 後綴。
+
+    美股與台股各自獨立，一邊失敗不影響另一邊（跟 fetch_tw_universe 同慣例）。
+    """
+    out, diag = {}, {"us": None, "twse": None, "tpex": None, "errors": []}
+
+    # ── 美股：Nasdaq screener，與 fetch_us_universe 同一個端點 ──
+    #   刻意不去改 fetch_us_universe 的回傳簽章：那支是掃描主路徑，
+    #   動它的風險遠大於一天多下載一次的成本。
+    try:
+        resp = requests.get(_US_LIST_URL, timeout=90, headers={
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) "
+                           "Chrome/124.0 Safari/537.36"),
+            "Accept": "application/json",
+        })
+        data = resp.json().get("data") or {}
+        rows = data.get("rows") or (data.get("table") or {}).get("rows")
+        if not rows:
+            raise ValueError(f"回應裡找不到 rows（HTTP {resp.status_code}）")
+        n = 0
+        for r in rows:
+            sym = str(r.get("symbol", "")).strip()
+            sec = str(r.get("sector") or "").strip()
+            if sym and sec:
+                out[sym] = sec
+                n += 1
+        diag["us"] = {"total": len(rows), "sectored": n}
+        if n == 0:
+            diag["errors"].append(
+                f"美股：{len(rows)} 筆回應裡沒有任何 sector —— 欄位名可能已改")
+    except Exception as e:
+        diag["errors"].append(f"美股: {type(e).__name__}: {e}")
+
+    # ── 台股：公開資訊觀測站基本資料（含產業別）──
+    for label, url, suffix, timeout in (
+            ("twse", _TW_INFO_TWSE, ".TW", 60),
+            ("tpex", _TW_INFO_TPEX, ".TWO", 90)):
+        try:
+            rows = requests.get(url, timeout=timeout,
+                                headers={"User-Agent": "Mozilla/5.0"}).json()
+            if not isinstance(rows, list) or not rows:
+                raise ValueError(f"回應不是非空 list（type={type(rows).__name__}）")
+            hit_key, n = None, 0
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                code = _tw_pick(r, _SECTOR_CODE_KEYS)
+                sec = _tw_pick(r, _SECTOR_NAME_KEYS)
+                if not code or not sec or not re.fullmatch(r"\d{4}", code):
+                    continue
+                out[f"{code}{suffix}"] = sec
+                n += 1
+                if hit_key is None:
+                    hit_key = next((k for k in _SECTOR_NAME_KEYS
+                                    if str(r.get(k) or "").strip() == sec), None)
+            diag[label] = {"total": len(rows), "sectored": n, "field": hit_key}
+            if n == 0:
+                diag["errors"].append(
+                    f"{label}: {len(rows)} 筆回應裡沒有任何產業別 —— "
+                    f"欄位名可能已改（試過 {list(_SECTOR_NAME_KEYS)}）")
+        except Exception as e:
+            diag["errors"].append(f"{label}: {type(e).__name__}: {e}")
+
+    return out, diag
+
+
+def get_sector(ticker, sector_map):
+    """查不到就回「未分類」—— 不留空白，空白會被讀成「這檔沒有產業」。"""
+    return sector_map.get(ticker) or "未分類"
+
+
 _MACRO_SPEC = {
     "vix":         ("VIX", 25.0, "above", "short", "yfinance"),
     "hy_oas":      ("HY 利差", 4.5, "above", "short", "FRED"),
@@ -5085,16 +5184,67 @@ _MACRO_SPEC = {
     "cape":        ("Shiller CAPE", 30.0, "above", "long", "multpl"),
 }
 _FRED_CSV = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}"
+_FRED_API = "https://api.stlouisfed.org/fred/series/observations"
+
+# [V27.00] CSV 端點抓的是**整條序列的完整歷史**（BAMLH0A0HYM2 從 1996 年起
+#   一萬多列），而且是即時產生檔案。timeout 從 25 拉到 60 還是在雲端逾時
+#   —— 因為問題不是等太短，是要的東西太大。只需要最後兩筆。
+#   cosd（起始日）把 payload 砍到一百多列；沒有 key 的環境也會因此變快。
+_FRED_CSV_LOOKBACK_DAYS = 180
+
+
+def _fred_from_api(sid, key):
+    """FRED 官方 API：JSON、可 limit。需要 FRED_API_KEY。
+
+    這支 app 早就有 key（L587 FRED_KEY，一路傳給 crisis_engine 用同一個
+    FRED），但宏觀風險這段從頭到尾走的是無金鑰的 CSV —— 同一支程式裡
+    兩套取 FRED 的方式並存，快的那條沒被用到（Rule 7）。
+    """
+    r = requests.get(_FRED_API, timeout=20, params={
+        "series_id": sid, "api_key": key, "file_type": "json",
+        "sort_order": "desc", "limit": 10,
+    })
+    r.raise_for_status()
+    obs = r.json().get("observations") or []
+    good = []
+    for o in obs:                      # desc → 由新到舊
+        v = str(o.get("value", "")).strip()
+        if v in (".", ""):
+            continue
+        try:
+            good.append((str(o.get("date", "")).strip(), float(v)))
+        except ValueError:
+            continue
+    if not good:
+        raise RuntimeError(f"{sid} API 無有效觀測值")
+    d, v = good[0]
+    return d, v, (good[1][1] if len(good) > 1 else None)
 
 
 def _fred_latest(sid):
+    """FRED 最新觀測值。有 key 走 API（快），沒 key 或 API 失敗才退回 CSV。
+
+    兩條路都留著：API 快但綁 key，CSV 慢但不需要任何憑證。
+    只留一條的話，key 過期那天整個宏觀風險會一起消失。
+    """
+    if FRED_KEY:
+        try:
+            return _fred_from_api(sid, FRED_KEY)
+        except Exception:
+            pass                       # 靜靜退回 CSV；CSV 也失敗才報錯
+    return _fred_from_csv(sid)
+
+
+def _fred_from_csv(sid):
     """FRED CSV。表頭是 observation_date（不是舊文件的 DATE，2026-08-10 對
     實際回應確認過）；缺值寫成單一個 '.'，不跳過的話 float('.') 會在某個
     未來的假日才炸。"""
     # timeout 60：FRED 的 CSV 端點是即時產生檔案，冷啟動常超過 20 秒，
     # 而 Streamlit Cloud 到 FRED 的延遲比本機高 —— 本機管線 timeout=25
     # 從未逾時，雲端 20 秒兩項同時 ReadTimeout。這是慢，不是壞。
-    r = requests.get(_FRED_CSV.format(sid=sid), timeout=60,
+    _cosd = (datetime.now() - timedelta(days=_FRED_CSV_LOOKBACK_DAYS)
+             ).strftime("%Y-%m-%d")
+    r = requests.get(_FRED_CSV.format(sid=sid) + f"&cosd={_cosd}", timeout=60,
                      headers={"User-Agent": "Mozilla/5.0"})
     r.raise_for_status()
     lines = [l for l in r.text.strip().splitlines() if l.strip()]
@@ -5537,6 +5687,13 @@ def _render_personal_scan():
                 st.info("最近 3 個交易日，清單中沒有出現達標 / 吸籌 / 乖離抄底訊號。")
             else:
                 st.success(f"找到 {len(_res)} 檔有訊號（範圍：{st.session_state.get('_sig_scan_scope_done','')}）")
+                # [V27.00] 產業別。零額外請求（Nasdaq screener / 公開資訊
+                #   觀測站的回應本來就帶），一天撈一趟，之後全走記憶體。
+                try:
+                    _sec_map, _sec_diag = _query_sector_map()
+                except Exception as _se:
+                    _sec_map, _sec_diag = {}, {"errors": [f"{type(_se).__name__}: {_se}"]}
+
                 _table_rows = []
                 for r in _res:
                     _sig_txt = "、".join(
@@ -5544,6 +5701,7 @@ def _render_personal_scan():
                     )
                     _table_rows.append({
                         "代碼": r["代碼"], "名稱": r["名稱"],
+                        "產業": get_sector(r["代碼"], _sec_map),
                         "現價": r["現價"],
                         "分析師目標": r.get("分析師目標", "未查"),
                         "分析師上檔%": r.get("分析師上檔%"),
@@ -5552,6 +5710,48 @@ def _render_personal_scan():
                         "訊號（類型 日期 金額）": _sig_txt,
                     })
                 st.dataframe(pd.DataFrame(_table_rows), width='stretch', hide_index=True)
+
+                # ── [V27.00] 依產業分組 ────────────────────────────────
+                #   282 檔一張長表看不出「哪一類在動」。分組後才看得到
+                #   「半導體亮 40 檔、醫療 3 檔」這種集中度資訊。
+                _by_sec = {}
+                for _tr in _table_rows:
+                    _by_sec.setdefault(_tr["產業"], []).append(_tr)
+                _unclassified = len(_by_sec.get("未分類", []))
+                _cov_txt = (f"{len(_table_rows) - _unclassified}/{len(_table_rows)} "
+                            f"檔有產業別")
+                with st.expander(f"🏭 依產業分組（{len(_by_sec)} 類｜{_cov_txt}）",
+                                 expanded=True):
+                    if _sec_diag.get("errors"):
+                        for _e in _sec_diag["errors"]:
+                            st.warning(f"產業別：{_e}")
+                    _du = _sec_diag.get("us")
+                    _dt1, _dt2 = _sec_diag.get("twse"), _sec_diag.get("tpex")
+                    st.caption(
+                        "來源（零額外請求）："
+                        + (f"美股 Nasdaq screener {_du['sectored']} 檔" if _du else "美股：失敗")
+                        + "｜"
+                        + (f"上市 {_dt1['sectored']} 檔（欄位 `{_dt1['field']}`）" if _dt1 else "上市：失敗")
+                        + "｜"
+                        + (f"上櫃 {_dt2['sectored']} 檔（欄位 `{_dt2['field']}`）" if _dt2 else "上櫃：失敗"))
+
+                    # 檔數多的排前面；「未分類」永遠沉底，不跟真的產業搶版面
+                    _order = sorted(
+                        _by_sec.items(),
+                        key=lambda kv: (kv[0] == "未分類", -len(kv[1]), kv[0]))
+                    st.dataframe(
+                        pd.DataFrame([
+                            {"產業": _k, "檔數": len(_v),
+                             "佔比%": round(len(_v) / len(_table_rows) * 100, 1),
+                             "個股": "、".join(
+                                 f"{x['名稱']}({x['代碼']})" for x in _v[:12])
+                                     + ("…" if len(_v) > 12 else "")}
+                            for _k, _v in _order]),
+                        width='stretch', hide_index=True)
+                    if _unclassified:
+                        st.caption(
+                            f"⚠️ {_unclassified} 檔「未分類」＝對照表裡查不到 "
+                            "（新上市、ETF、或端點當日沒收錄），不是「沒有產業」。")
 
                 # [V26.94] 分析師欄的三種缺值原因要用數字講清楚。只寫一句
                 #   「部分無資料」，你分不出是 Yahoo 沒覆蓋還是被限流擋掉 ——
@@ -8840,6 +9040,25 @@ if _CRISIS_AVAILABLE:
                         unsafe_allow_html=True,
                     )
 
+# ── [V26.99] 外國私人發行人：制度上不會有 Form 4 ──────────────────
+#   依 Exchange Act Rule 3a12-3(b)，外國私人發行人（foreign private issuer）
+#   豁免 Section 16 —— 它們的董監高**根本不申報 Form 4**，重大事件走 6-K、
+#   年報走 20-F。所以這些標的在內部人賣壓上是**制度性空白**，不是抓取失敗。
+#
+#   為什麼一定要在畫面上講出來：空白跟「內部人沒動作」長得一模一樣。
+#   你的美持股裡 TSM、ASX 都是這類，看到指數 73 分時很容易以為涵蓋了它們。
+#
+#   ⚠️ 這是**人工維護的清單，不完整**。判斷一檔是不是外國私人發行人要看它
+#   報 10-K 還是 20-F，程式沒抓那個欄位。這裡只列你清單裡出現過的，
+#   發現新的就往下加。
+_NO_FORM4_TICKERS = {
+    "TSM":  "台積電 ADR（台灣）",
+    "ASX":  "日月光投控 ADR（台灣）",
+    "UMC":  "聯電 ADR（台灣）",
+    "ASML": "艾司摩爾（荷蘭）",
+    "NBIS": "Nebius Group（荷蘭）",
+}
+
 # ==========================================
 # 🕵️ SEC Form 4 內部人賣壓
 # ==========================================
@@ -8882,6 +9101,25 @@ if _INSIDER_AVAILABLE:
         "因此你看到的數據大約**反映 1-3 天前**的實際交易行為，"
         "適合判斷中長期趨勢，不適合當日沖銷參考。"
     )
+
+    # [V26.99] 制度性空白要講在前面，不要等使用者自己發現空白
+    _wl_all = {t for lst in (st.session_state.get("watchlists") or {}).values()
+               for t in lst}
+    _wl_no_f4 = sorted(_wl_all & set(_NO_FORM4_TICKERS))
+    if _wl_no_f4:
+        st.warning(
+            "🚫 **你清單裡有 "
+            + str(len(_wl_no_f4))
+            + " 檔永遠不會出現在這個指數裡**："
+            + "、".join(f"`{t}`（{_NO_FORM4_TICKERS[t]}）" for t in _wl_no_f4)
+            + "。外國私人發行人依 Exchange Act Rule 3a12-3(b) 豁免 Section 16，"
+            "內部人**不申報 Form 4**（重大事件走 6-K、年報走 20-F）。"
+            "這是制度性空白，不是抓取失敗 —— 重刷幾次都不會有資料。")
+    else:
+        st.caption(
+            "🚫 **不涵蓋外國私人發行人**（TSM / ASX / UMC / ASML / NBIS 等）："
+            "它們依 Exchange Act Rule 3a12-3(b) 豁免 Section 16，不申報 Form 4。"
+            "這是制度性空白，不是抓取失敗。")
 
     # [V26.01] 把 anchor 傳進 insider_sentiment 模組，
     # 讓它的 disk cache key 也跟 anchor 連動（解決多裝置不同步問題）
@@ -8940,6 +9178,9 @@ if _INSIDER_AVAILABLE:
         score = insider["score"]
         level_text, level_color = insider["level"]
         stats = insider["stats"]
+        # [V26.99] 舊 cache 的 payload 沒有 coverage 這個 key，.get 保底 ——
+        #   換版當下畫面不該因為讀到舊快取就整段炸掉。
+        _ins_cov = insider.get("coverage") or {}
 
         # 主卡片
         ins_main_col1, ins_main_col2, ins_main_col3 = st.columns([2, 1, 1])
@@ -8995,7 +9236,9 @@ if _INSIDER_AVAILABLE:
                 f'<div style="width:{ratio*100}%;height:100%;background:{level_color};"></div>'
                 f'</div>'
                 f'<div style="color:#666;font-size:11px;margin-top:8px;">'
-                f'掃描 {stats["companies_scanned"]} 家公司'
+                f'掃描 {stats["companies_scanned"]}'
+                + (f' / {_ins_cov["requested"]}' if _ins_cov.get("requested") else "")
+                + f' 家公司'
                 f'</div>'
                 f'<div style="color:#888;font-size:11px;margin-top:6px;">'
                 f'>70% 警戒｜>85% 危險'
@@ -9003,6 +9246,33 @@ if _INSIDER_AVAILABLE:
                 f'</div>',
                 unsafe_allow_html=True,
             )
+
+        # [V26.99] 覆蓋率明細：分母不誠實的指數比沒有指數更糟。
+        #   舊版 insider_sentiment 用 `if t in cik_map` 挑標的，對不上就靜默
+        #   跳過 —— SP100_TICKERS 寫 "BRK.B" 而 SEC 的 company_tickers.json
+        #   用 "BRK-B"，所以波克夏從來沒被掃過，畫面上只是少一家，沒人知道。
+        #   模組端已改成兩種寫法都試 + 回報對不上的；這裡負責讓它被看見。
+        _unres = _ins_cov.get("unresolved") or []
+        _failed = _ins_cov.get("failed") or []
+        if _unres or _failed:
+            _msg = []
+            if _unres:
+                _msg.append(
+                    f"**{len(_unres)} 檔對不上 SEC CIK 對照表**："
+                    + "、".join(f"`{t}`" for t in _unres[:8])
+                    + ("…" if len(_unres) > 8 else "")
+                    + "（代碼寫法不合或已下市／併購）")
+            if _failed:
+                _msg.append(
+                    f"**{len(_failed)} 檔抓取失敗**："
+                    + "、".join(f"`{x}`" for x in _failed[:8])
+                    + ("…" if len(_failed) > 8 else ""))
+            st.warning("⚠️ 掃描池缺口：" + "；".join(_msg)
+                       + "。這些檔沒有進入上面的賣壓比例分母。")
+        elif _ins_cov.get("requested"):
+            st.caption(
+                f"✅ 掃描池完整：清單 {_ins_cov['requested']} 檔全部解析到 CIK "
+                f"且抓取成功（{_ins_cov['scanned']} 檔有回應）。")
 
         # 賣最多 / 買最多 表格
         ts_col1, ts_col2 = st.columns(2)
