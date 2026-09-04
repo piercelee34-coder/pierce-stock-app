@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.00", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.01", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1141,6 +1141,65 @@ def _tw_pick(row, keys):
     return None
 
 
+# ── [V27.01] TPEX 被打三次的修正 ───────────────────────────────
+#   2026-09-04 實跑，台股全市場掃描同時吐兩個錯：
+#     上櫃清單   ChunkedEncodingError: Response ended prematurely
+#     上櫃中文名 SSLError: certificate verify failed: Missing Subject Key Identifier
+#   查下來，一次掃描對 www.tpex.org.tw 打了三次，其中兩次是**同一個**
+#   一萬多列的 daily_close_quotes：
+#     fetch_tw_universe()      要清單
+#     _query_tw_name_bulk()    要中文名   ← V26.98 我加的
+#     _query_sector_map()      要產業別（不同端點，同一台主機）
+#
+#   V26.98 當時我明講「刻意不改 fetch_tw_universe 的簽章，代價是多下載
+#   一次」。低估了代價：同一個大端點在幾秒內被打兩次，對方直接截斷回應。
+#   兩個消費者改成共用同一次抓取 —— 這是 Rule 7 一開始就該有的作法。
+#
+#   ⚠️ SSLError 沒有在這一版處理。那個訊息是 X.509 嚴格驗證（憑證鏈缺
+#   RFC 5280 要求的 SKI），跟負載未必有關，懷疑是執行環境換到 Python 3.13
+#   （3.13 起 create_default_context() 預設開 VERIFY_X509_STRICT）。
+#   先只降載 + 重試，下次實跑若 SSLError 消失就證明它跟負載有關，
+#   不必動 TLS；若還在，再單獨處理。**先分離變因，不要一次改兩件事。**
+_TW_HTTP_TRIES = 3
+
+
+def _http_json_retry(url, timeout, tries=_TW_HTTP_TRIES, ua="Mozilla/5.0"):
+    """抓 JSON，暫時性錯誤重試。最後一次仍失敗就把例外拋出去 —— 呼叫端
+    要看得到真正的死因，不是一個被吞掉後的空清單（Rule 12）。"""
+    last = None
+    for i in range(tries):
+        try:
+            r = requests.get(url, timeout=timeout, headers={"User-Agent": ua})
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            last = e
+            if i < tries - 1:
+                time.sleep(1.5 * (i + 1))   # 1.5s → 3s，給對方喘息
+    raise last
+
+
+@st.cache_data(ttl=21600, show_spinner=False)   # 6 小時，與 fetch_tw_universe 一致
+def _fetch_tw_daily_rows():
+    """台股上市/上櫃當日成交的**原始列**，清單與中文名共用這一份。
+
+    回傳 ({"twse": [...], "tpex": [...]}, diag)。
+    快取用 6 小時（取兩個消費者裡較短的那個）—— 名稱一天內不會變，
+    但清單需要當日成交額，以短的為準才不會拿到隔夜資料。
+    """
+    rows, diag = {"twse": [], "tpex": []}, {"errors": []}
+    for label, url, timeout in (("twse", _TW_LIST_TWSE, 60),
+                                ("tpex", _TW_LIST_TPEX, 90)):
+        try:
+            data = _http_json_retry(url, timeout)
+            if not isinstance(data, list) or not data:
+                raise ValueError(f"回應不是非空 list（type={type(data).__name__}）")
+            rows[label] = data
+        except Exception as e:
+            diag["errors"].append(f"{label}: {type(e).__name__}: {e}")
+    return rows, diag
+
+
 @st.cache_data(ttl=86400, show_spinner=False)   # 一天一次；全市場只撈一趟
 def _query_tw_name_bulk():
     """回傳 (代碼→中文名 dict, diag)。代碼含 .TW / .TWO 後綴。
@@ -1149,14 +1208,14 @@ def _query_tw_name_bulk():
     _query_tw_name_api 的既有順位去處理，不要混進來假裝是官方中文名。
     """
     out, diag = {}, {"twse": None, "tpex": None, "errors": []}
-    for label, url, suffix, timeout in (
-            ("twse", _TW_LIST_TWSE, ".TW", 60),
-            ("tpex", _TW_LIST_TPEX, ".TWO", 90)):
+    # [V27.01] 不再自己打端點：跟 fetch_tw_universe 共用同一次抓取。
+    _raw, _raw_diag = _fetch_tw_daily_rows()
+    diag["errors"].extend(_raw_diag.get("errors", []))
+    for label, suffix in (("twse", ".TW"), ("tpex", ".TWO")):
         try:
-            rows = requests.get(url, timeout=timeout,
-                                headers={"User-Agent": "Mozilla/5.0"}).json()
-            if not isinstance(rows, list) or not rows:
-                raise ValueError(f"回應不是非空 list（type={type(rows).__name__}）")
+            rows = _raw.get(label) or []
+            if not rows:
+                continue          # 抓取階段的錯誤已經在 errors 裡，不重複報
             hit_key = None
             n = 0
             for r in rows:
@@ -4289,10 +4348,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.00" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.00" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.00" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.00")
+st.title("📡 掃描中心 V27.01" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.01" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.01" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.01")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -4953,30 +5012,34 @@ def _tw_num(x):
 def fetch_tw_universe(min_value: int = _TW_MIN_TRADE_VALUE):
     """回傳 (代碼清單, 診斷字典)。兩市場各自獨立抓，一邊失敗不影響另一邊。"""
     out, diag = [], {"twse": None, "tpex": None, "errors": []}
+    # [V27.01] 改吃共用的原始列 —— 這支跟 _query_tw_name_bulk 以前各打一次
+    #   同一個一萬多列的上櫃端點，對方直接截斷回應。現在一次抓、兩邊用。
+    _raw, _raw_diag = _fetch_tw_daily_rows()
+    diag["errors"].extend(_raw_diag.get("errors", []))
 
-    try:
-        rows = requests.get(_TW_LIST_TWSE, timeout=60,
-                            headers={"User-Agent": "Mozilla/5.0"}).json()
-        plain = [r for r in rows if re.fullmatch(r"\d{4}", str(r.get("Code", "")))]
-        kept = [r for r in plain
-                if (_tw_num(r.get("TradeValue")) or 0) >= min_value]
-        out += [f"{r['Code']}.TW" for r in kept]
-        diag["twse"] = {"total": len(rows), "plain": len(plain), "kept": len(kept)}
-    except Exception as e:
-        diag["errors"].append(f"上市清單: {type(e).__name__}: {e}")
+    rows = _raw.get("twse") or []
+    if rows:
+        try:
+            plain = [r for r in rows if re.fullmatch(r"\d{4}", str(r.get("Code", "")))]
+            kept = [r for r in plain
+                    if (_tw_num(r.get("TradeValue")) or 0) >= min_value]
+            out += [f"{r['Code']}.TW" for r in kept]
+            diag["twse"] = {"total": len(rows), "plain": len(plain), "kept": len(kept)}
+        except Exception as e:
+            diag["errors"].append(f"上市清單解析: {type(e).__name__}: {e}")
 
-    try:
-        rows = requests.get(_TW_LIST_TPEX, timeout=90,
-                            headers={"User-Agent": "Mozilla/5.0"}).json()
-        plain = [r for r in rows
-                 if re.fullmatch(r"\d{4}",
-                                 str(r.get("SecuritiesCompanyCode", "")))]
-        kept = [r for r in plain
-                if (_tw_num(r.get("TransactionAmount")) or 0) >= min_value]
-        out += [f"{r['SecuritiesCompanyCode']}.TWO" for r in kept]
-        diag["tpex"] = {"total": len(rows), "plain": len(plain), "kept": len(kept)}
-    except Exception as e:
-        diag["errors"].append(f"上櫃清單: {type(e).__name__}: {e}")
+    rows = _raw.get("tpex") or []
+    if rows:
+        try:
+            plain = [r for r in rows
+                     if re.fullmatch(r"\d{4}",
+                                     str(r.get("SecuritiesCompanyCode", "")))]
+            kept = [r for r in plain
+                    if (_tw_num(r.get("TransactionAmount")) or 0) >= min_value]
+            out += [f"{r['SecuritiesCompanyCode']}.TWO" for r in kept]
+            diag["tpex"] = {"total": len(rows), "plain": len(plain), "kept": len(kept)}
+        except Exception as e:
+            diag["errors"].append(f"上櫃清單解析: {type(e).__name__}: {e}")
 
     return list(dict.fromkeys(out)), diag
 
@@ -5144,8 +5207,8 @@ def _query_sector_map():
             ("twse", _TW_INFO_TWSE, ".TW", 60),
             ("tpex", _TW_INFO_TPEX, ".TWO", 90)):
         try:
-            rows = requests.get(url, timeout=timeout,
-                                headers={"User-Agent": "Mozilla/5.0"}).json()
+            # [V27.01] 同一台 tpex 主機，套上重試（暫時性截斷可自癒）
+            rows = _http_json_retry(url, timeout)
             if not isinstance(rows, list) or not rows:
                 raise ValueError(f"回應不是非空 list（type={type(rows).__name__}）")
             hit_key, n = None, 0
