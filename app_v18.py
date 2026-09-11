@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.01", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.02", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3461,24 +3461,47 @@ def compute_eps_valuation(ticker):
         return {"ok": False, "reason": f"抓取例外：{str(_e)[:60]}"}
 
 
+# [V27.02] 損益公式只留一份。持倉表的迴圈與下面的模擬計算機都用它 ——
+#   同一個數字在兩個地方用兩套算法，遲早會對不起來（Rule 7）。
+def _calc_pl(price, cost, shares):
+    """回傳 (損益金額, 報酬率%)。cost <= 0 時報酬率無意義，回 None。"""
+    price, cost, shares = float(price), float(cost), int(shares)
+    amount = (price - cost) * shares
+    pct = (price / cost - 1) * 100 if cost > 0 else None
+    return amount, pct
+
+
+def get_technical_target_threshold_series(df):
+    """[V27.02] 逐根版的「達標」閾值 —— 回傳與 df 同 index 的 Series。
+
+    為什麼需要它：走勢圖的達標標籤原本拿**今天算出來的單一門檻**去比對過去
+    120 根 K 線。那等於用「現在的壓力位」回頭審判歷史 —— 一根當時明明沒摸到
+    自己壓力位的 K 棒，只要它的高點高過今天的門檻，就會被標成達標。
+    使用者實跑看到的就是這個：一根 $441 的 K 被標達標，但它當下離自己的目標
+    還很遠（那時股價正往 $477 走，當時的門檻遠高於 $441）。
+
+    公式與純量版**完全同一條**（純量版改成呼叫這裡取最後一格），
+    不是另抄一份 —— 「達標」的定義已經散在四個地方了，不再多一個。
+    """
+    price = df['Close']
+    upper = df['Bollinger_Upper']
+    # tail(60).max() 的逐根等價：含當根、不足 60 根時用現有的
+    recent_high_60 = df['High'].rolling(60, min_periods=1).max()
+    # 逼近/突破 60 日高 → 用布林上軌；否則 min(布林上軌, 60日高)
+    return upper.where(price >= recent_high_60 * 0.98,
+                       np.minimum(upper, recent_high_60))
+
+
 def get_technical_target_threshold(df):
     """技術面「達標」閾值（給走勢圖標籤用，與 AI 目標 t_s 分離）
     
     這個閾值用於判斷「K 線是否觸及短期壓力上緣」，與蒙地卡羅 p50 中位數預期不同。
     永遠回傳一個「真實會被觸及」的價位（布林上軌 / 60 日高點 / 季布林上軌）。
+
+    [V27.02] 改成取逐根版的最後一格 —— 行為與舊版相同（有測試釘住），
+    但公式只剩一份。
     """
-    price = float(df['Close'].iloc[-1])
-    upper = float(df['Bollinger_Upper'].iloc[-1])
-    recent_high_60 = float(df['High'].tail(60).max())
-    
-    # 若當前股價已逼近或突破 60 日高，用布林上軌
-    # 否則用 min(布林上軌, 60日高)，這保留「先碰小目標再衝大目標」的層次感
-    if price >= recent_high_60 * 0.98:
-        threshold = upper
-    else:
-        threshold = min(upper, recent_high_60)
-    
-    return threshold
+    return float(get_technical_target_threshold_series(df).iloc[-1])
 
 
 def format_volume(num):
@@ -4348,10 +4371,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.01" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.01" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.01" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.01")
+st.title("📡 掃描中心 V27.02" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.02" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.02" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.02")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -4808,10 +4831,10 @@ if cur_t == "__DASHBOARD__":
             for _, _hr in _edit_df_held.iterrows():
                 _hpx = _hr.get("現價"); _hc = _hr.get("成本"); _hs = _hr.get("股數")
                 if pd.notna(_hpx) and pd.notna(_hc) and pd.notna(_hs) and float(_hc) > 0 and int(_hs) > 0:
-                    _hamt = (float(_hpx) - float(_hc)) * int(_hs)
+                    _hamt, _hpct = _calc_pl(_hpx, _hc, _hs)
                     _hsym = "NT$" if ".TW" in str(_hr.get("代碼", "")) else "$"
                     _pl_amt_col.append(f"{_hsym}{_hamt:,.0f}")
-                    _pl_pct_col.append(round((float(_hpx) / float(_hc) - 1) * 100, 1))
+                    _pl_pct_col.append(round(_hpct, 1))
                 else:
                     _pl_amt_col.append("—")
                     _pl_pct_col.append(None)
@@ -4848,6 +4871,40 @@ if cur_t == "__DASHBOARD__":
             _ok, _msg = save_holdings(_new_hold)
             st.session_state["_holdings"] = _new_hold
             st.success(f"已儲存 {len(_new_hold)} 檔持倉（{_msg}）" if _ok else f"⚠️ {_msg}")
+
+        # ── [V27.02] 模擬獲利計算機 ──────────────────────────────
+        #   純試算：不讀持倉、不寫任何檔案，改數字不會動到上面的表。
+        #   用途是「如果漲到 X 我賺多少」這種當場心算，跟持倉表的實際損益
+        #   分開 —— 混在一起你會分不出哪個是真部位。
+        st.markdown("---")
+        with st.expander("🧮 模擬獲利計算機", expanded=False):
+            st.caption("純試算，不影響上方持倉資料。公式：(現價 − 成本) × 股數")
+            _cc1, _cc2, _cc3, _cc4 = st.columns([1, 1, 1, 0.8])
+            _sim_px = _cc1.number_input("股票現價", min_value=0.0, value=100.0,
+                                        step=1.0, format="%.2f", key="_sim_price")
+            _sim_cost = _cc2.number_input("成本", min_value=0.0, value=90.0,
+                                          step=1.0, format="%.2f", key="_sim_cost")
+            _sim_sh = _cc3.number_input("股數", min_value=0, value=1000,
+                                        step=1, key="_sim_shares")
+            _sim_cur = _cc4.radio("幣別", ["NT$", "$"], horizontal=True,
+                                  key="_sim_cur")
+
+            if _sim_sh <= 0:
+                st.info("輸入股數後開始試算。")
+            elif _sim_cost <= 0:
+                # Rule 12：成本 0 時報酬率是除以零，講清楚而不是印一個 inf
+                _amt, _ = _calc_pl(_sim_px, 1, _sim_sh)   # 只為了型別一致
+                st.warning("成本為 0，報酬率無法計算（除以零）。請輸入實際成本。")
+            else:
+                _amt, _pct = _calc_pl(_sim_px, _sim_cost, _sim_sh)
+                _m1, _m2, _m3 = st.columns(3)
+                _m1.metric("損益金額", f"{_sim_cur}{_amt:,.0f}",
+                           f"{_pct:+.2f}%")
+                _m2.metric("總成本", f"{_sim_cur}{_sim_cost * _sim_sh:,.0f}")
+                _m3.metric("總市值", f"{_sim_cur}{_sim_px * _sim_sh:,.0f}")
+                st.caption(
+                    f"({_sim_px:,.2f} − {_sim_cost:,.2f}) × {_sim_sh:,} "
+                    f"= {_sim_cur}{_amt:,.0f}")
             st.rerun()
 
         # ── 下方：損益表（唯讀，代碼/損益%/損益美/損益台）──
@@ -7135,6 +7192,9 @@ _mc_for_target = st.session_state.get('_mc_result_v27') if _mc_status["ran"] els
 t_s, t_l, rating, sr_info = predict_target_and_rating(df, _mc_for_target)
 # 技術面「達標」閾值（與 AI 目標 t_s 分離，避免 MC p50 誤判過去 K 線）
 _target_threshold = get_technical_target_threshold(df)
+# [V27.02] 逐根門檻。單一門檻回頭比對 120 根歷史 K 線 = 用今天的壓力位審判
+#   過去，會標出當時根本沒達標的 K 棒。純量版留著給別處用，不動它。
+_target_threshold_series = get_technical_target_threshold_series(df)
 
 vp_60 = calculate_volume_profile(df.tail(60), bins=40)
 vol_poc = vp_60.loc[vp_60['Volume'].idxmax(), 'Price'] if not vp_60.empty else close_v
@@ -7644,13 +7704,18 @@ for i in range(5, len(p_data)):
         })
     if macd_sell:
         fig.add_annotation(x=p_data.index[i], y=curr['High'], text=f"SELL<br>${curr['Close']:.1f}", showarrow=True, arrowhead=1, ax=0, ay=-25, row=1, col=1, bgcolor="rgba(220, 53, 69, 0.8)", font=dict(color="white", size=9))
-    if (curr['High'] >= _target_threshold or curr['RSI'] > 75) and not (prior['High'] >= _target_threshold or prior['RSI'] > 75):
+    # [V27.02] 用「那一根當下」的門檻，不是今天的
+    _thr_i = _target_threshold_series.get(p_data.index[i])
+    _thr_p = _target_threshold_series.get(p_data.index[i - 1])
+    _hit_i = pd.notna(_thr_i) and curr['High'] >= _thr_i
+    _hit_p = pd.notna(_thr_p) and prior['High'] >= _thr_p
+    if (_hit_i or curr['RSI'] > 75) and not (_hit_p or prior['RSI'] > 75):
         fig.add_annotation(
             x=p_data.index[i], y=curr['High'],
-            text=f"💰達標<br>${curr['Close']:.1f}" if curr['High'] >= _target_threshold else f"🔥過熱<br>${curr['Close']:.1f}",
+            text=f"💰達標<br>${curr['Close']:.1f}" if _hit_i else f"🔥過熱<br>${curr['Close']:.1f}",
             showarrow=True, arrowhead=1, ax=0, ay=-45, row=1, col=1,
-            bgcolor="rgba(255, 193, 7, 0.8)" if curr['High'] >= _target_threshold else "rgba(255, 69, 0, 0.8)",
-            font=dict(color="black" if curr['High'] >= _target_threshold else "white", size=9)
+            bgcolor="rgba(255, 193, 7, 0.8)" if _hit_i else "rgba(255, 69, 0, 0.8)",
+            font=dict(color="black" if _hit_i else "white", size=9)
         )
 
     is_near_support = False
