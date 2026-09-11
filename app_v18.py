@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.02", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.03", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3647,6 +3647,61 @@ def detect_launch_points(df: pd.DataFrame) -> pd.Series:
     return ma_gold & rsi_was_oversold
 
 
+# ── [V27.03] 第二次進場：多頭趨勢中的「回檔不破 + 更高的低點」──────
+#   為什麼需要另一個偵測器：detect_launch_points 要求**那一根當下發生黃金
+#   交叉**（SMA20 由下向上穿過 SMA60）。而趨勢中的回檔，SMA20 從頭到尾都在
+#   SMA60 之上，沒有交叉事件 —— 所以結構上永遠標不出來。
+#   起漲點描述的是「趨勢起點」，一段趨勢只有一次；這支描述的是「趨勢中的
+#   再進場」，兩者是不同的事件，不是同一條規則的鬆緊差異。
+#
+#   低點的定義直接用既有的 compute_zigzag_pivots（fractal ZigZag），
+#   **沒有另寫一套 swing low** —— 這份程式裡「達標」已經散在四個地方了。
+#
+#   ⚠️ 天生落後 n 根：fractal 低點要等右邊 n 根都比它高才能確認
+#   （compute_zigzag_pivots 的迴圈是 range(n, len(df) - n)）。
+#   所以**最新的 n 根永遠不會被標記**，訊號會晚 n 個交易日出現。
+#   這是 fractal 定義的必然，不是 bug —— 但畫面上必須講，否則你會一直
+#   等一個今天不可能出現的標記。
+_SECOND_ENTRY_ZIGZAG_N = 5
+
+
+def detect_second_entry(df: pd.DataFrame, n: int = _SECOND_ENTRY_ZIGZAG_N) -> pd.Series:
+    """回傳 bool Series（index 同 df）。四個條件同時成立才亮：
+
+      1. 這根是 ZigZag 的**低點**，且比前一個低點高（higher low）
+      2. 多頭排列維持：近 n 根 SMA20 都在 SMA60 之上
+         （用「近 n 根都成立」而非只看當根，是為了排除剛交叉 ——
+           那是起漲點的地盤，兩個訊號不該在同一根打架）
+      3. 回檔真的有觸及月線：Low <= SMA20
+      4. 趨勢沒被破壞：收盤仍在季線之上（Close > SMA60）
+    """
+    out = pd.Series(False, index=df.index)
+    need = ("SMA_20", "SMA_60", "High", "Low", "Close")
+    if df is None or len(df) < 2 * n + 1:
+        return out
+    if any(c not in df.columns for c in need):
+        return out          # 指標還沒算出來（短歷史），不猜
+
+    prev_low = None
+    for i, price, kind in compute_zigzag_pivots(df, n):
+        if kind != "L":
+            continue
+        if prev_low is not None:
+            row = df.iloc[i]
+            sm20, sm60 = row["SMA_20"], row["SMA_60"]
+            if pd.notna(sm20) and pd.notna(sm60):
+                lo = max(0, i - n)
+                aligned = bool(
+                    (df["SMA_20"].iloc[lo:i + 1] > df["SMA_60"].iloc[lo:i + 1]).all())
+                if (price > prev_low                    # 1 更高的低點
+                        and aligned                      # 2 多頭排列維持
+                        and row["Low"] <= sm20           # 3 回檔觸及月線
+                        and row["Close"] > sm60):        # 4 沒跌破季線
+                    out.iloc[i] = True
+        prev_low = price
+    return out
+
+
 def get_launch_macd_points(df: pd.DataFrame) -> pd.Series:
     """
     MACD 金叉 + 同時滿足起漲條件（RSI 剛從低位回升、收盤在 SMA_20 附近以內）。
@@ -4371,10 +4426,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.02" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.02" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.02" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.02")
+st.title("📡 掃描中心 V27.03" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.03" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.03" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.03")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -7648,6 +7703,57 @@ for i in range(len(p_data)):
 # [v27] 重置進場訊號清單（每次重跑都清空）
 st.session_state['_entry_signals_v27'] = []
 
+# ── [V27.03] 第二次進場標記（趨勢中的回檔不破 + 更高的低點）──────────
+#   位置刻意在上面那行重置之後：掛在前面的話 append 進去的東西會被清掉。
+#
+#   用 df 而不是 p_data 去算：ZigZag 需要左右各 n 根，直接餵切片會讓畫面
+#   左右邊緣少判幾個點。算完再 reindex 到畫面範圍。
+#
+#   閘門沿用起漲點那套（大盤 + MA60↑）：過 → 實心標；沒過 → 淡化並寫原因。
+#   跟隔壁一致，不另立一套慣例（Rule 11）。
+_second_entry = detect_second_entry(df).reindex(p_data.index, fill_value=False)
+_se_market = st.session_state.get('_market_state_v27', {})
+_se_marked = 0
+for _se_date in p_data[_second_entry].index:
+    _se_pos = p_data.index.get_loc(_se_date)
+    _se_row = p_data.iloc[_se_pos]
+    _se60_now = _se_row.get('SMA_60', np.nan)
+    _se60_p5 = p_data.iloc[max(0, _se_pos - 5)].get('SMA_60', np.nan)
+    _se_ma60_up = (not pd.isna(_se60_now) and not pd.isna(_se60_p5)
+                   and _se60_now > _se60_p5)
+    _se_mkt_ok = market_ok_at_date(_se_market, _se_date)
+    _se_marked += 1
+    if _se_ma60_up and _se_mkt_ok:
+        fig.add_annotation(
+            x=_se_date, y=_se_row['Low'],
+            text="🔁 二次進場", showarrow=True, arrowhead=2,
+            arrowcolor="#38bdf8", ax=0, ay=55, row=1, col=1,
+            bgcolor="rgba(56, 189, 248, 0.85)",
+            font=dict(color="black", size=11, weight="bold"),
+        )
+        st.session_state['_entry_signals_v27'].append({
+            "date": _se_date,
+            "idx_pos": _se_pos,
+            "close": float(_se_row['Close']),
+            "trigger": "回檔不破+更高低點",
+            "ma60_uptrend": _se_ma60_up,
+            "market_ok": _se_mkt_ok,
+        })
+    else:
+        _se_why = []
+        if not _se_ma60_up:
+            _se_why.append("MA60↓")
+        if not _se_mkt_ok:
+            _se_why.append("大盤偏空")
+        fig.add_annotation(
+            x=_se_date, y=_se_row['Low'],
+            text=("🔁 二次進場<br><span style='font-size:9px'>⚠️"
+                  + " · ".join(_se_why) + "</span>"),
+            showarrow=True, arrowhead=2, ax=0, ay=55, row=1, col=1,
+            bgcolor="rgba(56, 189, 248, 0.45)",
+            font=dict(color="black", size=10),
+        )
+
 for i in range(5, len(p_data)):
     curr = p_data.iloc[i]
     prior = p_data.iloc[i - 1]
@@ -8517,6 +8623,18 @@ if _mob_xrange is not None:
     if _mob_yrange is not None:
         fig.update_yaxes(range=_mob_yrange, row=1, col=1)
 st.plotly_chart(fig, width='stretch')
+
+# [V27.03] 二次進場的天生延遲，必須講在畫面上。
+#   fractal 低點要等右邊 n 根都比它高才確認，所以**最新的 n 根永遠不會被標**。
+#   不講的話，你會一直等一個今天結構上不可能出現的標記，然後以為功能壞了。
+st.caption(
+    f"🔁 **二次進場**＝多頭排列維持中、回檔觸及月線但收盤未破季線、"
+    f"且低點高於前一個低點。本次畫面標出 **{_se_marked}** 個。"
+    f"　⏳ **天生落後 {_SECOND_ENTRY_ZIGZAG_N} 個交易日**："
+    f"低點要等右邊 {_SECOND_ENTRY_ZIGZAG_N} 根都比它高才算數，"
+    f"所以最新 {_SECOND_ENTRY_ZIGZAG_N} 根永遠不會有標記 —— 這是定義使然，不是漏標。"
+    f"　淡色標＝條件成立但大盤/MA60 未過。"
+)
 
 # ──────────────────────────────────────────────────────
 # ──────────────────────────────────────────────────────
