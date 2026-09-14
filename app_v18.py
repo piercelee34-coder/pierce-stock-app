@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.04", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.05", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -4500,10 +4500,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.04" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.04" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.04" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.04")
+st.title("📡 掃描中心 V27.05" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.05" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.05" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.05")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -5002,6 +5002,7 @@ if cur_t == "__DASHBOARD__":
             _ok, _msg = save_holdings(_new_hold)
             st.session_state["_holdings"] = _new_hold
             st.success(f"已儲存 {len(_new_hold)} 檔持倉（{_msg}）" if _ok else f"⚠️ {_msg}")
+            st.rerun()          # [V27.05] 歸位：它屬於按鈕區塊，不是計算機的
 
         # ── [V27.02] 模擬獲利計算機 ──────────────────────────────
         #   純試算：不讀持倉、不寫任何檔案，改數字不會動到上面的表。
@@ -5036,7 +5037,6 @@ if cur_t == "__DASHBOARD__":
                 st.caption(
                     f"({_sim_px:,.2f} − {_sim_cost:,.2f}) × {_sim_sh:,} "
                     f"= {_sim_cur}{_amt:,.0f}")
-            st.rerun()
 
         # ── 下方：損益表（唯讀，代碼/損益%/損益美/損益台）──
         if _pl_rows:
