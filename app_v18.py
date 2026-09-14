@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.03", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.04", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2544,6 +2544,27 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
             _legacy_types = set()
             _tap_blocked = False
 
+            # [V27.04] 二次進場：整份 df 判定一次，不進上面的逐日切片迴圈
+            #   （它是型態訊號，不是「那天的狀態」）。
+            #   新鮮度從**確認日**算 —— 見 second_entry_recent 的註解。
+            #   同時加進 _hit_types 與 _legacy_types：新舊對照帳要維持
+            #   apples-to-apples，差額才還是只反映達標閘門的效果（V26.97 ①）。
+            #   自己包 try：這支在 per-ticker 的大 try 裡面，它一拋例外就會
+            #   觸發 continue，整檔連同達標/吸籌/抄底一起從結果消失 ——
+            #   一個**次要**訊號不該有能力殺掉主要訊號（測試 v2696/v2697
+            #   就是這樣紅的）。
+            try:
+                _se = second_entry_recent(d)
+            except Exception:
+                _se = None
+            if _se:
+                _se_dt = _se["date"]
+                hits.append(("🔁 二次進場",
+                             f"{_se_dt.month}/{_se_dt.day}",
+                             round(_se["close"], 2)))
+                _hit_types.add("🔁 二次進場")
+                _legacy_types.add("🔁 二次進場")
+
             # 對最近 lookback_days 天，各自模擬「那天是最後一根」的狀態
             for back in range(lookback_days):
                 end = len(d) - back
@@ -2662,6 +2683,14 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
                             "ATR_Trailing_Stop", "MACD", "Signal_Line",
                             "MACD_Hist"]
                 _mini = d[[c for c in _mc_cols if c in d.columns]].tail(120).copy()
+                # [V27.04] 二次進場遮罩**在完整 d 上算好**再切片帶進來。
+                #   若改成在迷你圖裡對 120 根切片重算，ZigZag 左緣會少判幾個
+                #   點，同一檔在主圖與迷你圖就會標得不一樣（Rule 7）。
+                try:
+                    _mini["_SE"] = detect_second_entry(d).reindex(
+                        _mini.index, fill_value=False)
+                except Exception:
+                    _mini["_SE"] = False
 
             # [V26.94] 分析師目標與技術目標分成兩欄，不再互相取代 —— 一個是
             #   「分析師覺得值多少」，一個是「技術面下一個壓力在哪」，讓後者
@@ -2869,6 +2898,14 @@ def scan_watchlist_icons(tickers, lookback_days=5):
                 parts.append("🤫")
             if _chaodi_count > 0:
                 parts.append(f"💎{_chaodi_count}")
+            # [V27.04] 二次進場。它是型態訊號（整份 df 判一次），不走上面
+            #   那套逐根索引的保鮮期 —— 新鮮度改從**確認日**算，
+            #   理由見 second_entry_recent 的註解。
+            try:
+                if second_entry_recent(d):
+                    parts.append("🔁")
+            except Exception:
+                pass          # 單一訊號算不出來不該讓整檔的圖示消失
             if _dabiao_ok:
                 parts.append("💰")
             if _guore_ok:
@@ -2893,7 +2930,7 @@ _SIG_MONEYFLOW = ("🟢⬆", "🔴⬇")
 _SIG_PREFIX_KEEP = {"exit": ("🟡",), "entry": ("🟣",)}
 _SIG_TOKEN_KEEP = {
     "exit":  ("SELL", "💰", "🔥") + _SIG_MONEYFLOW,
-    "entry": ("BUY", "💎", "🤫") + _SIG_MONEYFLOW,
+    "entry": ("BUY", "💎", "🤫", "🔁") + _SIG_MONEYFLOW,   # [V27.04] 🔁 二次進場
 }
 
 
@@ -3702,6 +3739,42 @@ def detect_second_entry(df: pd.DataFrame, n: int = _SECOND_ENTRY_ZIGZAG_N) -> pd
     return out
 
 
+# ── [V27.04] 二次進場的「新鮮度」——從**確認日**起算，不是低點日 ────────
+#   compute_zigzag_pivots 的迴圈是 range(n, len(df) - n)，所以訊號根與最後
+#   一根的距離**恆 >= n**（這是迴圈範圍決定的，跟資料無關）。
+#   若照一般訊號的作法用「低點日距今 < 2 根」當保鮮期，結果恆為 0 —— 那會
+#   做出一個保證永遠不亮的功能。
+#
+#   正確的基準是**確認日 = 低點日 + n**：那才是「這個訊號今天才變成已知」
+#   的日子。效期 2 天 → 低點落在 n ~ n+1 根前的都算新鮮。
+#   走勢圖上的標記用同一支 detect_second_entry，定義不會分岔（Rule 7）。
+_SECOND_ENTRY_FRESH_DAYS = 2
+
+
+def second_entry_recent(df, fresh_days=_SECOND_ENTRY_FRESH_DAYS,
+                        n=_SECOND_ENTRY_ZIGZAG_N):
+    """回傳最近一個「確認日在 fresh_days 內」的二次進場，沒有則回 None。
+
+    回傳 dict: {idx_pos, date, close, confirmed_pos, bars_since_confirm}
+    """
+    mask = detect_second_entry(df, n)
+    hits = np.flatnonzero(mask.values)
+    if len(hits) == 0:
+        return None
+    last = len(df) - 1
+    i = int(hits[-1])            # 只看最新那個：它不新鮮，更舊的更不可能
+    confirmed = i + n
+    if last - confirmed >= fresh_days:
+        return None
+    return {
+        "idx_pos": i,
+        "date": df.index[i],
+        "close": float(df["Close"].iloc[i]),
+        "confirmed_pos": confirmed,
+        "bars_since_confirm": int(last - confirmed),
+    }
+
+
 def get_launch_macd_points(df: pd.DataFrame) -> pd.Series:
     """
     MACD 金叉 + 同時滿足起漲條件（RSI 剛從低位回升、收盤在 SMA_20 附近以內）。
@@ -4081,7 +4154,8 @@ with st.sidebar:
         st.rerun()
 
     if st.session_state.get("_wl_icons"):
-        st.caption("🟡達標 🟣炒底（色標）｜🟢⬆吸籌 🔴⬇出貨 BUY SELL 🤫吸籌 💎N炒底 💰達標 🔥過熱（保鮮3交易日）")
+        st.caption(f"🟡達標 🟣炒底（色標）｜🟢⬆吸籌 🔴⬇出貨 BUY SELL 🤫吸籌 💎N炒底 💰達標 🔥過熱（保鮮3交易日）"
+                   f"｜🔁二次進場（確認日起 {_SECOND_ENTRY_FRESH_DAYS} 交易日內）")
 
     # ── 多選模式 toggle ─────────────────────────────────
     multi_mode = st.toggle(
@@ -4426,10 +4500,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.03" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.03" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.03" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.03")
+st.title("📡 掃描中心 V27.04" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.04" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.04" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.04")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -4849,7 +4923,9 @@ if cur_t == "__DASHBOARD__":
             else:
                 st.info("尚未輸入持倉，或未設定 Gist。可在下方表格填入成本與股數後儲存。")
         # [V26.63] #2 訊號圖示說明（總表補上，原本只在側邊掃描鈕）
-        st.caption("訊號圖示：🟡達標　🟣炒底　🟢⬆吸籌　🔴⬇出貨　BUY／SELL（MACD 金／死叉）　🤫吸籌　💎N＝炒底N次　💰達標　🔥過熱（保鮮3交易日）")
+        st.caption(f"訊號圖示：🟡達標　🟣炒底　🟢⬆吸籌　🔴⬇出貨　BUY／SELL（MACD 金／死叉）　🤫吸籌　💎N＝炒底N次　💰達標　🔥過熱（保鮮3交易日）"
+                   f"　🔁二次進場（回檔不破+更高低點；**確認日**起 {_SECOND_ENTRY_FRESH_DAYS} 交易日內，"
+                   f"低點本身在 {_SECOND_ENTRY_ZIGZAG_N} 天前）")
         # [V26.76] 兩張表的訊號欄已分方向過濾，說明清楚免得誤讀「沒訊號」
         st.caption("⚠️ 訊號欄已分方向：**有持倉只顯示出場向**（🟡 💰 SELL 🔥）、"
                    "**未持倉只顯示進場向**（🟣 💎 BUY 🤫），主力進出（🟢⬆／🔴⬇）兩邊都顯示。"
@@ -5615,6 +5691,19 @@ def _mini_dip_fig(mini):
         x=mini.index, open=mini["Open"], high=mini["High"],
         low=mini["Low"], close=mini["Close"], name="K線"), row=1, col=1)
 
+    # [V27.04] 二次進場：遮罩是掃描時在完整資料上算好帶進來的（欄位 _SE）。
+    #   舊快取的 mini 沒有這欄，所以要用 in 判斷，不能直接取。
+    if "_SE" in mini.columns:
+        _se_idx = mini.index[mini["_SE"].fillna(False).astype(bool)]
+        if len(_se_idx):
+            fig.add_trace(go.Scatter(
+                x=_se_idx, y=mini.loc[_se_idx, "Low"] * 0.985,
+                mode="markers+text", text=["🔁"] * len(_se_idx),
+                textposition="bottom center", textfont=dict(size=13),
+                marker=dict(size=1, color="rgba(0,0,0,0)"),
+                hovertext=["二次進場（回檔不破+更高低點）"] * len(_se_idx),
+                hoverinfo="text", showlegend=False), row=1, col=1)
+
     for _c, _color, _w in (("SMA_20", "#d946ef", 1.6),
                            ("SMA_60", "#2563eb", 1.6)):
         if _c in mini.columns:
@@ -5720,9 +5809,16 @@ def _render_personal_scan():
         #   收成「近兩週第一次觸及」（事件）—— 說明沒改的話，畫面上少掉的那
         #   幾百檔會被當成掃描壞了。
         st.caption(
-            f"掃描你的清單中，最近 3 個交易日出現 💰達標 / 🤫吸籌 / 💎乖離抄底 的個股。"
+            f"掃描你的清單中，最近 3 個交易日出現 💰達標 / 🤫吸籌 / 💎乖離抄底 的個股，"
+            f"以及 🔁二次進場。"
             f"**💰達標＝近 {_TAP_FRESH_DAYS} 根 K 內第一次觸及技術目標**（剛突破），"
-            "一直待在壓力位的不算。")
+            "一直待在壓力位的不算。\n\n"
+            f"🔁 **二次進場**＝多頭排列維持中、回檔觸及月線但收盤未破季線、"
+            f"且低點高於前一個低點。**效期從「確認日」起算 "
+            f"{_SECOND_ENTRY_FRESH_DAYS} 個交易日** —— 低點要等右邊 "
+            f"{_SECOND_ENTRY_ZIGZAG_N} 根都比它高才算數，所以表上顯示的日期"
+            f"會是 {_SECOND_ENTRY_ZIGZAG_N}~{_SECOND_ENTRY_ZIGZAG_N + _SECOND_ENTRY_FRESH_DAYS - 1}"
+            f" 個交易日前，那是定義使然，不是資料延遲。")
         _scan_scope = st.radio(
             "掃描範圍",
             ["📌 自選股清單", "🎯 AI 目標清單（242 檔，約 2-4 分鐘）",
