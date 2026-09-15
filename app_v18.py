@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.05", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.07", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -587,6 +587,25 @@ if not FINMIND_TOKEN:
 FRED_KEY = _get_secret("FRED_API_KEY", "")
 if not FRED_KEY:
     print("⚠️  警告：未設定 FRED_API_KEY，空頭距離指數的殖利率/信用利差將無法使用。")
+
+# ── [V27.06] SEC User-Agent ────────────────────────────────────
+#   SEC 明文要求 User-Agent 帶可聯絡的真實 email，用預設的
+#   "Stock App Research contact@example.com" 可能被限流或擋掉。
+#
+#   刻意**不把 email 寫進 insider_sentiment.py** —— 那個檔案要上 GitHub，
+#   硬寫等於把信箱公開給爬蟲。改成從 secrets 讀，再注入模組。
+#   insider_sentiment 本身不 import streamlit（它是獨立模組），所以
+#   由這裡覆寫它的模組層級常數，而不是讓它自己去讀 st.secrets。
+#
+#   在 Streamlit secrets（或環境變數）設：
+#       SEC_USER_AGENT = "你的名字 你的email@example.com"
+SEC_USER_AGENT = _get_secret("SEC_USER_AGENT", "")
+if _INSIDER_AVAILABLE:
+    if SEC_USER_AGENT:
+        insider_sentiment.SEC_USER_AGENT = SEC_USER_AGENT
+        insider_sentiment.SEC_HEADERS["User-Agent"] = SEC_USER_AGENT
+    else:
+        print("⚠️  警告：未設定 SEC_USER_AGENT，SEC 可能限流內部人賣壓查詢。")
 
 # [V26.28] 共用股票池（提頂層，AI 目標掃描器 + 個人訊號掃描器共用，避免兩份分歧）
 _SP100_CORE_TICKERS = [
@@ -1247,6 +1266,10 @@ def _query_tw_name_bulk():
 # [V26.46] 台股中文名 → 代碼對照（226 檔，含 ETF；用於中文搜尋輸入）
 _TW_NAME_TO_CODE = {"台泥":"1101.TW", "亞泥":"1102.TW", "嘉泥":"1103.TW", "環泥":"1104.TW", "幸福":"1108.TW", "信大":"1109.TW", "東泥":"1110.TW", "味全":"1201.TW", "味王":"1203.TW", "大成":"1210.TW", "大飲":"1213.TW", "卜蜂":"1215.TW", "統一":"1216.TW", "愛之味":"1217.TW", "泰山":"1218.TW", "福壽":"1219.TW", "台榮":"1220.TW", "福懋油":"1225.TW", "佳格":"1227.TW", "聯華":"1229.TW", "聯華食":"1231.TW", "大統益":"1232.TW", "天仁":"1233.TW", "黑松":"1234.TW", "宏亞":"1236.TW", "台塑":"1301.TW", "南亞":"1303.TW", "台聚":"1304.TW", "華夏":"1305.TW", "亞聚":"1308.TW", "台達化":"1309.TW", "台苯":"1310.TW", "國喬":"1312.TW", "聯成":"1313.TW", "中石化":"1314.TW", "達新":"1315.TW", "東陽":"1319.TW", "台化":"1326.TW", "遠東新":"1402.TW", "新纖":"1409.TW", "新紡":"1419.TW", "福懋":"1434.TW", "南紡":"1440.TW", "力麗":"1444.TW", "力鵬":"1447.TW", "年興":"1451.TW", "宏益":"1452.TW", "集盛":"1455.TW", "聯發":"1459.TW", "台南":"1473.TW", "儒鴻":"1476.TW", "聚陽":"1477.TW", "士電":"1503.TW", "東元":"1504.TW", "中興電":"1513.TW", "亞力":"1514.TW", "力山":"1515.TW", "華城":"1519.TW", "堤維西":"1522.TW", "勤美":"1532.TW", "和大":"1536.TW", "中砂":"1560.TW", "信錦":"1582.TW", "亞德客-KY":"1590.TW", "華電":"1603.TW", "聲寶":"1604.TW", "華新":"1605.TW", "華榮":"1608.TW", "大亞":"1609.TW", "南僑":"1702.TW", "葡萄王":"1707.TW", "東聯":"1710.TW", "永光":"1711.TW", "興農":"1712.TW", "長興":"1717.TW", "台肥":"1722.TW", "中碳":"1723.TW", "喬山":"1736.TW", "美時":"1795.TW", "台玻":"1802.TW", "中釉":"1809.TW", "正隆":"1904.TW", "華紙":"1905.TW", "永豐餘":"1907.TW", "榮成":"1909.TW", "中鋼":"2002.TW", "東和鋼鐵":"2006.TW", "中鴻":"2014.TW", "豐興":"2015.TW", "大成鋼":"2027.TW", "新光鋼":"2031.TW", "上銀":"2049.TW", "南港":"2101.TW", "台橡":"2103.TW", "國際中橡":"2104.TW", "正新":"2105.TW", "建大":"2106.TW", "裕隆":"2201.TW", "中華":"2204.TW", "三陽工業":"2206.TW", "和泰車":"2207.TW", "耿鼎":"2222.TW", "光寶科":"2301.TW", "聯電":"2303.TW", "台達電":"2308.TW", "金寶":"2312.TW", "華通":"2313.TW", "鴻海":"2317.TW", "中環":"2323.TW", "仁寶":"2324.TW", "國巨":"2327.TW", "台積電":"2330.TW", "旺宏":"2337.TW", "華邦電":"2344.TW", "智邦":"2345.TW", "佳世達":"2352.TW", "宏碁":"2353.TW", "鴻準":"2354.TW", "英業達":"2356.TW", "華碩":"2357.TW", "致茂":"2360.TW", "藍天":"2362.TW", "金像電":"2368.TW", "大同":"2371.TW", "技嘉":"2376.TW", "微星":"2377.TW", "瑞昱":"2379.TW", "廣達":"2382.TW", "台光電":"2383.TW", "群光":"2385.TW", "研華":"2395.TW", "漢唐":"2404.TW", "南亞科":"2408.TW", "友達":"2409.TW", "中華電":"2412.TW", "京元電子":"2449.TW", "聯發科":"2454.TW", "可成":"2474.TW", "華新科":"2492.TW", "國產":"2504.TW", "興富發":"2542.TW", "長榮":"2603.TW", "裕民":"2606.TW", "陽明":"2609.TW", "華航":"2610.TW", "萬海":"2615.TW", "長榮航":"2618.TW", "台灣高鐵":"2633.TW", "彰銀":"2801.TW", "華南金":"2880.TW", "富邦金":"2881.TW", "國泰金":"2882.TW", "凱基金":"2883.TW", "玉山金":"2884.TW", "元大金":"2885.TW", "兆豐金":"2886.TW", "台新金":"2887.TW", "新光金":"2888.TW", "永豐金":"2890.TW", "中信金":"2891.TW", "第一金":"2892.TW", "統一超":"2912.TW", "大立光":"3008.TW", "聯詠":"3034.TW", "欣興":"3037.TW", "健鼎":"3044.TW", "台灣大":"3045.TW", "穩懋":"3105.TWO", "緯創":"3231.TW", "威剛":"3260.TWO", "欣銓":"3264.TWO", "鈊象":"3293.TWO", "創意":"3443.TW", "群創":"3481.TW", "力旺":"3529.TWO", "世芯-KY":"3661.TW", "日月光投控":"3711.TW", "東洋":"4105.TWO", "遠傳":"4904.TW", "和碩":"4938.TW", "臻鼎-KY":"4958.TW", "譜瑞-KY":"4966.TWO", "信驊":"5274.TWO", "世界":"5347.TWO", "中美晶":"5483.TWO", "中租-KY":"5871.TW", "上海商銀":"5876.TW", "合庫金":"5880.TW", "寶雅":"5904.TWO", "新普":"6121.TWO", "頎邦":"6147.TWO", "合晶":"6182.TWO", "力成":"6239.TW", "矽力*-KY":"6415.TW", "環球晶":"6488.TWO", "台塑化":"6505.TW", "緯穎":"6669.TW", "南電":"8046.TW", "元太":"8069.TWO", "群聯":"8299.TWO", "富邦媒":"8454.TW", "寶成":"9904.TW", "豐泰":"9910.TW", "美利達":"9914.TW", "巨大":"9921.TW", "裕融":"9941.TW", "潤泰新":"9945.TW", "元大台灣50":"0050.TW", "元大高股息":"0056.TW", "國泰永續高股息":"00878.TW", "群益台灣精選高息":"00919.TW", "復華台灣科技優息":"00929.TW", "富邦台50":"006208.TW", "元大台灣高息低波":"00713.TW", "國泰台灣5G+":"00881.TW", "元大台灣價值高息":"00940.TW", "統一台灣高息動能":"00939.TW", "長虹":"5534.TW", "汎銓":"6830.TW", "南茂":"8150.TW", "晶彩科":"3535.TW", "尖點":"8021.TW", "聯友金屬-創":"7610.TW", "明基材":"8215.TW", "富喬":"1815.TWO", "主動統一升級50":"00403A.TW"}
 
+# [V27.07] 代碼 → 中文名（上面那張表反轉）。同名不同代碼時後者覆蓋前者，
+#   但台股中文名幾乎不重複，且這只是 fallback，不值得為此加去重邏輯。
+_TW_CODE_TO_NAME = {v: k for k, v in _TW_NAME_TO_CODE.items()}
+
 def resolve_tw_input(raw):
     """[V26.46] 把使用者輸入轉成可查詢的代碼。
     - 純中文（在對照表）→ 回對照的代碼（如 "台積電" → "2330.TW"）
@@ -1353,6 +1376,19 @@ def get_stock_name(ticker: str) -> str:
             local_map[ticker] = _bulk_name
             json_save(TW_NAMES_FILE, local_map)
             return _bulk_name
+        # --- 2.7 [V27.07] 內建對照表（_TW_NAME_TO_CODE 反轉）---
+        #   那張表本來只用於「中文搜尋輸入」（打「威剛」→ 3260.TWO），
+        #   顯示端從來沒反過來用。226 筆、含 18 檔上櫃，零請求。
+        #
+        #   擺在官方端點**之後**：官方是權威來源，這張是人工維護的，
+        #   公司改名時它會過時。它的角色是端點掛掉時的保險
+        #   （上櫃端點掛掉時，威剛這類常見股至少還有中文）。
+        #
+        #   **刻意不寫進 tw_names.json**：寫進去的話，等官方端點恢復了
+        #   也會一直讀到這份可能過時的快取。保險就該只在需要時頂上。
+        _static_name = _TW_CODE_TO_NAME.get(ticker)
+        if _static_name:
+            return _static_name
         # --- 3. 官方表也沒有 → 走逐檔 API（有 st.cache_data 保護）---
         name = _query_tw_name_api(ticker)
         # --- 4. 查到名稱才存檔，存檔與 API cache 完全分離 ---
@@ -2532,7 +2568,12 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
                 continue
             if stats is not None:
                 stats["evaluated"] += 1
-            threshold = get_technical_target_threshold(d)
+            # [V27.06] 逐根門檻。舊版算一次（用最後一根）再拿去比對 3 天，
+            #   等於用今天的壓力位審判前兩天 —— 跟 V27.02 修掉的走勢圖是
+            #   同一類 bug，只是窗口小很多（3 天 vs 120 根）。
+            #   ⚠️ 這會改變掃描結果，V26.97 的 _TAP_FRESH_DAYS 校準基準跟著變。
+            _thr_series = get_technical_target_threshold_series(d)
+            threshold = float(_thr_series.iloc[-1])   # 仍留著給下方技術目標欄用
             price = float(d["Close"].iloc[-1])
             hits = []   # (訊號, 日期, 金額)
             # [V26.96] 分布統計用：這一檔命中了哪些「天」與哪些「類型」。
@@ -2574,8 +2615,9 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
                 row = slice_df.iloc[-1]
                 dt = slice_df.index[-1]
                 md = f"{dt.month}/{dt.day}"
-                # 達標（最高價觸及技術目標）
-                if threshold and row["High"] >= threshold:
+                # 達標（最高價觸及技術目標）—— 用**那一根當下**的門檻
+                _thr_i = _thr_series.iloc[end - 1]
+                if pd.notna(_thr_i) and row["High"] >= _thr_i:
                     _legacy_types.add("💰 達標")
                     # [V26.97] 新鮮度閘門：往前 tap_fresh_days 根都沒碰過這個
                     #   門檻才算「達標」。碰過 = 這檔一直待在壓力位，那是狀態
@@ -2583,7 +2625,7 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
                     #   所以這段一定取得到，不必再判空。
                     _prior_high = float(
                         slice_df["High"].iloc[-(1 + tap_fresh_days):-1].max())
-                    if _prior_high >= threshold:
+                    if _prior_high >= _thr_i:      # [V27.06] 同一根的門檻
                         _tap_blocked = True
                     else:
                         hits.append(("💰 達標", md, round(float(row["Close"]), 2)))
@@ -4500,10 +4542,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.05" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.05" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.05" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.05")
+st.title("📡 掃描中心 V27.07" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.07" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.07" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.07")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -7911,13 +7953,23 @@ for i in range(5, len(p_data)):
     _thr_p = _target_threshold_series.get(p_data.index[i - 1])
     _hit_i = pd.notna(_thr_i) and curr['High'] >= _thr_i
     _hit_p = pd.notna(_thr_p) and prior['High'] >= _thr_p
-    if (_hit_i or curr['RSI'] > 75) and not (_hit_p or prior['RSI'] > 75):
+    _hot_i = curr['RSI'] > 75
+    _hot_p = prior['RSI'] > 75
+    # [V27.06] 達標與過熱各自判「是不是剛發生」，不再共用同一個 not prior。
+    #   舊寫法：(達標 or 過熱) and not (前一根 達標 or 過熱)
+    #   → 昨天過熱、今天達標時，右半邊為真 → 整條被吃掉，標籤不出現。
+    #   兩者是不同的事件，本來就該各自判首次。
+    _new_hit = _hit_i and not _hit_p
+    _new_hot = _hot_i and not _hot_p
+    if _new_hit or _new_hot:
+        # 同一根兩者都剛發生時優先顯示達標（它是價格事件，比 RSI 具體）
+        _as_hit = _new_hit
         fig.add_annotation(
             x=p_data.index[i], y=curr['High'],
-            text=f"💰達標<br>${curr['Close']:.1f}" if _hit_i else f"🔥過熱<br>${curr['Close']:.1f}",
+            text=f"💰達標<br>${curr['Close']:.1f}" if _as_hit else f"🔥過熱<br>${curr['Close']:.1f}",
             showarrow=True, arrowhead=1, ax=0, ay=-45, row=1, col=1,
-            bgcolor="rgba(255, 193, 7, 0.8)" if _hit_i else "rgba(255, 69, 0, 0.8)",
-            font=dict(color="black" if _hit_i else "white", size=9)
+            bgcolor="rgba(255, 193, 7, 0.8)" if _as_hit else "rgba(255, 69, 0, 0.8)",
+            font=dict(color="black" if _as_hit else "white", size=9)
         )
 
     is_near_support = False
@@ -8063,8 +8115,21 @@ try:
         _lt_thr = get_technical_target_threshold(df)
     except Exception:
         _lt_thr = None
-    _lt_hit_target = bool(_lt_thr) and _lt_price >= _lt_thr
-    _lt_overheat = _lt_hit_target or (_lt_rsi > 70)
+    # ── [V27.07] 用詞與掃描器的「💰 達標」切開 ──────────────────
+    #   四個地方用同一個「達標」在講三種不同的事實：
+    #     掃描中心    High >= 門檻 + 近 10 根沒碰過 → 「近兩週第一次摸到」（事件）
+    #     自選股按鈕  High >= 門檻 + 前一根沒碰過   → 「今天剛摸到」（事件，窗口 1 根）
+    #     走勢圖標籤  同上
+    #     這裡        Close >= 門檻，無閘門、用收盤 → 「**現在**在壓力位」（狀態）
+    #
+    #   實際後果：一檔在壓力位盤整五天 → 掃描中心說沒達標（10 根閘門擋住）、
+    #   自選股按鈕天天掛 💰、這裡一直寫「已達技術目標」。同一個詞三種印象。
+    #
+    #   決定（使用者拍板）：**不統一邏輯，只不讓同一個符號講兩件事。**
+    #   兩種資訊都有用 ——「剛突破沒」與「現在貴不貴」是不同判斷。
+    #   這裡改叫「🔺 在壓力位」，掃描器維持「💰 達標」。
+    _lt_at_resist = bool(_lt_thr) and _lt_price >= _lt_thr
+    _lt_overheat = _lt_at_resist or (_lt_rsi > 70)
 
     try:
         _lt_smart = detect_smart_money_status(df.iloc[-10:]) or ""
@@ -8081,10 +8146,10 @@ try:
         pass
 
     if _lt_overheat:
-        _lt_label, _lt_color = "🟠 轉弱注意（過熱／達標，慎追高）", "#f97316"
+        _lt_label, _lt_color = "🟠 轉弱注意（過熱／在壓力位，慎追高）", "#f97316"
         _pre = []
-        if _lt_hit_target:
-            _pre.append(f"現價已達技術目標 ${_lt_thr:.2f}")
+        if _lt_at_resist:
+            _pre.append(f"🔺 現價在壓力位 ${_lt_thr:.2f} 之上（狀態，非「剛突破」）")
         if _lt_rsi > 70:
             _pre.append(f"RSI {_lt_rsi:.0f} 過熱")
         if _lt_score >= 2:
