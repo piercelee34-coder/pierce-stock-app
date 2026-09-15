@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.08", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.10", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2776,10 +2776,45 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
             _tech = float(threshold) if threshold else None
             _tech_up = round((_tech / price - 1) * 100, 1) if (_tech and price) else None
 
+            # [V27.09] 相對前高折價%。d 已經在手上（批次抓的 period="1y"），
+            #   零額外請求 —— 這是第五次遇到「資料早就抓回來了但被丟掉」的
+            #   同一類問題（V26.95 美股名稱／V26.98 台股中文名／V27.00 產業／
+            #   V27.04 清單價格）。
+            #
+            #   **正負號跟「上檔%」相反，是刻意的**：
+            #     上檔% ＝ (目標 / 現價 - 1)×100，正數＝還有多少空間往上
+            #     折價% ＝ (前高 - 現價) / 前高 ×100，正數＝比前高便宜多少
+            #   下游要的是「折價 > 10%」這種直覺門檻，硬要統一號誌反而難用。
+            #   兩種號誌同表並存，所以欄名各自把話講死（「上檔%」vs「折價%」），
+            #   不共用一個叫「%」的欄（Rule 7：同一個符號不講兩件事）。
+            #
+            #   窗口取 252 根（約一年）＝ 批次下載的全部。新上市股拿不到一年，
+            #   實際根數記在 _hi_bars，顯示端會把「不足一年」的檔數講出來 ——
+            #   不講的話，上市三個月的股票會回報一個看起來很小的折價%，
+            #   而你不會知道那是因為它根本還沒經歷過高點（Rule 12）。
+            #   變數刻意叫 _yr_high 而不是 _prev_high：scan_watchlist_icons
+            #   裡已經有一個 _prev_high，意思是「現價之上最近的一個局部高點」
+            #   （9 根 rolling 局部極大，＝下一個壓力），跟這裡的「一年最高價」
+            #   完全是兩件事。同名不同義正是 V27.07 才剛收斂掉的那種坑，
+            #   欄名也一併叫「一年高」而不是「前高」（Rule 7）。
+            _hi_win = d["High"].tail(252)
+            _yr_high = float(_hi_win.max()) if len(_hi_win) else None
+            _disc = (round((_yr_high - price) / _yr_high * 100, 1)
+                     if (_yr_high and _yr_high > 0) else None)
+            # 純文字訊號類型：CSV 拿去程式篩選用。旁邊那欄
+            #   「訊號（類型 日期 金額）」是給人看的，一個字串裡混了三種
+            #   資訊，要 grep 出「所有乖離抄底」會很痛苦。
+            _sig_types = "｜".join(
+                dict.fromkeys(s[0].split(" ", 1)[-1] for s in uniq))
+
             out.append({
                 "代碼": tk,
                 "名稱": get_stock_name(tk),
+                "訊號類型": _sig_types,
                 "現價": round(price, 2),
+                "一年高": round(_yr_high, 2) if _yr_high else None,
+                "折價%": _disc,
+                "_hi_bars": int(len(_hi_win)),
                 "分析師目標": _an_txt,
                 "分析師上檔%": _an_up,
                 "技術目標": round(_tech, 2) if _tech else None,
@@ -4592,10 +4627,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.08" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.08" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.08" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.08")
+st.title("📡 掃描中心 V27.10" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.10" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.10" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.10")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -5757,6 +5792,34 @@ except ImportError:
     _REV_AVAILABLE = False
 
 
+# ── [V27.10] 訊號類型 × 折價% 是否適用 ───────────────────────────
+#   (訊號類型, 可用折價%篩?, 理由)
+#
+#   **這四條是從判定式推導的，不是回測出來的門檻。** 差別很重要：
+#   「乖離抄底的折價通常很大」是定義的必然結果（判定式要求 Close 跌破
+#   布林下軌且 RSI<30）；「折價 > 12% 才值得買」則是完全不同的主張，
+#   需要回測才能講，這裡不講。
+#
+#   所以這張表只回答一個問題：**這個訊號拿折價% 去篩會不會篩壞？**
+#   具體門檻數字留給下游，畫面上一併附本次掃描的實際分布供參考。
+_SIG_DISC_RULES = [
+    ("乖離抄底", True,
+     "判定式要求 Close 跌破布林下軌且 RSI<30（或 Low 破下軌 + RSI<40 收紅）"
+     "—— 定義上就在低位，折價大是必然，拿折價篩不會篩壞。"),
+    ("吸籌", True,
+     "判定式要求近 5 日跌逾 2%、AD_Line 反而上升、RSI<50 —— 價跌但有人在收，"
+     "位置中低。可以篩，但門檻要比乖離抄底鬆。"),
+    ("達標", False,
+     "判定式是 High ≥ min(布林上軌, 60 日高) 且近 10 根第一次觸及 —— "
+     "定義上就在近期高點附近。V26.97 實測：達標檔的技術上檔% 中位數只有 "
+     "+1.0%（美）/ +3.1%（台）。用「折價>10%」會把它整批砍光。"),
+    ("二次進場", False,
+     "判定式是多頭排列維持中、回檔觸月線但收盤未破季線、且低點高於前低 —— "
+     "定義上是上升趨勢裡的**淺**回檔，折價小才對。用折價篩等於在找不符合"
+     "定義的標的。"),
+]
+
+
 def render_scanner_center():
     # ==========================================
     # 🎯 [V26.28] 個人清單訊號掃描器（按鈕觸發，掃自選股 / AI 目標）
@@ -6066,6 +6129,16 @@ def _render_personal_scan():
                 st.session_state["_sig_scan_results"] = _sig_results
                 st.session_state["_sig_scan_scope_done"] = _scan_scope
                 st.session_state["_sig_scan_stats"] = _sig_stats
+                # [V27.09] 掃描時間戳。下游（bot / 試算表）拿到 CSV 時要
+                #   知道這份是什麼時候掃的 —— 檔名不可靠，使用者會改名。
+                try:
+                    from datetime import datetime as _dts
+                    import pytz as _pytz_s
+                    st.session_state["_sig_scan_ts"] = _dts.now(
+                        _pytz_s.timezone("Asia/Taipei")).strftime("%Y-%m-%d %H:%M")
+                except Exception:
+                    st.session_state["_sig_scan_ts"] = \
+                        datetime.now().strftime("%Y-%m-%d %H:%M")
 
         # 顯示上次掃描結果
         _res = st.session_state.get("_sig_scan_results")
@@ -6081,6 +6154,13 @@ def _render_personal_scan():
                 except Exception as _se:
                     _sec_map, _sec_diag = {}, {"errors": [f"{type(_se).__name__}: {_se}"]}
 
+                # [V27.09] 清單來源與掃描時間做成欄位（每列重複），不是只印在
+                #   畫面上 —— Streamlit 表格右上角的 Download as CSV 匯出的
+                #   就是這個 DataFrame，印在 st.caption 的東西不會進 CSV。
+                #   兩欄擺最後，螢幕上滑到最右才看到，不擋常用欄。
+                _scope_done = st.session_state.get("_sig_scan_scope_done", "")
+                _scan_ts = st.session_state.get("_sig_scan_ts", "")
+
                 _table_rows = []
                 for r in _res:
                     _sig_txt = "、".join(
@@ -6089,14 +6169,105 @@ def _render_personal_scan():
                     _table_rows.append({
                         "代碼": r["代碼"], "名稱": r["名稱"],
                         "產業": get_sector(r["代碼"], _sec_map),
+                        "訊號類型": r.get("訊號類型", ""),
                         "現價": r["現價"],
+                        "一年高": r.get("一年高"),
+                        "折價%": r.get("折價%"),
                         "分析師目標": r.get("分析師目標", "未查"),
                         "分析師上檔%": r.get("分析師上檔%"),
                         "技術目標": r.get("技術目標"),
                         "技術上檔%": r.get("技術上檔%"),
                         "訊號（類型 日期 金額）": _sig_txt,
+                        "清單來源": _scope_done,
+                        "掃描時間": _scan_ts,
                     })
                 st.dataframe(pd.DataFrame(_table_rows), width='stretch', hide_index=True)
+                st.caption(
+                    "📄 **欄位說明**（表格右上角 ⬇ 可直接匯出 CSV）："
+                    "`訊號類型` 純文字、以「｜」分隔，給程式篩選用；"
+                    "`一年高` ＝ 近 252 根 K 的最高價；"
+                    "**`折價%` ＝ (一年高 − 現價) / 一年高 × 100，正數＝比一年高便宜多少**"
+                    "（注意：跟「上檔%」的正負號相反，那兩欄正數代表還有多少上漲空間）；"
+                    "`清單來源` / `掃描時間` 每列重複是為了讓 CSV 單獨拿出去也看得懂。")
+                # Rule 12：歷史不足一年的檔，折價% 的分母不是真正的「年度高點」。
+                _short_hi = [r["代碼"] for r in _res if r.get("_hi_bars", 999) < 240]
+                if _short_hi:
+                    st.caption(
+                        f"⚠️ {len(_short_hi)} 檔上市未滿一年，`一年高` 是用實際可得的"
+                        f" K 線算的（非年度高點），折價% 會偏小："
+                        + "、".join(_short_hi[:8])
+                        + ("…" if len(_short_hi) > 8 else ""))
+
+                # ── [V27.10] 訊號類型 × 折價% 門檻對照 ────────────────
+                #   bot 想把「折價>10%」當全域硬門檻，那會把達標與二次進場
+                #   整批砍掉。規則印在畫面上，下游才不用每次重問。
+                with st.expander("📐 訊號類型 × 折價% 門檻對照（給 bot／自己篩選用）",
+                                 expanded=False):
+                    # 一檔可能同時有多種訊號（訊號類型欄以「｜」分隔），
+                    #   折價% 是**個股**的屬性不是訊號的屬性，所以同一檔會被
+                    #   算進它每一個訊號類型的分布。這不是重複計算的 bug，
+                    #   是「達標檔的折價長什麼樣」這個問題的正確答案。
+                    _disc_by_type = {}
+                    for _tr in _table_rows:
+                        _dv = _tr.get("折價%")
+                        if _dv is None:
+                            continue
+                        for _ty in (_tr.get("訊號類型") or "").split("｜"):
+                            if _ty:
+                                _disc_by_type.setdefault(_ty, []).append(_dv)
+
+                    _rule_rows = []
+                    for _ty, _use, _why in _SIG_DISC_RULES:
+                        _vs = _disc_by_type.get(_ty, [])
+                        _med = _p25 = _p75 = None
+                        if _vs:
+                            _ss = pd.Series(_vs)
+                            _med = round(float(_ss.median()), 1)
+                            _p25 = round(float(_ss.quantile(0.25)), 1)
+                            _p75 = round(float(_ss.quantile(0.75)), 1)
+                        _rule_rows.append({
+                            "訊號類型": _ty,
+                            "可用折價%篩?": "✅ 可以" if _use else "❌ 不要",
+                            "本次檔數": len(_vs),
+                            "折價% P25": _p25,
+                            "折價% 中位數": _med,
+                            "折價% P75": _p75,
+                            "理由（從判定式推導）": _why,
+                        })
+                    st.dataframe(pd.DataFrame(_rule_rows),
+                                 width='stretch', hide_index=True)
+                    st.caption(
+                        "⚠️ **「可用折價%篩?」是從判定式推導的，「折價% 分位數」是本次掃描"
+                        "的實際觀測 —— 兩者都不是回測出來的買賣門檻。**"
+                        "這張表只回答「拿折價% 去篩這個訊號會不會篩壞」，"
+                        "不回答「折價多少才值得買」（那要回測，目前沒有）。\n\n"
+                        "同一檔若有多種訊號，會被算進它每一個類型的分布 —— "
+                        "折價% 是個股的屬性，不是訊號的屬性。"
+                        "本次檔數為 0 的類型代表這次沒掃到，不是規則不適用。")
+
+                    # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
+                    #   不手抄第二份（Rule 7）。
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.10）",
+                                  "# 先用 `訊號類型` 欄分流，再各自決定要不要套折價門檻。",
+                                  ""]
+                    for _ty, _use, _why in _SIG_DISC_RULES:
+                        _vs = _disc_by_type.get(_ty, [])
+                        _obs = (f"本次 n={len(_vs)}, "
+                                f"P25/中位/P75 = {round(float(pd.Series(_vs).quantile(0.25)),1)}"
+                                f" / {round(float(pd.Series(_vs).median()),1)}"
+                                f" / {round(float(pd.Series(_vs).quantile(0.75)),1)}"
+                                if _vs else "本次 n=0")
+                        _bot_lines.append(
+                            f"[{_ty}] 折價%篩選：{'適用' if _use else '不適用（套了會整批砍掉）'}")
+                        _bot_lines.append(f"  理由：{_why}")
+                        _bot_lines.append(f"  觀測：{_obs}")
+                        _bot_lines.append("")
+                    _bot_lines.append(
+                        "# 注意：以上「適用/不適用」是判定式推導；分位數是單次觀測。")
+                    _bot_lines.append(
+                        "# 兩者都不是回測出來的買賣門檻，不要當成「折價多少才該買」。")
+                    st.code("\n".join(_bot_lines), language="text")
+                    st.caption("☝️ 這塊可直接複製貼給 bot 當固定規則。")
 
                 # ── [V27.00] 依產業分組 ────────────────────────────────
                 #   282 檔一張長表看不出「哪一類在動」。分組後才看得到
