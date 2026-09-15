@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.10", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.11", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -833,6 +833,82 @@ def save_snapshot_to_gist(snap_date, records):
             del hist[k]
     ok = _gist_write_file(SNAPSHOT_FILE, hist)
     return ok, (f"已同步 {len(hist)} 天歷史快照" if ok else "Gist 寫入失敗")
+
+
+# ──────────────────────────────────────────────────────
+# [V27.11] 掃描結果歷史（給「跟上次掃描比對」用）
+#
+#   **存 Gist 不存本機磁碟**：Streamlit Cloud 的容器會定期回收，
+#   `.wl_icon_cache` 那種本機快取隔天多半已經不在了。而「跨日 diff」的
+#   全部價值就在於拿得到昨天 —— 存在一個隔天會消失的地方等於沒做。
+#
+#   結構：{ scope_key: { "YYYY-MM-DD": { 代碼: {d:折價%, t:訊號類型, p:現價} } } }
+#   依 scope 分開存：拿「全美掃描」去 diff「自選股掃描」沒有意義，
+#   母體不同，新進/消失全是母體差異造成的雜訊。
+# ──────────────────────────────────────────────────────
+SCAN_HIST_FILE = "scan_history.json"
+SCAN_HIST_KEEP_DAYS = 5   # 每個 scope 只留最近 5 天（diff 只要前一次，5 天給假日留餘裕）
+
+
+def _scan_scope_key(scope: str) -> str:
+    """把掃描範圍的中文標籤壓成穩定的檔內 key。
+
+    直接拿原字串當 key 會壞：標籤裡有檔數（「AI 目標清單（242 檔…）」、
+    「成交金額前 N 檔」），改一次 _US_TOP_N 就變成另一個 key，
+    歷史整段對不起來。所以只取語意的那一段。
+    """
+    for _mark, _k in (("自選股", "watchlist"), ("AI 目標", "ai_target"),
+                      ("共識雷達", "consensus"), ("台股全市場", "tw_all"),
+                      ("美股全市場", "us_all")):
+        if _mark in scope:
+            return _k
+    return "other"
+
+
+def load_scan_history():
+    """回傳 {scope_key: {date: {代碼: {...}}}}；未設定 Gist 或讀不到 → {}。"""
+    data = _gist_read_file(SCAN_HIST_FILE)
+    return data if isinstance(data, dict) else {}
+
+
+def save_scan_snapshot(scope: str, scan_date: str, results):
+    """把一次掃描的結果壓成精簡列存進 Gist。回傳 (ok, msg)。
+
+    只存 diff 用得到的三個欄位 —— 全欄位存進去，全美掃 400 檔 × 5 天 × 5 個
+    scope 會讓這個 Gist 檔膨脹到難以收拾。
+    """
+    if not (GIST_TOKEN and GIST_ID):
+        return False, "未設定 Gist（跨日比對需要雲端儲存）"
+    _key = _scan_scope_key(scope)
+    hist = load_scan_history()
+    _bucket = hist.setdefault(_key, {})
+    _bucket[str(scan_date)] = {
+        r["代碼"]: {"d": r.get("折價%"), "t": r.get("訊號類型", ""),
+                    "p": r.get("現價")}
+        for r in results
+    }
+    if len(_bucket) > SCAN_HIST_KEEP_DAYS:
+        for _old in sorted(_bucket.keys())[:-SCAN_HIST_KEEP_DAYS]:
+            del _bucket[_old]
+    ok = _gist_write_file(SCAN_HIST_FILE, hist)
+    return ok, (f"已存本次掃描（{_key} 保留 {len(_bucket)} 天）"
+                if ok else "Gist 寫入失敗，下次無法跟這次比對")
+
+
+def load_prev_scan(scope: str, scan_date: str):
+    """取同一 scope 中**早於 scan_date** 的最近一次掃描。
+
+    回傳 (date, {代碼: {...}})；沒有前一次 → (None, {})。
+    刻意排除同一天：同一天掃第二次拿自己比自己，diff 會全空，
+    而空的 diff 跟「沒有變化」長得一模一樣（Rule 12）。
+    """
+    hist = load_scan_history()
+    _bucket = hist.get(_scan_scope_key(scope)) or {}
+    _earlier = sorted(k for k in _bucket if str(k) < str(scan_date))
+    if not _earlier:
+        return None, {}
+    _d = _earlier[-1]
+    return _d, (_bucket.get(_d) or {})
 
 
 # ──────────────────────────────────────────────────────
@@ -4627,10 +4703,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.10" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.10" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.10" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.10")
+st.title("📡 掃描中心 V27.11" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.11" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.11" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.11")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -6140,6 +6216,30 @@ def _render_personal_scan():
                     st.session_state["_sig_scan_ts"] = \
                         datetime.now().strftime("%Y-%m-%d %H:%M")
 
+                # [V27.11] 母體清單：產業命中率的**分母**。
+                #   只存命中的檔（_res）永遠算不出分母 —— 「半導體亮 40 檔」
+                #   聽起來多，但母體裡有 300 檔半導體的話那其實偏冷。
+                st.session_state["_sig_scan_universe"] = list(_scan_tickers)
+
+                # [V27.11] 跨日比對：讀「前一次」與寫「這一次」都放在掃描當下。
+                #   放到顯示端會出事 —— expander 的 body 每次 rerender 都執行，
+                #   Gist 讀取會變成每次互動打一次網路（V27.05 那次 st.rerun()
+                #   被吸進 expander 是同一類問題：eager 執行）。
+                try:
+                    _sd = (st.session_state.get("_sig_scan_ts") or "")[:10] \
+                          or datetime.now().strftime("%Y-%m-%d")
+                    _pdate, _prev = load_prev_scan(_scan_scope, _sd)
+                    st.session_state["_sig_scan_prev"] = _prev
+                    st.session_state["_sig_scan_prev_date"] = _pdate
+                    _sv_ok, _sv_msg = save_scan_snapshot(_scan_scope, _sd, _sig_results)
+                    st.session_state["_sig_scan_hist_msg"] = (
+                        ("✅ " if _sv_ok else "⚠️ ") + _sv_msg)
+                except Exception as _he:
+                    st.session_state["_sig_scan_prev"] = {}
+                    st.session_state["_sig_scan_prev_date"] = None
+                    st.session_state["_sig_scan_hist_msg"] = \
+                        f"⚠️ 掃描歷史存取例外：{type(_he).__name__}: {_he}"
+
         # 顯示上次掃描結果
         _res = st.session_state.get("_sig_scan_results")
         if _res is not None:
@@ -6161,14 +6261,33 @@ def _render_personal_scan():
                 _scope_done = st.session_state.get("_sig_scan_scope_done", "")
                 _scan_ts = st.session_state.get("_sig_scan_ts", "")
 
+                # [V27.11] 產業命中率的分母：掃描母體裡每個產業各有幾檔。
+                #   get_sector 是 dict 查表，零請求；母體再大也只是迴圈。
+                _uni = st.session_state.get("_sig_scan_universe") or []
+                _uni_by_sec = {}
+                for _ut in _uni:
+                    _us = get_sector(_ut, _sec_map)
+                    _uni_by_sec[_us] = _uni_by_sec.get(_us, 0) + 1
+                # 先算每個產業命中幾檔（主表要用命中率，得先有分子）
+                _hit_by_sec = {}
+                for _r0 in _res:
+                    _s0 = get_sector(_r0["代碼"], _sec_map)
+                    _hit_by_sec[_s0] = _hit_by_sec.get(_s0, 0) + 1
+
                 _table_rows = []
                 for r in _res:
                     _sig_txt = "、".join(
                         f"{s[0]} {s[1]} ${s[2]}" for s in r["訊號"]
                     )
+                    _sec_r = get_sector(r["代碼"], _sec_map)
+                    _sec_den = _uni_by_sec.get(_sec_r, 0)
                     _table_rows.append({
                         "代碼": r["代碼"], "名稱": r["名稱"],
-                        "產業": get_sector(r["代碼"], _sec_map),
+                        "產業": _sec_r,
+                        # 同產業重複是刻意的（跟清單來源/掃描時間同一個理由）：
+                        #   下游拿 CSV 單獨用時，不必再去 join 第二張表。
+                        "產業命中率%": (round(_hit_by_sec.get(_sec_r, 0) / _sec_den * 100, 1)
+                                        if _sec_den else None),
                         "訊號類型": r.get("訊號類型", ""),
                         "現價": r["現價"],
                         "一年高": r.get("一年高"),
@@ -6188,6 +6307,7 @@ def _render_personal_scan():
                     "`一年高` ＝ 近 252 根 K 的最高價；"
                     "**`折價%` ＝ (一年高 − 現價) / 一年高 × 100，正數＝比一年高便宜多少**"
                     "（注意：跟「上檔%」的正負號相反，那兩欄正數代表還有多少上漲空間）；"
+                    "`產業命中率%` ＝ 該產業命中檔數 ÷ 該產業在**掃描母體**中的檔數；"
                     "`清單來源` / `掃描時間` 每列重複是為了讓 CSV 單獨拿出去也看得懂。")
                 # Rule 12：歷史不足一年的檔，折價% 的分母不是真正的「年度高點」。
                 _short_hi = [r["代碼"] for r in _res if r.get("_hi_bars", 999) < 240]
@@ -6197,6 +6317,84 @@ def _render_personal_scan():
                         f" K 線算的（非年度高點），折價% 會偏小："
                         + "、".join(_short_hi[:8])
                         + ("…" if len(_short_hi) > 8 else ""))
+
+                # ── [V27.11] 跟上次掃描比對 ──────────────────────────
+                #   單次掃描回答不了「哪幾檔是**新**的」。連兩天都在的是
+                #   持續狀態，今天才冒出來的才是事件 —— 後者資訊量大得多。
+                #   資料在掃描當下就讀好放進 session_state，這裡零網路。
+                _prev = st.session_state.get("_sig_scan_prev") or {}
+                _prev_date = st.session_state.get("_sig_scan_prev_date")
+                _hist_msg = st.session_state.get("_sig_scan_hist_msg", "")
+                with st.expander(
+                        f"🔀 跟上次掃描比對（上次：{_prev_date or '無'}）",
+                        expanded=bool(_prev)):
+                    if _hist_msg:
+                        st.caption(_hist_msg)
+                    if not _prev:
+                        # Rule 12：三種「沒有 diff」的原因完全不同，不能都顯示空表
+                        if not (GIST_TOKEN and GIST_ID):
+                            st.warning(
+                                "未設定 `GIST_TOKEN` / `GIST_ID`，掃描歷史無處存放，"
+                                "跨日比對無法使用。（其餘功能不受影響）")
+                        else:
+                            st.info(
+                                "這是此掃描範圍**第一次**留下紀錄（或雲端讀不到更早的）。"
+                                "明天同一個範圍再掃一次就會有比對。")
+                    else:
+                        _now = {r["代碼"]: r for r in _table_rows}
+                        _diff_rows = []
+                        for _c, _r in _now.items():
+                            _p = _prev.get(_c)
+                            _d_now = _r.get("折價%")
+                            _d_old = (_p or {}).get("d")
+                            _chg = (round(_d_now - _d_old, 1)
+                                    if (_d_now is not None and _d_old is not None)
+                                    else None)
+                            _diff_rows.append({
+                                "狀態": "🆕 新進" if _p is None else "🔁 連續",
+                                "代碼": _c, "名稱": _r.get("名稱"),
+                                "產業": _r.get("產業"),
+                                "訊號類型": _r.get("訊號類型", ""),
+                                "上次訊號": (_p or {}).get("t", ""),
+                                "現價": _r.get("現價"),
+                                "上次現價": (_p or {}).get("p"),
+                                "折價%": _d_now,
+                                "上次折價%": _d_old,
+                                "折價%變化": _chg,
+                            })
+                        for _c, _p in _prev.items():
+                            if _c in _now:
+                                continue
+                            _diff_rows.append({
+                                "狀態": "❌ 消失", "代碼": _c, "名稱": None,
+                                "產業": None, "訊號類型": "",
+                                "上次訊號": _p.get("t", ""),
+                                "現價": None, "上次現價": _p.get("p"),
+                                "折價%": None, "上次折價%": _p.get("d"),
+                                "折價%變化": None,
+                            })
+                        _order_st = {"🆕 新進": 0, "🔁 連續": 1, "❌ 消失": 2}
+                        _diff_rows.sort(
+                            key=lambda x: (_order_st.get(x["狀態"], 9),
+                                           x["折價%變化"] if x["折價%變化"] is not None else 0))
+                        _n_new = sum(1 for x in _diff_rows if x["狀態"] == "🆕 新進")
+                        _n_cont = sum(1 for x in _diff_rows if x["狀態"] == "🔁 連續")
+                        _n_gone = sum(1 for x in _diff_rows if x["狀態"] == "❌ 消失")
+                        _c1, _c2, _c3 = st.columns(3)
+                        _c1.metric("🆕 新進", _n_new)
+                        _c2.metric("🔁 連續", _n_cont)
+                        _c3.metric("❌ 消失", _n_gone)
+                        st.dataframe(pd.DataFrame(_diff_rows),
+                                     width='stretch', hide_index=True)
+                        st.caption(
+                            f"對照基準：{_prev_date}（同 scope 中早於今天的最近一次）。"
+                            "**`折價%變化` 為負 ＝ 折價縮小 ＝ 價格正在往前高靠**（急拉）；"
+                            "為正 ＝ 折價擴大（續跌）。表已依「新進 → 連續 → 消失」、"
+                            "組內按折價變化由負到正排序，所以最上面幾列就是"
+                            "新出現且拉最兇的。\n\n"
+                            "⚠️ 「❌ 消失」不等於訊號失效 —— 也可能是那檔今天下載失敗、"
+                            "或母體變動（全市場掃描的成交額門檻每天會篩出不同的池子）。"
+                            "把它當「值得回頭看一眼」，不是「該賣」。")
 
                 # ── [V27.10] 訊號類型 × 折價% 門檻對照 ────────────────
                 #   bot 想把「折價>10%」當全域硬門檻，那會把達標與二次進場
@@ -6247,7 +6445,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.10）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.11）",
                                   "# 先用 `訊號類型` 欄分流，再各自決定要不要套折價門檻。",
                                   ""]
                     for _ty, _use, _why in _SIG_DISC_RULES:
@@ -6299,13 +6497,28 @@ def _render_personal_scan():
                         key=lambda kv: (kv[0] == "未分類", -len(kv[1]), kv[0]))
                     st.dataframe(
                         pd.DataFrame([
-                            {"產業": _k, "檔數": len(_v),
-                             "佔比%": round(len(_v) / len(_table_rows) * 100, 1),
+                            {"產業": _k, "命中檔數": len(_v),
+                             # [V27.11] 分母。沒有它，「命中 40 檔」無法判斷是熱還是冷。
+                             "母體檔數": _uni_by_sec.get(_k) or None,
+                             "命中率%": (round(len(_v) / _uni_by_sec[_k] * 100, 1)
+                                         if _uni_by_sec.get(_k) else None),
+                             "佔命中%": round(len(_v) / len(_table_rows) * 100, 1),
                              "個股": "、".join(
                                  f"{x['名稱']}({x['代碼']})" for x in _v[:12])
                                      + ("…" if len(_v) > 12 else "")}
                             for _k, _v in _order]),
                         width='stretch', hide_index=True)
+                    # Rule 12：分母拿不到時要講清楚是「沒記錄」而不是「0 檔」
+                    if not _uni:
+                        st.caption(
+                            "⚠️ `母體檔數` / `命中率%` 空白 ＝ 這次結果是 V27.11 之前掃的，"
+                            "當時沒有記錄掃描母體。**重掃一次即有分母。**")
+                    else:
+                        st.caption(
+                            f"分母來源：本次掃描母體 {len(_uni)} 檔。"
+                            "`佔命中%` 是「這個產業佔所有命中的比例」（分母是命中數），"
+                            "`命中率%` 是「這個產業有幾成被掃出訊號」（分母是母體數）"
+                            " —— 判斷冷熱要看後者。")
                     if _unclassified:
                         st.caption(
                             f"⚠️ {_unclassified} 檔「未分類」＝對照表裡查不到 "
