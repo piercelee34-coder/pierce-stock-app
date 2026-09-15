@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.07", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.08", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1284,6 +1284,27 @@ def resolve_tw_input(raw):
         return _TW_NAME_TO_CODE[s]
     # 試大寫後是否為代碼格式（含數字或英文）→ 視為代碼
     up = s.upper()
+    # [V27.08] 純數字、沒帶後綴 → 自動判斷上市 .TW / 上櫃 .TWO。
+    #   之前打「2330」會原樣送進 yfinance 然後回「無數據」，使用者得自己
+    #   記得加後綴。快速查股會大量遇到這種輸入，所以在**唯一的解析器**裡補，
+    #   不另外開一個「搜尋用」的第二套解析（Rule 7：同一件事只有一個定義）。
+    #
+    #   順序：零請求的內建表 → 交易所官方全市場表（一天一趟，有 24h 快取）
+    #   → 都查不到才猜 .TW（上市檔數遠多於上櫃）。
+    #   猜錯不會靜默：呼叫端會把「原輸入 → 解析結果」印出來，而且個股頁
+    #   查不到資料時會直接提示改試另一個後綴。
+    if re.fullmatch(r"\d{4,6}", up):
+        for _suf in (".TW", ".TWO"):
+            if f"{up}{_suf}" in _TW_CODE_TO_NAME:
+                return f"{up}{_suf}"
+        try:
+            _bulk, _ = _query_tw_name_bulk()
+        except Exception:
+            _bulk = {}          # 官方表掛掉不該讓輸入解析整條斷掉
+        for _suf in (".TW", ".TWO"):
+            if f"{up}{_suf}" in _bulk:
+                return f"{up}{_suf}"
+        return f"{up}.TW"
     return up
 
 
@@ -3944,6 +3965,35 @@ def get_tactical_advice(df, cur_p, t_s, iron_p, ph_support, ph_resist, bias_ma5,
 with st.sidebar:
     st.title("🎛️ 控制台")
     mobile_mode = st.toggle("啟用手機防卡死模式", value=False)
+
+    # ── [V27.08] 🔍 快速查股：不必先加入自選清單就能看個股頁 ──
+    #   個股戰情頁本來就只吃 current_ticker —— 主體那段（「以下為個股戰情
+    #   視圖」以下）完全沒有讀 active_list 或 watchlists，所以「跳到任意
+    #   代碼」不需要動任何下游邏輯，設 state + rerun 就好。
+    #
+    #   用 st.form 而不是裸 text_input：form 的 submit 只有按下那一輪是 True。
+    #   裸 text_input 得自己拿「上次輸入」比對才不會每次 rerun 都重跳，
+    #   但那樣會變成「同一個代碼查過就不能再查第二次」。
+    with st.form("quick_search_form", clear_on_submit=False):
+        _q_raw = st.text_input(
+            "快速查股", placeholder="🔍 MU / 2330 / 台積電",
+            label_visibility="collapsed",
+            help="輸入代碼或中文名後按 Enter，直接跳到該股戰情室，不需先加入清單。",
+        )
+        _q_go = st.form_submit_button("🔍 查詢個股", width='stretch')
+    if _q_go:
+        _q_s = (_q_raw or "").strip()
+        if not _q_s:
+            st.warning("請先輸入代碼或中文名")
+        else:
+            _q_t = resolve_tw_input(_q_s)
+            # 解析結果綁在代碼上（(代碼, 說明)），這樣切到別檔時舊提示自然消失，
+            #   不用另外寫清除邏輯。
+            st.session_state["_quick_note"] = (
+                (_q_t, f"🔍 「{_q_s}」→ {_q_t}") if _q_t != _q_s.upper() else None
+            )
+            st.session_state["current_ticker"] = _q_t
+            st.rerun()
     st.markdown("---")
 
     # ── [V26.14] 一鍵記錄今日劇本快照（凍結推演供日後比對）──
@@ -4542,10 +4592,34 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.07" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.07" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.07" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.07")
+st.title("📡 掃描中心 V27.08" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.08" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.08" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.08")
+
+# ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
+#   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
+if cur_t not in ("__DASHBOARD__", "__SCANNER__", "__VERIFY__"):
+    _qn = st.session_state.get("_quick_note")
+    if isinstance(_qn, tuple) and len(_qn) == 2 and _qn[0] == cur_t:
+        st.caption(_qn[1])
+    _wls_now = st.session_state.get("watchlists", {})
+    if not any(cur_t in (v or []) for v in _wls_now.values()):
+        st.caption(f"ℹ️ **{cur_t}** 不在任何自選清單中（瀏覽模式）。")
+        if _wls_now:
+            _ca, _cb = st.columns([2, 1])
+            _add_to = _ca.selectbox("加入哪個清單", list(_wls_now.keys()),
+                                    key="_qs_add_list", label_visibility="collapsed")
+            if _cb.button("➕ 加入清單", key="_qs_add_btn", width='stretch'):
+                _wls_now.setdefault(_add_to, []).append(cur_t)
+                st.session_state["watchlists"] = _wls_now
+                st.session_state["active_list"] = _add_to
+                st.session_state["user_opened_list"] = _add_to
+                save_watchlists(_wls_now)
+                st.rerun()
+        else:
+            # Rule 12：沒有任何清單時不要給一顆按了沒反應的鈕
+            st.caption("（目前沒有任何自選清單，請先到側邊欄「✏️ 編輯清單」建立一個）")
 
 # ══════════════════════════════════════════════════════════
 # [V26.52] 持倉總表＝清單裡的特殊項目（current_ticker == "__DASHBOARD__"）
@@ -7242,7 +7316,14 @@ if cur_t == "__VERIFY__":
 api_p, api_i = ("5d", "15m") if "當沖" in time_opt else ("6mo", "1d") if "日" in time_opt else ("2y", "1wk")
 df = yf.download(cur_t, period=api_p, interval=api_i, progress=False)
 if df.empty:
-    st.error("無數據")
+    # [V27.08] 快速查股會帶進沒驗證過的代碼，「無數據」三個字看不出是哪個代碼
+    #   出問題。四碼數字最容易猜錯上市／上櫃，直接把另一個後綴寫出來。
+    _nd_hint = ""
+    if re.fullmatch(r"\d{4,6}\.TW", cur_t):
+        _nd_hint = f"（若是上櫃股，改查 {cur_t.split('.')[0]}.TWO）"
+    elif re.fullmatch(r"\d{4,6}\.TWO", cur_t):
+        _nd_hint = f"（若是上市股，改查 {cur_t.split('.')[0]}.TW）"
+    st.error(f"❌ 查不到 **{cur_t}** 的行情資料{_nd_hint}")
     st.stop()
 if isinstance(df.columns, pd.MultiIndex):
     df.columns = df.columns.get_level_values(0)
