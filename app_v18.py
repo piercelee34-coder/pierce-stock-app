@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.12", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.13", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2873,6 +2873,28 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
             #   （9 根 rolling 局部極大，＝下一個壓力），跟這裡的「一年最高價」
             #   完全是兩件事。同名不同義正是 V27.07 才剛收斂掉的那種坑，
             #   欄名也一併叫「一年高」而不是「前高」（Rule 7）。
+            # [V27.13] 前日收盤與日%。同樣是「資料早就在手上」—— d 是批次抓的
+            #   一年日線，iloc[-2] 就是前一交易日收盤，零額外請求（第六次了）。
+            #
+            #   **跟 V27.11 的「折價%變化」是不同的比較基準，兩者不能互換：**
+            #     日%        比**前一交易日**收盤 —— 永遠存在，不管你多久掃一次
+            #     折價%變化  比**上次掃描** —— 依賴掃描頻率，而且「🆕 新進」
+            #                那些列根本沒有上次可比（值為 None）
+            #   新進正是最值得看的一群，所以 日% 補的不是重複資訊，是缺口。
+            #
+            #   `報價日` 是現價那根 K 的日期，非有不可：若 yfinance 當下還沒
+            #   生出今天的 K 棒（盤前、或資料延遲），iloc[-1] 會是昨天、
+            #   iloc[-2] 是前天 —— **日% 就會把昨天的漲跌報成今天的**，
+            #   而畫面上完全看不出來。側邊欄那套已經為了同一件事加過
+            #   prices_asof（V26.77），掃描這邊先前沒有。
+            _prev_close = float(d["Close"].iloc[-2])
+            _day_pct = (round((price / _prev_close - 1) * 100, 2)
+                        if _prev_close > 0 else None)
+            try:
+                _bar_date = d.index[-1].strftime("%Y-%m-%d")
+            except Exception:
+                _bar_date = None
+
             _hi_win = d["High"].tail(252)
             _yr_high = float(_hi_win.max()) if len(_hi_win) else None
             _disc = (round((_yr_high - price) / _yr_high * 100, 1)
@@ -2888,6 +2910,9 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
                 "名稱": get_stock_name(tk),
                 "訊號類型": _sig_types,
                 "現價": round(price, 2),
+                "前日收盤": round(_prev_close, 2),
+                "日%": _day_pct,
+                "報價日": _bar_date,
                 "一年高": round(_yr_high, 2) if _yr_high else None,
                 "折價%": _disc,
                 "_hi_bars": int(len(_hi_win)),
@@ -4716,10 +4741,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.12" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.12" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.12" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.12")
+st.title("📡 掃描中心 V27.13" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.13" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.13" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.13")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -6303,6 +6328,8 @@ def _render_personal_scan():
                                         if _sec_den else None),
                         "訊號類型": r.get("訊號類型", ""),
                         "現價": r["現價"],
+                        "前日收盤": r.get("前日收盤"),
+                        "日%": r.get("日%"),
                         "一年高": r.get("一年高"),
                         "折價%": r.get("折價%"),
                         "分析師目標": r.get("分析師目標", "未查"),
@@ -6310,6 +6337,7 @@ def _render_personal_scan():
                         "技術目標": r.get("技術目標"),
                         "技術上檔%": r.get("技術上檔%"),
                         "訊號（類型 日期 金額）": _sig_txt,
+                        "報價日": r.get("報價日"),
                         "清單來源": _scope_done,
                         "掃描時間": _scan_ts,
                     })
@@ -6320,8 +6348,30 @@ def _render_personal_scan():
                     "`一年高` ＝ 近 252 根 K 的最高價；"
                     "**`折價%` ＝ (一年高 − 現價) / 一年高 × 100，正數＝比一年高便宜多少**"
                     "（注意：跟「上檔%」的正負號相反，那兩欄正數代表還有多少上漲空間）；"
+                    "**`日%` ＝ (現價 − 前日收盤) / 前日收盤**，比的是**前一交易日**；"
+                    "跟下方「🔀 跟上次掃描比對」的 `折價%變化`（比**上次掃描**）不是同一件事；"
+                    "`報價日` ＝ `現價` 那根 K 的日期，用來確認資料夠不夠新；"
                     "`產業命中率%` ＝ 該產業命中檔數 ÷ 該產業在**掃描母體**中的檔數；"
                     "`清單來源` / `掃描時間` 每列重複是為了讓 CSV 單獨拿出去也看得懂。")
+                # [V27.13] Rule 12：報價日不一致或不是今天 → 日% 可能是「昨天的漲跌」。
+                #   不講的話，這種錯誤在畫面上完全隱形。
+                _bar_dates = sorted({r.get("報價日") for r in _res if r.get("報價日")})
+                if _bar_dates:
+                    _bd_cnt = {}
+                    for _r2 in _res:
+                        _bd = _r2.get("報價日")
+                        if _bd:
+                            _bd_cnt[_bd] = _bd_cnt.get(_bd, 0) + 1
+                    if len(_bar_dates) > 1:
+                        st.warning(
+                            "⚠️ 這批結果的 `報價日` **不一致**："
+                            + "、".join(f"{_k} ({_v} 檔)" for _k, _v in
+                                        sorted(_bd_cnt.items(), reverse=True))
+                            + "。落後的那幾檔，`日%` 比的是它自己最後一根 K 的前一天，"
+                              "不是今天 —— 跨市場（美股／台股時區不同）或個股停牌時會這樣。")
+                    else:
+                        st.caption(f"📅 全部 {len(_res)} 檔的報價日均為 {_bar_dates[0]}。")
+
                 # Rule 12：歷史不足一年的檔，折價% 的分母不是真正的「年度高點」。
                 _short_hi = [r["代碼"] for r in _res if r.get("_hi_bars", 999) < 240]
                 if _short_hi:
@@ -6370,6 +6420,7 @@ def _render_personal_scan():
                                 "訊號類型": _r.get("訊號類型", ""),
                                 "上次訊號": (_p or {}).get("t", ""),
                                 "現價": _r.get("現價"),
+                                "日%": _r.get("日%"),
                                 "上次現價": (_p or {}).get("p"),
                                 "折價%": _d_now,
                                 "上次折價%": _d_old,
@@ -6382,7 +6433,7 @@ def _render_personal_scan():
                                 "狀態": "❌ 消失", "代碼": _c, "名稱": None,
                                 "產業": None, "訊號類型": "",
                                 "上次訊號": _p.get("t", ""),
-                                "現價": None, "上次現價": _p.get("p"),
+                                "現價": None, "日%": None, "上次現價": _p.get("p"),
                                 "折價%": None, "上次折價%": _p.get("d"),
                                 "折價%變化": None,
                             })
@@ -6405,6 +6456,7 @@ def _render_personal_scan():
                             "為正 ＝ 折價擴大（續跌）。表已依「新進 → 連續 → 消失」、"
                             "組內按折價變化由負到正排序，所以最上面幾列就是"
                             "新出現且拉最兇的。\n\n"
+                            "「🆕 新進」那幾列**沒有** `折價%變化`（沒有上次可比）—— 看 `日%`，那一欄永遠有值。\n\n"
                             "⚠️ 「❌ 消失」不等於訊號失效 —— 也可能是那檔今天下載失敗、"
                             "或母體變動（全市場掃描的成交額門檻每天會篩出不同的池子）。"
                             "把它當「值得回頭看一眼」，不是「該賣」。")
@@ -6458,7 +6510,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.12）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.13）",
                                   "# 先用 `訊號類型` 欄分流，再各自決定要不要套折價門檻。",
                                   ""]
                     for _ty, _use, _why in _SIG_DISC_RULES:
