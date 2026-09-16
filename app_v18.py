@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.11", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.12", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -4082,29 +4082,42 @@ with st.sidebar:
     #   視圖」以下）完全沒有讀 active_list 或 watchlists，所以「跳到任意
     #   代碼」不需要動任何下游邏輯，設 state + rerun 就好。
     #
-    #   用 st.form 而不是裸 text_input：form 的 submit 只有按下那一輪是 True。
-    #   裸 text_input 得自己拿「上次輸入」比對才不會每次 rerun 都重跳，
-    #   但那樣會變成「同一個代碼查過就不能再查第二次」。
-    with st.form("quick_search_form", clear_on_submit=False):
-        _q_raw = st.text_input(
-            "快速查股", placeholder="🔍 MU / 2330 / 台積電",
-            label_visibility="collapsed",
-            help="輸入代碼或中文名後按 Enter，直接跳到該股戰情室，不需先加入清單。",
+    #   [V27.12] 原本用 st.form + st.form_submit_button —— **實機按了沒反應**。
+    #   沒有留下錯誤訊息，所以不是例外；表單提交的旗標沒有傳到腳本這一輪。
+    #   st.form 是這支一萬行 app 裡**唯一**一處用到 form 的地方，而它正下方
+    #   的「➕ 新增」用的 text_input + st.button 一直都正常 —— 在只有一個
+    #   地方用到的構造上賭運氣不值得（Rule 11：照這個 codebase 已經驗證過的
+    #   寫法走）。改回 text_input + st.button。
+    #
+    #   兩條觸發路徑互補：
+    #     按鈕      —— 一定有效，連「同一個代碼查第二次」也可以
+    #     值變了    —— 讓 Enter 也能用（text_input 按 Enter 會 rerun，
+    #                  但它沒有「剛剛被按下」這種事件旗標可用）
+    _q_raw = st.text_input(
+        "快速查股", key="_quick_q", placeholder="🔍 MU / 2330 / 台積電",
+        label_visibility="collapsed",
+        help="輸入代碼或中文名 → 按 Enter 或點下面的按鈕，直接跳到該股戰情室，"
+             "不需先加入清單。",
+    )
+    _q_go = st.button("🔍 查詢個股", key="_quick_go", width='stretch')
+    _q_s = (_q_raw or "").strip()
+    _q_changed = bool(_q_s) and _q_s != st.session_state.get("_quick_last")
+    if _q_go and not _q_s:
+        st.warning("請先輸入代碼或中文名")
+    elif _q_s and (_q_go or _q_changed):
+        st.session_state["_quick_last"] = _q_s
+        _q_t = resolve_tw_input(_q_s)
+        # 解析結果綁在代碼上（(代碼, 說明)），這樣切到別檔時舊提示自然消失，
+        #   不用另外寫清除邏輯。
+        st.session_state["_quick_note"] = (
+            (_q_t, f"🔍 「{_q_s}」→ {_q_t}") if _q_t != _q_s.upper() else None
         )
-        _q_go = st.form_submit_button("🔍 查詢個股", width='stretch')
-    if _q_go:
-        _q_s = (_q_raw or "").strip()
-        if not _q_s:
-            st.warning("請先輸入代碼或中文名")
-        else:
-            _q_t = resolve_tw_input(_q_s)
-            # 解析結果綁在代碼上（(代碼, 說明)），這樣切到別檔時舊提示自然消失，
-            #   不用另外寫清除邏輯。
-            st.session_state["_quick_note"] = (
-                (_q_t, f"🔍 「{_q_s}」→ {_q_t}") if _q_t != _q_s.upper() else None
-            )
-            st.session_state["current_ticker"] = _q_t
-            st.rerun()
+        st.session_state["current_ticker"] = _q_t
+        st.rerun()
+    # [V27.12] 常駐診斷：目前到底在看哪一檔。
+    #   上一版「按了沒反應」之所以難判斷，就是因為畫面上只有標題會變，
+    #   而標題離側邊欄很遠。這一行讓「有沒有切換」當場可見。
+    st.caption(f"目前檢視：`{st.session_state.get('current_ticker', '?')}`")
     st.markdown("---")
 
     # ── [V26.14] 一鍵記錄今日劇本快照（凍結推演供日後比對）──
@@ -4703,10 +4716,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.11" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.11" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.11" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.11")
+st.title("📡 掃描中心 V27.12" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.12" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.12" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.12")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -6445,7 +6458,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.11）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.12）",
                                   "# 先用 `訊號類型` 欄分流，再各自決定要不要套折價門檻。",
                                   ""]
                     for _ty, _use, _why in _SIG_DISC_RULES:
