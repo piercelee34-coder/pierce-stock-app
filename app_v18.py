@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.15", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.16", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -4742,10 +4742,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.15" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.15" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.15" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.15")
+st.title("📡 掃描中心 V27.16" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.16" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.16" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.16")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -6447,7 +6447,39 @@ def _render_personal_scan():
                         "清單來源": _scope_done,
                         "掃描時間": _scan_ts,
                     })
-                st.dataframe(pd.DataFrame(_table_rows), width='stretch', hide_index=True)
+                # [V27.16] 明確指定欄寬。19 欄擠在一起時 Streamlit 會給
+                #   「名稱」很大的寬度（SoFi Technologies 這種長名），把後面
+                #   十幾欄擠到畫面外，使用者得手動拖才看得到現價。
+                #   只有「訊號（類型 日期 金額）」是真的需要寬（一檔多訊號）。
+                _W = st.column_config
+                _scan_col_cfg = {
+                    "代碼": _W.TextColumn("代碼", width="small"),
+                    "名稱": _W.TextColumn("名稱", width="small"),
+                    "產業": _W.TextColumn("產業", width="small"),
+                    "產業命中率%": _W.NumberColumn("產業命中率%", format="%.1f", width="small"),
+                    "產業母體數": _W.NumberColumn("產業母體數", format="%d", width="small"),
+                    "訊號類型": _W.TextColumn("訊號類型", width="medium"),
+                    "現價": _W.NumberColumn("現價", format="%.2f", width="small"),
+                    "前日收盤": _W.NumberColumn("前日收盤", format="%.2f", width="small"),
+                    "日%": _W.NumberColumn("日%", format="%+.2f", width="small"),
+                    "一年高": _W.NumberColumn("一年高", format="%.2f", width="small"),
+                    "折價%": _W.NumberColumn("折價%", format="%.1f", width="small"),
+                    "分析師目標": _W.TextColumn("分析師目標", width="small"),
+                    "分析師上檔%": _W.NumberColumn("分析師上檔%", format="%.1f", width="small"),
+                    "技術目標": _W.NumberColumn("技術目標", format="%.2f", width="small"),
+                    "技術上檔%": _W.NumberColumn("技術上檔%", format="%.1f", width="small"),
+                    "訊號（類型 日期 金額）": _W.TextColumn(
+                        "訊號（類型 日期 金額）", width="large"),
+                    "報價日": _W.TextColumn("報價日", width="small"),
+                    "清單來源": _W.TextColumn("清單來源", width="small"),
+                    "掃描時間": _W.TextColumn("掃描時間", width="small"),
+                }
+                st.dataframe(pd.DataFrame(_table_rows), width='stretch',
+                             hide_index=True, column_config=_scan_col_cfg)
+                # [V27.16] 下載鈕的**位置**佔在這裡（緊接主表，最顯眼），
+                #   但內容要等跨日比對／產業分組／門檻規則都算完才填得進去。
+                #   Streamlit 的 container 可以先佔位、稍後再寫入。
+                _dl_slot = st.container()
                 st.caption(
                     "📄 **欄位說明**（表格右上角 ⬇ 可直接匯出 CSV）："
                     "`訊號類型` 純文字、以「｜」分隔，給程式篩選用；"
@@ -6635,7 +6667,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.15）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.16）",
                                   "# 先用 `訊號類型` 欄分流，再各自決定要不要套折價門檻。",
                                   ""]
                     for _ty, _use, _why in _SIG_DISC_RULES:
@@ -6780,16 +6812,18 @@ def _render_personal_scan():
                                                            for x in _v)}
                                         for _k, _v in _order]).to_csv(index=False))
                         _z.writestr("04_折價門檻規則.txt", "\n".join(_bot_lines))
-                    st.download_button(
-                        "📦 一鍵下載本次掃描全部資料（zip）",
-                        _zbuf.getvalue(),
-                        file_name=f"戰情室掃描_{_sk}_{_ts or 'now'}.zip",
-                        mime="application/zip", width='stretch',
-                        key="_dl_scan_zip")
-                    st.caption(
-                        "包含主表、跨日比對、產業分組、折價門檻規則四份。"
-                        + ("" if _diff_rows else
-                           "　⚠️ 本次無跨日比對（第一次掃這個範圍），zip 裡沒有 02。"))
+                    with _dl_slot:
+                        st.download_button(
+                            "　📦　下載本次掃描全部資料（ZIP）　📦　",
+                            _zbuf.getvalue(),
+                            file_name=f"戰情室掃描_{_sk}_{_ts or 'now'}.zip",
+                            mime="application/zip", width='stretch',
+                            type="primary", key="_dl_scan_zip")
+                        st.caption(
+                            "內含 主表／跨日比對／產業分組／折價門檻規則 四份，"
+                            "檔名帶掃描範圍與時間，不會撞名。"
+                            + ("" if _diff_rows else
+                               "　⚠️ 本次無跨日比對（第一次掃這個範圍），ZIP 裡沒有 02。"))
                 except Exception as _ze:
                     # Rule 12：打包失敗不該讓整頁掛掉，但也不能靜默
                     st.warning(f"⚠️ 打包下載失敗（各表右上角 ⬇ 仍可個別下載）："
