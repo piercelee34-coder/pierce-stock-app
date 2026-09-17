@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.14", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.15", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2902,8 +2902,9 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
             # 純文字訊號類型：CSV 拿去程式篩選用。旁邊那欄
             #   「訊號（類型 日期 金額）」是給人看的，一個字串裡混了三種
             #   資訊，要 grep 出「所有乖離抄底」會很痛苦。
-            _sig_types = "｜".join(
-                dict.fromkeys(s[0].split(" ", 1)[-1] for s in uniq))
+            # [V27.15] 保留 emoji（使用者要看得到圖示）。
+            #   bot 仍可用中文子字串比對，不受影響。
+            _sig_types = "｜".join(dict.fromkeys(s[0] for s in uniq))
 
             out.append({
                 "代碼": tk,
@@ -4741,10 +4742,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.14" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.14" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.14" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.14")
+st.title("📡 掃描中心 V27.15" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.15" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.15" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.15")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -5274,7 +5275,7 @@ if cur_t == "__DASHBOARD__":
         #   用途是「如果漲到 X 我賺多少」這種當場心算，跟持倉表的實際損益
         #   分開 —— 混在一起你會分不出哪個是真部位。
         st.markdown("---")
-        with st.expander("🧮 模擬獲利計算機", expanded=False):
+        with st.expander("🧮 模擬獲利計算機", expanded=True):
             st.caption("純試算，不影響上方持倉資料。公式：(現價 − 成本) × 股數")
             _cc1, _cc2, _cc3, _cc4 = st.columns([1, 1, 1, 0.8])
             _sim_px = _cc1.number_input("股票現價", min_value=0.0, value=100.0,
@@ -5644,6 +5645,12 @@ _TW_SECTOR_CODE_TO_NAME = {
     "28": "電子零組件業", "29": "電子通路業", "30": "資訊服務業",
     "31": "其他電子業", "32": "文化創意業", "33": "農業科技業",
     "35": "綠能環保", "36": "數位雲端", "37": "運動休閒", "38": "居家生活",
+    # [V27.15] 91 不在 ISIN 的上市產業分類表裡，但實跑出現 4 檔。
+    #   推論依據：TDR（存託憑證）的股票代碼本身就是 91xx 開頭（9110、9136…），
+    #   而上市 TDR 剩沒幾檔 —— 跟「4 檔」對得上。
+    #   **仍是推論**：下面的未對照診斷會印出實際代碼，若那 4 檔不是 91xx
+    #   開頭就代表這條猜錯了，把它拿掉即可。
+    "91": "存託憑證",
 }
 
 
@@ -5727,8 +5734,12 @@ def _query_sector_map():
                 out[f"{code}{suffix}"] = sec
                 n += 1
                 if not _known:
-                    unmapped[str(raw_sec).strip()] = \
-                        unmapped.get(str(raw_sec).strip(), 0) + 1
+                    # [V27.15] 除了計數，留幾個實際代碼 —— 光看「91×4」
+                    #   無從判斷那是什麼；看到 9110/9136 就知道是 TDR。
+                    _uk = str(raw_sec).strip()
+                    _slot = unmapped.setdefault(_uk, [])
+                    if len(_slot) < 5:
+                        _slot.append(f"{code}{suffix}")
                 if hit_key is None:
                     hit_key = next((k for k in _SECTOR_FIELD_KEYS
                                     if str(r.get(k) or "").strip() == str(raw_sec).strip()), None)
@@ -5962,6 +5973,21 @@ except ImportError:
     _REV_AVAILABLE = False
 
 
+def sig_type_plain(label: str) -> str:
+    """「💰 達標」→「達標」。掃描器發出的標籤格式固定是「emoji 空格 中文」。
+
+    [V27.15] 這是**唯一**一處做這件事的地方。先前 `訊號類型` 欄直接存
+    剝好的純文字，使用者反映看不到圖示；改成欄位帶 emoji、要比對時才剝。
+    兩邊各剝一次就會變成兩套規則（Rule 7），所以抽成函式。
+
+    對下游沒有影響：bot 是用「達標」這種**中文子字串**比對，
+    前面多一個 emoji 不影響 `"達標" in 訊號類型`。
+    """
+    # 先 strip 再 split：前導空白會讓 split(" ", 1) 在第一個空白就切開，
+    #   結果回傳「🤫 吸籌」而不是「吸籌」—— emoji 沒剝掉，分桶就對不上規則表。
+    return str(label).strip().split(" ", 1)[-1].strip()
+
+
 # ── [V27.10] 訊號類型 × 折價% 是否適用 ───────────────────────────
 #   (訊號類型, 可用折價%篩?, 理由)
 #
@@ -5972,21 +5998,38 @@ except ImportError:
 #
 #   所以這張表只回答一個問題：**這個訊號拿折價% 去篩會不會篩壞？**
 #   具體門檻數字留給下游，畫面上一併附本次掃描的實際分布供參考。
+# [V27.15] ⚠️ 達標那條的理由在 V27.10 是**錯的**，已更正。
+#   舊說法：「達標判定的是觸及技術目標，定義上就在近期高點附近，所以折價很小」。
+#   2026-09-17 台股全市場實測打臉：達標檔（n=70）的折價% 中位數是 **16.2**，
+#   一點都不小。8021.TW 尖點達標時折價 23.8%。
+#
+#   錯在哪：我拿 V26.97「達標檔的**技術上檔%** 中位數只有 +1.0%」這個證據，
+#   去支持一個關於**折價%** 的結論 —— 兩個不同的量，偷換概念。
+#
+#   正確理由是**窗口不同**：達標判定用 60 日高／布林上軌，折價% 的分母是
+#   252 日高。一檔從年度高點跌下來的股票，可以觸及 60 日高但離年高還很遠。
+#   結論（不該對達標套折價篩）不變，而且現在有實測數字撐著。
 _SIG_DISC_RULES = [
     ("乖離抄底", True,
      "判定式要求 Close 跌破布林下軌且 RSI<30（或 Low 破下軌 + RSI<40 收紅）"
-     "—— 定義上就在低位，折價大是必然，拿折價篩不會篩壞。"),
+     "—— 定義上就在低位，折價大是必然。"
+     "實測（2026-09-17 台股全市場，n=53）：折價% 中位數 30.6，"
+     "套「折價>10%」只誤砍 4%。"),
     ("吸籌", True,
      "判定式要求近 5 日跌逾 2%、AD_Line 反而上升、RSI<50 —— 價跌但有人在收，"
-     "位置中低。可以篩，但門檻要比乖離抄底鬆。"),
+     "位置中低。實測（n=41）：折價% 中位數 25.6，套「折價>10%」誤砍 15% —— "
+     "可以篩，但門檻要比乖離抄底鬆。"),
     ("達標", False,
-     "判定式是 High ≥ min(布林上軌, 60 日高) 且近 10 根第一次觸及 —— "
-     "定義上就在近期高點附近。V26.97 實測：達標檔的技術上檔% 中位數只有 "
-     "+1.0%（美）/ +3.1%（台）。用「折價>10%」會把它整批砍光。"),
+     "**窗口不同**：達標判定的是「觸及技術目標（60 日高／布林上軌）」，"
+     "而折價% 的分母是 252 日高 —— 兩者量的不是同一件事。"
+     "實測（n=70）：折價% 中位數 16.2（**不小**），"
+     "但技術上檔% 中位數 0.0、P75 僅 1.2。"
+     "套「折價>10%」會誤砍 40%（28/70）。"
+     "要看「離突破多近」請改用 `技術上檔%`，那才是達標的特徵量。"),
     ("二次進場", False,
      "判定式是多頭排列維持中、回檔觸月線但收盤未破季線、且低點高於前低 —— "
-     "定義上是上升趨勢裡的**淺**回檔，折價小才對。用折價篩等於在找不符合"
-     "定義的標的。"),
+     "上升趨勢裡的**淺**回檔，回檔深度由月線／季線決定，跟一年高無關。"
+     "實測（n=3）：套「折價>10%」會砍掉 67%。"),
 ]
 
 
@@ -6466,6 +6509,7 @@ def _render_personal_scan():
                 #   資料在掃描當下就讀好放進 session_state，這裡零網路。
                 _prev = st.session_state.get("_sig_scan_prev") or {}
                 _prev_date = st.session_state.get("_sig_scan_prev_date")
+                _diff_rows = None      # [V27.15] 哨兵：沒有前一次時打包要略過
                 _hist_msg = st.session_state.get("_sig_scan_hist_msg", "")
                 with st.expander(
                         f"🔀 跟上次掃描比對（上次：{_prev_date or '無'}）",
@@ -6555,6 +6599,7 @@ def _render_personal_scan():
                         if _dv is None:
                             continue
                         for _ty in (_tr.get("訊號類型") or "").split("｜"):
+                            _ty = sig_type_plain(_ty)
                             if _ty:
                                 _disc_by_type.setdefault(_ty, []).append(_dv)
 
@@ -6581,6 +6626,7 @@ def _render_personal_scan():
                     st.caption(
                         "⚠️ **「可用折價%篩?」是從判定式推導的，「折價% 分位數」是本次掃描"
                         "的實際觀測 —— 兩者都不是回測出來的買賣門檻。**"
+                        "（「可用折價%篩?」那欄現在有 2026-09-17 台股全市場 157 檔的實測背書，見各列理由。）"
                         "這張表只回答「拿折價% 去篩這個訊號會不會篩壞」，"
                         "不回答「折價多少才值得買」（那要回測，目前沒有）。\n\n"
                         "同一檔若有多種訊號，會被算進它每一個類型的分布 —— "
@@ -6589,7 +6635,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.14）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.15）",
                                   "# 先用 `訊號類型` 欄分流，再各自決定要不要套折價門檻。",
                                   ""]
                     for _ty, _use, _why in _SIG_DISC_RULES:
@@ -6641,10 +6687,12 @@ def _render_personal_scan():
                         _um = (_dg or {}).get("unmapped") or {}
                         if _um:
                             st.warning(
-                                f"⚠️ {_lbl}有 {sum(_um.values())} 檔的產業代碼不在對照表裡，"
-                                f"顯示為「產業NN」："
-                                + "、".join(f"{_k}×{_v}" for _k, _v in
-                                            sorted(_um.items(), key=lambda kv: -kv[1])[:10])
+                                f"⚠️ {_lbl}有 {sum(len(v) for v in _um.values())} 檔"
+                                f"（樣本）的產業代碼不在對照表裡，顯示為「產業NN」："
+                                + "；".join(
+                                    f"代碼 {_k} → {'、'.join(_v)}"
+                                    for _k, _v in sorted(_um.items(),
+                                                         key=lambda kv: -len(kv[1]))[:6])
                                 + "　※ 把這行貼給 Claude 就能補表。")
 
                     # 檔數多的排前面；「未分類」永遠沉底，不跟真的產業搶版面
@@ -6689,6 +6737,63 @@ def _render_personal_scan():
                         st.caption(
                             f"⚠️ {_unclassified} 檔「未分類」＝對照表裡查不到 "
                             "（新上市、ETF、或端點當日沒收錄），不是「沒有產業」。")
+
+                # ── [V27.15] 📦 一鍵打包下載 ────────────────────────
+                #   先前靠 st.dataframe 右上角的內建下載鈕，檔名固定是
+                #   `<timestamp>_export.csv` —— 同一分鐘下載兩張表就撞名，
+                #   瀏覽器只會補「(1)」，事後分不出哪份是哪份。
+                #   一顆鈕打包成 zip，檔名帶掃描範圍與時間，內含檔名自帶編號。
+                try:
+                    import zipfile as _zf
+                    from io import BytesIO as _BIO
+                    _ts = (_scan_ts or "").replace(" ", "_").replace(":", "")
+                    _sk = _scan_scope_key(_scope_done)
+                    _zbuf = _BIO()
+                    with _zf.ZipFile(_zbuf, "w", _zf.ZIP_DEFLATED) as _z:
+                        _z.writestr(
+                            "00_README.txt",
+                            f"AI 實戰戰情室 掃描輸出\n"
+                            f"掃描範圍：{_scope_done}\n"
+                            f"掃描時間：{_scan_ts}\n"
+                            f"命中檔數：{len(_table_rows)}\n"
+                            f"掃描母體：{len(_uni)} 檔\n\n"
+                            "檔案說明：\n"
+                            "  01_主表.csv        今天掃出訊號的個股（欄位最完整）\n"
+                            "  02_跨日比對.csv    跟上次掃描的差異。**「❌ 消失」只在這裡**\n"
+                            "  03_依產業分組.csv  命中/母體/命中率\n"
+                            "  04_折價門檻規則.txt 訊號類型 × 折價% 的適用規則\n\n"
+                            "兩張表用「代碼」做 join。\n")
+                        _z.writestr("01_主表.csv",
+                                    pd.DataFrame(_table_rows).to_csv(index=False))
+                        if _diff_rows:
+                            _z.writestr("02_跨日比對.csv",
+                                        pd.DataFrame(_diff_rows).to_csv(index=False))
+                        _z.writestr("03_依產業分組.csv",
+                                    pd.DataFrame([
+                                        {"產業": _k, "命中檔數": len(_v),
+                                         "母體檔數": _uni_by_sec.get(_k) or None,
+                                         "命中率%": (round(len(_v) / _uni_by_sec[_k] * 100, 1)
+                                                     if _uni_by_sec.get(_k, 0) >= _SEC_RATE_MIN_N
+                                                     else None),
+                                         "佔命中%": round(len(_v) / len(_table_rows) * 100, 1),
+                                         "個股": "、".join(f"{x['名稱']}({x['代碼']})"
+                                                           for x in _v)}
+                                        for _k, _v in _order]).to_csv(index=False))
+                        _z.writestr("04_折價門檻規則.txt", "\n".join(_bot_lines))
+                    st.download_button(
+                        "📦 一鍵下載本次掃描全部資料（zip）",
+                        _zbuf.getvalue(),
+                        file_name=f"戰情室掃描_{_sk}_{_ts or 'now'}.zip",
+                        mime="application/zip", width='stretch',
+                        key="_dl_scan_zip")
+                    st.caption(
+                        "包含主表、跨日比對、產業分組、折價門檻規則四份。"
+                        + ("" if _diff_rows else
+                           "　⚠️ 本次無跨日比對（第一次掃這個範圍），zip 裡沒有 02。"))
+                except Exception as _ze:
+                    # Rule 12：打包失敗不該讓整頁掛掉，但也不能靜默
+                    st.warning(f"⚠️ 打包下載失敗（各表右上角 ⬇ 仍可個別下載）："
+                               f"{type(_ze).__name__}: {_ze}")
 
                 # [V26.94] 分析師欄的三種缺值原因要用數字講清楚。只寫一句
                 #   「部分無資料」，你分不出是 Yahoo 沒覆蓋還是被限流擋掉 ——
