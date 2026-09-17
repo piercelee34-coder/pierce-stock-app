@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.16", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.17", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -4742,10 +4742,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.16" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.16" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.16" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.16")
+st.title("📡 掃描中心 V27.17" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.17" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.17" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.17")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -6667,7 +6667,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.16）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.17）",
                                   "# 先用 `訊號類型` 欄分流，再各自決定要不要套折價門檻。",
                                   ""]
                     for _ty, _use, _why in _SIG_DISC_RULES:
@@ -8609,7 +8609,17 @@ for i in range(len(p_data)):
         precomputed_status.append(detect_smart_money_status(p_data.iloc[max(0, i - 9):i + 1]))
 
 # [v27] 重置進場訊號清單（每次重跑都清空）
+#
+# [V27.17] ⚠️ 這個 list 的契約：**每一筆都必須有 type 與 stage**。
+#   下游「🎯 進場節奏燈號」是 `recent_stages.add(s["stage"])` ——
+#   少一個 key 就整頁 KeyError 當掉。
+#   stage 的語意固定是那條 4 段鏈：1 吸籌 → 2 乖離抄底 → 3 BUY → 4 起漲確認。
+#   不屬於這條鏈的訊號**不要塞進來**，另開 list（見下面的二次進場）。
 st.session_state['_entry_signals_v27'] = []
+# [V27.17] 二次進場自己一條 list。
+#   它是「上升趨勢中的回檔再進場」型態，**不在** 吸籌→抄底→BUY→起漲
+#   那條節奏鏈上，硬給它一個 stage 會讓燈號語意變形。
+st.session_state['_second_entry_signals_v27'] = []
 
 # ── [V27.03] 第二次進場標記（趨勢中的回檔不破 + 更高的低點）──────────
 #   位置刻意在上面那行重置之後：掛在前面的話 append 進去的東西會被清掉。
@@ -8639,7 +8649,13 @@ for _se_date in p_data[_second_entry].index:
             bgcolor="rgba(56, 189, 248, 0.85)",
             font=dict(color="black", size=11, weight="bold"),
         )
-        st.session_state['_entry_signals_v27'].append({
+        # [V27.17] 改進專屬 list。
+        #   原本 append 進 _entry_signals_v27，但這筆**沒有 type / stage** ——
+        #   而下游燈號是 `s["stage"]`。只有當這個訊號落在最近 30 根 K 內
+        #   才會被讀到，所以潛伏了 V27.03～V27.16 都沒爆，
+        #   直到 AAPL 在 9/9 出現二次進場（30 根內）才整頁 KeyError。
+        #   —— 一個 list 兩種形狀，就是 Rule 7 說的那種坑。
+        st.session_state['_second_entry_signals_v27'].append({
             "date": _se_date,
             "idx_pos": _se_pos,
             "close": float(_se_row['Close']),
@@ -9724,6 +9740,18 @@ _launch_signals = st.session_state.get('_launch_signals_v27', [])
 # 整理最近 30 根 K 棒內出現過的訊號 stage（含 launch=stage4）
 recent_stages = set()
 recent_30d_cutoff = len(p_data) - 30
+# [V27.17] 形狀守衛。契約是「每筆都有 type 與 stage」（見 list 重置處的註解），
+#   但整頁 KeyError 當掉是**過度失敗** —— 燈號只是輔助資訊，不該讓 K 線、
+#   內部人、蒙地卡羅全部跟著消失。這裡跳過壞掉的筆並明確回報（Rule 12），
+#   真正的防線是「不屬於這條鏈的訊號不要塞進來」。
+_bad_entry_sig = [s for s in _entry_signals
+                  if "stage" not in s or "type" not in s]
+if _bad_entry_sig:
+    st.warning(
+        f"⚠️ 進場節奏燈號：{len(_bad_entry_sig)} 筆訊號缺少 `stage`／`type` 欄位，"
+        f"已跳過（燈號可能少亮幾格）。這是資料形狀問題，其餘分析不受影響。"
+        f"　缺的鍵：{sorted({k for _k in ('stage', 'type') for s in _bad_entry_sig if _k not in s for k in [_k]})}")
+_entry_signals = [s for s in _entry_signals if "stage" in s and "type" in s]
 for s in _entry_signals:
     if s["idx_pos"] >= recent_30d_cutoff:
         recent_stages.add(s["stage"])
