@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.13", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.14", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -4741,10 +4741,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.13" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.13" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.13" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.13")
+st.title("📡 掃描中心 V27.14" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.14" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.14" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.14")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -5615,8 +5615,53 @@ _TW_INFO_TWSE = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
 _TW_INFO_TPEX = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
 
 _SECTOR_CODE_KEYS = ("公司代號", "SecuritiesCompanyCode", "Code", "company_id")
-_SECTOR_NAME_KEYS = ("產業別", "SecuritiesIndustryCode", "industry_category",
-                     "IndustryCategory")
+# [V27.14] 名字從 _SECTOR_NAME_KEYS 改成 _SECTOR_FIELD_KEYS —— 舊名字在說謊，
+#   而那正是這個 bug 藏了兩個版本沒被發現的原因：這幾個欄位回的是**代碼**不是
+#   名稱。實際回應（openapi.twse.com.tw/v1/opendata/t187ap03_L）長這樣：
+#     {"公司代號":"1101","公司簡稱":"台泥","產業別":"01", ...}
+#   整份回應**沒有任何產業名稱欄位**，所以只能自己對照。
+_SECTOR_FIELD_KEYS = ("產業別", "SecuritiesIndustryCode", "industry_category",
+                      "IndustryCategory")
+
+# [V27.14] 台股產業別代碼 → 名稱。
+#   來源：臺灣證券交易所 ISIN 產業別分類（isin.twse.com.tw/isin/class_i.jsp?kind=1），
+#   照抄，不是憑印象打的。
+#
+#   ⚠️ **上櫃沿用同一套編碼是「待驗證的假設」**：櫃買中心那份對照表拿不到
+#   （官方頁面要會員權限）。目前的間接證據是 8071.TWO 與 3037.TW 都回 28，
+#   而 3037 欣興做 PCB／IC 載板確實屬電子零組件業。
+#   驗證方式不是再猜一次 —— 是下面的診斷會把「每個交易所各出現哪些代碼、
+#   幾筆對得到名稱」印出來。上櫃若用了不同編碼，畫面上會出現一堆
+#   「產業NN」而不是錯誤的名稱（錯的名稱比查不到更糟）。
+_TW_SECTOR_CODE_TO_NAME = {
+    "01": "水泥工業", "02": "食品工業", "03": "塑膠工業", "04": "紡織纖維",
+    "05": "電機機械", "06": "電器電纜", "08": "玻璃陶瓷", "09": "造紙工業",
+    "10": "鋼鐵工業", "11": "橡膠工業", "12": "汽車工業", "13": "電子工業",
+    "14": "建材營造業", "15": "航運業", "16": "觀光餐旅", "17": "金融保險業",
+    "18": "貿易百貨業", "19": "綜合", "20": "其他業", "21": "化學工業",
+    "22": "生技醫療業", "23": "油電燃氣業", "24": "半導體業",
+    "25": "電腦及週邊設備業", "26": "光電業", "27": "通信網路業",
+    "28": "電子零組件業", "29": "電子通路業", "30": "資訊服務業",
+    "31": "其他電子業", "32": "文化創意業", "33": "農業科技業",
+    "35": "綠能環保", "36": "數位雲端", "37": "運動休閒", "38": "居家生活",
+}
+
+
+def tw_sector_name(raw):
+    """台股產業別欄位 → 顯示用名稱。
+
+    回傳 (名稱, 是否對得到)。對不到時回 "產業NN" 而**不是**「未分類」——
+    兩者意思不同：「未分類」＝這檔查不到資料；「產業35」＝查得到，
+    但我們的對照表沒有這個代碼。混在一起就沒辦法發現對照表該更新了。
+    """
+    v = str(raw or "").strip()
+    if not v:
+        return None, False
+    if not v.isdigit():
+        return v, True          # 已經是名稱（端點哪天改了就直接能用）
+    key = v.zfill(2)
+    name = _TW_SECTOR_CODE_TO_NAME.get(key)
+    return (name, True) if name else (f"產業{key}", False)
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -5665,23 +5710,34 @@ def _query_sector_map():
             if not isinstance(rows, list) or not rows:
                 raise ValueError(f"回應不是非空 list（type={type(rows).__name__}）")
             hit_key, n = None, 0
+            unmapped = {}          # [V27.14] 對照表沒有的代碼 → 出現次數
             for r in rows:
                 if not isinstance(r, dict):
                     continue
                 code = _tw_pick(r, _SECTOR_CODE_KEYS)
-                sec = _tw_pick(r, _SECTOR_NAME_KEYS)
-                if not code or not sec or not re.fullmatch(r"\d{4}", code):
+                raw_sec = _tw_pick(r, _SECTOR_FIELD_KEYS)
+                if not code or not raw_sec or not re.fullmatch(r"\d{4}", code):
+                    continue
+                # [V27.14] 代碼 → 名稱。美股那邊拿到的是 "Technology" 這種
+                #   名稱，台股拿到的是 "28" —— 同一欄兩種語意，下游沒辦法
+                #   跨市場分組（Rule 7）。在這裡就統一成名稱。
+                sec, _known = tw_sector_name(raw_sec)
+                if not sec:
                     continue
                 out[f"{code}{suffix}"] = sec
                 n += 1
+                if not _known:
+                    unmapped[str(raw_sec).strip()] = \
+                        unmapped.get(str(raw_sec).strip(), 0) + 1
                 if hit_key is None:
-                    hit_key = next((k for k in _SECTOR_NAME_KEYS
-                                    if str(r.get(k) or "").strip() == sec), None)
-            diag[label] = {"total": len(rows), "sectored": n, "field": hit_key}
+                    hit_key = next((k for k in _SECTOR_FIELD_KEYS
+                                    if str(r.get(k) or "").strip() == str(raw_sec).strip()), None)
+            diag[label] = {"total": len(rows), "sectored": n, "field": hit_key,
+                           "unmapped": dict(sorted(unmapped.items()))}
             if n == 0:
                 diag["errors"].append(
                     f"{label}: {len(rows)} 筆回應裡沒有任何產業別 —— "
-                    f"欄位名可能已改（試過 {list(_SECTOR_NAME_KEYS)}）")
+                    f"欄位名可能已改（試過 {list(_SECTOR_FIELD_KEYS)}）")
         except Exception as e:
             diag["errors"].append(f"{label}: {type(e).__name__}: {e}")
 
@@ -6301,6 +6357,12 @@ def _render_personal_scan():
 
                 # [V27.11] 產業命中率的分母：掃描母體裡每個產業各有幾檔。
                 #   get_sector 是 dict 查表，零請求；母體再大也只是迴圈。
+                # [V27.14] 母體太小的產業，命中率% 是雜訊不是資訊。
+                #   實例（自選股清單掃描）：Real Estate 顯示 50% —— 其實是
+                #   1/2，只因為清單裡剛好只有兩檔 REIT。這個欄位是為全市場
+                #   掃描設計的，小母體要明講「樣本不足」而不是給一個
+                #   看起來很高的百分比（Rule 12）。
+                _SEC_RATE_MIN_N = 5
                 _uni = st.session_state.get("_sig_scan_universe") or []
                 _uni_by_sec = {}
                 for _ut in _uni:
@@ -6325,7 +6387,8 @@ def _render_personal_scan():
                         # 同產業重複是刻意的（跟清單來源/掃描時間同一個理由）：
                         #   下游拿 CSV 單獨用時，不必再去 join 第二張表。
                         "產業命中率%": (round(_hit_by_sec.get(_sec_r, 0) / _sec_den * 100, 1)
-                                        if _sec_den else None),
+                                        if _sec_den >= _SEC_RATE_MIN_N else None),
+                        "產業母體數": _sec_den or None,
                         "訊號類型": r.get("訊號類型", ""),
                         "現價": r["現價"],
                         "前日收盤": r.get("前日收盤"),
@@ -6355,22 +6418,38 @@ def _render_personal_scan():
                     "`清單來源` / `掃描時間` 每列重複是為了讓 CSV 單獨拿出去也看得懂。")
                 # [V27.13] Rule 12：報價日不一致或不是今天 → 日% 可能是「昨天的漲跌」。
                 #   不講的話，這種錯誤在畫面上完全隱形。
-                _bar_dates = sorted({r.get("報價日") for r in _res if r.get("報價日")})
-                if _bar_dates:
-                    _bd_cnt = {}
-                    for _r2 in _res:
-                        _bd = _r2.get("報價日")
-                        if _bd:
-                            _bd_cnt[_bd] = _bd_cnt.get(_bd, 0) + 1
-                    if len(_bar_dates) > 1:
-                        st.warning(
-                            "⚠️ 這批結果的 `報價日` **不一致**："
-                            + "、".join(f"{_k} ({_v} 檔)" for _k, _v in
-                                        sorted(_bd_cnt.items(), reverse=True))
-                            + "。落後的那幾檔，`日%` 比的是它自己最後一根 K 的前一天，"
-                              "不是今天 —— 跨市場（美股／台股時區不同）或個股停牌時會這樣。")
-                    else:
-                        st.caption(f"📅 全部 {len(_res)} 檔的報價日均為 {_bar_dates[0]}。")
+                # [V27.14] **按市場分組**再比。
+                #   V27.13 只看「全部日期是否一致」，結果台灣晚上掃混合清單
+                #   必定跳紅字 —— 台股當天已收盤（9/16）、美股當天還沒開
+                #   （最後一根是 9/15），那是時差，完全正常。
+                #   **每次都跳的警告等於沒有警告**，真正的異常會被它蓋掉。
+                #   異常的定義是「同一個市場裡有人落後」——那才是停牌或抓取失敗。
+                _by_mkt = {}
+                for _r2 in _res:
+                    _bd = _r2.get("報價日")
+                    if not _bd:
+                        continue
+                    _mk = "台股" if (".TW" in _r2["代碼"] or ".TWO" in _r2["代碼"]) else "美股"
+                    _by_mkt.setdefault(_mk, {})[_bd] = \
+                        _by_mkt.setdefault(_mk, {}).get(_bd, 0) + 1
+                if _by_mkt:
+                    _summary = "｜".join(
+                        f"{_mk} {max(_d)}（{len(_d)} 個日期）" if len(_d) > 1
+                        else f"{_mk} {max(_d)}"
+                        for _mk, _d in sorted(_by_mkt.items()))
+                    st.caption(f"📅 報價日：{_summary}"
+                               + ("　※ 台美不同是時區差，不是錯誤。"
+                                  if len(_by_mkt) > 1 else ""))
+                    for _mk, _d in sorted(_by_mkt.items()):
+                        if len(_d) > 1:
+                            _newest = max(_d)
+                            _lag = {k: v for k, v in _d.items() if k != _newest}
+                            st.warning(
+                                f"⚠️ **{_mk}內部**的報價日不一致（最新 {_newest}）："
+                                + "、".join(f"{_k} ({_v} 檔)" for _k, _v in
+                                            sorted(_lag.items(), reverse=True))
+                                + f"。落後那幾檔的 `日%` 比的是它自己最後一根 K 的前一天，"
+                                  f"不是 {_newest} —— 個股停牌、或該檔當日抓取失敗時會這樣。")
 
                 # Rule 12：歷史不足一年的檔，折價% 的分母不是真正的「年度高點」。
                 _short_hi = [r["代碼"] for r in _res if r.get("_hi_bars", 999) < 240]
@@ -6510,7 +6589,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.13）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.14）",
                                   "# 先用 `訊號類型` 欄分流，再各自決定要不要套折價門檻。",
                                   ""]
                     for _ty, _use, _why in _SIG_DISC_RULES:
@@ -6555,6 +6634,18 @@ def _render_personal_scan():
                         + (f"上市 {_dt1['sectored']} 檔（欄位 `{_dt1['field']}`）" if _dt1 else "上市：失敗")
                         + "｜"
                         + (f"上櫃 {_dt2['sectored']} 檔（欄位 `{_dt2['field']}`）" if _dt2 else "上櫃：失敗"))
+                    # [V27.14] 對照表沒有的台股產業代碼。這是驗證「上櫃是否
+                    #   沿用上市編碼」的唯一依據 —— 若上櫃用了別套編碼，
+                    #   這裡會出現一整排代碼，而不是靜靜地掛上錯誤的名稱。
+                    for _lbl, _dg in (("上市", _dt1), ("上櫃", _dt2)):
+                        _um = (_dg or {}).get("unmapped") or {}
+                        if _um:
+                            st.warning(
+                                f"⚠️ {_lbl}有 {sum(_um.values())} 檔的產業代碼不在對照表裡，"
+                                f"顯示為「產業NN」："
+                                + "、".join(f"{_k}×{_v}" for _k, _v in
+                                            sorted(_um.items(), key=lambda kv: -kv[1])[:10])
+                                + "　※ 把這行貼給 Claude 就能補表。")
 
                     # 檔數多的排前面；「未分類」永遠沉底，不跟真的產業搶版面
                     _order = sorted(
@@ -6566,7 +6657,8 @@ def _render_personal_scan():
                              # [V27.11] 分母。沒有它，「命中 40 檔」無法判斷是熱還是冷。
                              "母體檔數": _uni_by_sec.get(_k) or None,
                              "命中率%": (round(len(_v) / _uni_by_sec[_k] * 100, 1)
-                                         if _uni_by_sec.get(_k) else None),
+                                         if _uni_by_sec.get(_k, 0) >= _SEC_RATE_MIN_N
+                                         else None),
                              "佔命中%": round(len(_v) / len(_table_rows) * 100, 1),
                              "個股": "、".join(
                                  f"{x['名稱']}({x['代碼']})" for x in _v[:12])
@@ -6579,11 +6671,20 @@ def _render_personal_scan():
                             "⚠️ `母體檔數` / `命中率%` 空白 ＝ 這次結果是 V27.11 之前掃的，"
                             "當時沒有記錄掃描母體。**重掃一次即有分母。**")
                     else:
+                        _thin = sorted(k for k, v in _uni_by_sec.items()
+                                       if 0 < v < _SEC_RATE_MIN_N)
                         st.caption(
                             f"分母來源：本次掃描母體 {len(_uni)} 檔。"
                             "`佔命中%` 是「這個產業佔所有命中的比例」（分母是命中數），"
                             "`命中率%` 是「這個產業有幾成被掃出訊號」（分母是母體數）"
                             " —— 判斷冷熱要看後者。")
+                        if _thin:
+                            st.caption(
+                                f"ℹ️ 母體不足 {_SEC_RATE_MIN_N} 檔的產業，`命中率%` 留空"
+                                f"（1/2 算出來是 50%，那是雜訊不是熱度）："
+                                + "、".join(f"{_k}({_uni_by_sec[_k]})" for _k in _thin[:10])
+                                + ("…" if len(_thin) > 10 else "")
+                                + "　※ 掃全市場時這欄才有意義。")
                     if _unclassified:
                         st.caption(
                             f"⚠️ {_unclassified} 檔「未分類」＝對照表裡查不到 "
