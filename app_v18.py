@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.17", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.19", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -909,6 +909,44 @@ def load_prev_scan(scope: str, scan_date: str):
         return None, {}
     _d = _earlier[-1]
     return _d, (_bucket.get(_d) or {})
+
+
+# ──────────────────────────────────────────────────────
+# [V27.18] 內部人賣壓的歷史（校準用）
+#
+#   為什麼需要：2026-09-17 實測賣壓比例 99.5%，而門檻是「>70% 警戒／>85% 危險」。
+#   內部人在公開市場**買進本來就極罕見**（高管拿股票是薪酬，賣出是常態），
+#   要讓比例掉到 85% 以下需要買進 $284M —— 當天實際買進只有 $7.4M。
+#   若它每天都 >85%，這個門檻就沒有鑑別力，指數永遠亮紅燈 ＝ 沒有資訊量，
+#   而它在「資金面綜合風險」裡還佔 40% 權重（等於固定加分，不是變數）。
+#
+#   **在拿到歷史分布之前不調門檻** —— 那會變成憑感覺調參數。
+#   這組函式負責把歷史累積起來，讓下一步有依據。
+#
+#   ⚠️ 既有的 Gist 快照（snapshots.json）**沒有**這個欄位 —— 那份是逐檔的
+#   個股劇本，不含市場級指標。所以只能從現在開始記。
+# ──────────────────────────────────────────────────────
+INSIDER_HIST_FILE = "insider_history.json"
+INSIDER_HIST_KEEP_DAYS = 180
+
+
+def load_insider_history():
+    """{ "YYYY-MM-DD": {ratio, score, sell, buy, scanned, anchor} }。讀不到回 {}。"""
+    data = _gist_read_file(INSIDER_HIST_FILE)
+    return data if isinstance(data, dict) else {}
+
+
+def save_insider_snapshot(day: str, rec: dict):
+    """同日覆蓋（以當天最後看到的錨點為準）。回傳 (ok, msg)。"""
+    if not (GIST_TOKEN and GIST_ID):
+        return False, "未設定 Gist，賣壓比例歷史不會累積"
+    hist = load_insider_history()
+    hist[str(day)] = rec
+    if len(hist) > INSIDER_HIST_KEEP_DAYS:
+        for _old in sorted(hist.keys())[:-INSIDER_HIST_KEEP_DAYS]:
+            del hist[_old]
+    ok = _gist_write_file(INSIDER_HIST_FILE, hist)
+    return ok, (f"已記錄（累積 {len(hist)} 天）" if ok else "Gist 寫入失敗，今天這筆沒存到")
 
 
 # ──────────────────────────────────────────────────────
@@ -4742,10 +4780,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.17" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.17" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.17" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.17")
+st.title("📡 掃描中心 V27.19" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.19" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.19" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.19")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -6667,7 +6705,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.17）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.19）",
                                   "# 先用 `訊號類型` 欄分流，再各自決定要不要套折價門檻。",
                                   ""]
                     for _ty, _use, _why in _SIG_DISC_RULES:
@@ -7960,14 +7998,61 @@ def render_signal_verify():
     _hit_ser = ((_dir["預測%"] > 0) & (_dir["實際%"] > 0)) | ((_dir["預測%"] < 0) & (_dir["實際%"] < 0))
     _hit = float(_hit_ser.mean() * 100) if len(_dir) else float("nan")
 
+    # [V27.19] **擲硬幣 50% 不是正確的基準。**
+    #   若該期間 52% 的日子下跌，「一律猜跌」不用任何模型就有 52%。
+    #   模型要贏的是 max(漲%, 跌%)，不是 50%。
+    #   2026-09-17 實測（86 天 / 70 檔 / 3,434 筆有方向樣本）：
+    #     命中 50.17%｜無腦基準 50.41%｜**超額 −0.23pp**（SE 0.85pp）
+    #   —— 先前畫面顯示「51.6%」讓人以為贏了擲硬幣，其實是平手。
+    #   分子對、分母錯，跟「達標亮三成」「產業命中率沒分母」是同一類問題。
+    _up_rate = float((_dir["實際%"] > 0).mean()) if len(_dir) else float("nan")
+    _naive = max(_up_rate, 1 - _up_rate) * 100 if len(_dir) else float("nan")
+    _edge = _hit - _naive if len(_dir) else float("nan")
+    _se = (np.sqrt(0.25 / len(_dir)) * 100) if len(_dir) else float("nan")
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("已回填樣本", f"{len(vdf)}", help=f"另有 {pending} 筆待回填（等隔日收盤）")
     c2.metric("方向命中率", "—" if pd.isna(_hit) else f"{_hit:.1f}%",
-              help=f"擲硬幣基準 50%。已排除預測 0%（無方向）的 {len(vdf) - len(_dir)} 筆")
-    c3.metric("平均絕對誤差", f"{vdf['差距'].abs().mean():.2f} pp",
+              help=f"已排除預測 0%（無方向）的 {len(vdf) - len(_dir)} 筆。"
+                   f"**要跟右邊的無腦基準比，不是跟 50% 比。**")
+    c3.metric("無腦基準", "—" if pd.isna(_naive) else f"{_naive:.1f}%",
+              help=f"該期間上漲 {_up_rate*100:.1f}%／下跌 {(1-_up_rate)*100:.1f}%。"
+                   f"「一律猜較常發生的那一邊」不用任何模型就有這個成績。")
+    c4.metric("超額 vs 基準",
+              "—" if pd.isna(_edge) else f"{_edge:+.2f} pp",
+              f"標準誤 ±{_se:.2f} pp" if not pd.isna(_se) else "",
+              delta_color="off")
+
+    # 判定：超過 2 個標準誤才算數
+    if not pd.isna(_edge):
+        if _edge > 2 * _se:
+            st.success(f"✅ **方向預測有超額**：{_edge:+.2f}pp > 2×SE（{2*_se:.2f}pp）。")
+        elif _edge < -2 * _se:
+            st.error(f"🔴 **方向預測比無腦基準還差**：{_edge:+.2f}pp < −2×SE（{-2*_se:.2f}pp）。")
+        else:
+            st.warning(
+                f"⚠️ **方向預測沒有超額**：{_edge:+.2f}pp 在 ±2×SE（±{2*_se:.2f}pp）之內，"
+                f"與「一律猜{'跌' if _up_rate < 0.5 else '漲'}」沒有統計上的差別。\n\n"
+                f"**不要拿這個預測做決策。** 這份紀錄的價值在於能證偽 —— "
+                f"它現在正在告訴你這件事。")
+
+    c5, c6 = st.columns(2)
+    c5.metric("平均絕對誤差", f"{vdf['差距'].abs().mean():.2f} pp",
               help="|實際% − 預測%| 的平均，pp = 百分點")
-    c4.metric("系統性偏差", f"{vdf['差距'].mean():+.2f} pp",
+    c6.metric("系統性偏差", f"{vdf['差距'].mean():+.2f} pp",
               help="正 = 實際普遍比預測強（模型偏保守）；負 = 模型偏樂觀")
+
+    # 幅度：跟「一律猜 0%」比才知道有沒有用
+    _mae = float(vdf["差距"].abs().mean())
+    _mae0 = float(vdf["實際%"].abs().mean())
+    if _mae > _mae0:
+        st.warning(
+            f"⚠️ **幅度預測比「一律猜 0%」還差**："
+            f"模型 MAE {_mae:.2f}pp vs 猜 0% 的 {_mae0:.2f}pp。"
+            f"預測幅度嚴重低估（平均只喊 ±{vdf['預測%'].abs().mean():.2f}pp，"
+            f"實際波動 ±{_mae0:.2f}pp），方向又沒抓到，加起來比什麼都不猜更糟。")
+    else:
+        st.success(f"✅ 幅度預測優於「一律猜 0%」：MAE {_mae:.2f}pp < {_mae0:.2f}pp。")
 
     st.markdown(f"### 📋 個股排行（樣本 ≥ {VERIFY_MIN_N} 天）")
     _rk = []
@@ -9019,8 +9104,35 @@ except Exception as _v17_e:
 # [V26.30] 快照校準推演線（洋紅）— 從 Gist 歷史快照學每檔預測偏差後校準
 # 不取代舊 AI 劇本，並存供日後比準確度
 # ──────────────────────────────────────────────────────
+# [V27.19] ⛔ **停止繪製。** 三個問題，前兩個是數學錯誤，第三個是根本問題：
+#
+#   ① conf 公式把 `pred == 0` 全部算成沒命中。實測 27.2% 的預測是 0%
+#      （_predict_next_day 資料不足時回 0），於是 conf 被系統性低估 ——
+#      68 檔的 conf 平均只有 **0.319**。
+#      `校準目標 = 現價 + (原目標 − 現價) × conf` 等於把目標價**打三折**，
+#      那不是「校準」，是無差別砍價。
+#
+#   ② 門檻只要 n>=5 就畫。n=5 時命中率的標準誤是 **22%** ——
+#      conf 可以從 0.06 跑到 0.94 純靠運氣。
+#
+#   ③ **conf 本身沒有預測力，也沒有持續性。**
+#      86 天 / 70 檔實測：前半段命中率與後半段的相關係數 = **−0.104**。
+#      前半段學到的 conf 預測不了後半段 —— 它是雜訊，不是特徵。
+#      而排除 pred==0 後的整體方向命中率 50.17% vs 無腦基準 50.41%，
+#      超額 −0.23pp（SE 0.85pp），本來就沒有 edge 可以拿來校準。
+#
+#   修 ①② 只會讓 conf 從 0.32 變成 ≈0.5（目標價打對折），仍然不是校準。
+#   ③ 才是根本，而它需要一個有 edge 的預測才修得好。
+#
+#   處理方式沿用 V26.89 的先例（金叉回測沒有預測力 → 從訊號欄拿掉、
+#   計算保留給雷達用）：**畫在圖上的東西會被讀成建議**，所以不畫；
+#   函式與快照記錄都保留，訊號驗證頁繼續統計 —— 哪天它真的有 edge 了，
+#   把下面的 False 拿掉就會回來。
+_SHOW_CALIBRATED_PROJECTION = False
+
 try:
-    _cal = compute_calibrated_projection(cur_t, close_v, t_s, horizon_days=5)
+    _cal = (compute_calibrated_projection(cur_t, close_v, t_s, horizon_days=5)
+            if _SHOW_CALIBRATED_PROJECTION else None)
     if _cal is not None:
         # 起點接現價，讓線從今天連出去
         _cal_x = [df.index[-1]] + _cal["x_dates"]
@@ -10478,6 +10590,117 @@ if _INSIDER_AVAILABLE:
             st.caption(
                 f"✅ 掃描池完整：清單 {_ins_cov['requested']} 檔全部解析到 CIK "
                 f"且抓取成功（{_ins_cov['scanned']} 檔有回應）。")
+
+        # ── [V27.18] 📈 賣壓比例歷史（校準用）──────────────────
+        #   資料已經在手上（stats 就在上面幾行），**零額外請求** ——
+        #   這是第七次遇到「算出來了但沒存下來」。
+        #
+        #   寫入時機：使用者看這個面板時順手記一筆。
+        #   一個 session 只寫一次（旗標守衛）—— 沒有守衛的話每次 rerender
+        #   都會打一次 Gist，症狀只是「App 變慢」，很難追。
+        try:
+            from datetime import datetime as _ih_dt
+            import pytz as _ih_tz
+            _ih_day = _ih_dt.now(_ih_tz.timezone("Asia/Taipei")).strftime("%Y-%m-%d")
+        except Exception:
+            _ih_day = datetime.now().strftime("%Y-%m-%d")
+
+        if st.session_state.get("_ins_hist_written") != _ih_day:
+            st.session_state["_ins_hist_written"] = _ih_day
+            try:
+                _ih_ok, _ih_msg = save_insider_snapshot(_ih_day, {
+                    "ratio": round(float(stats["sell_ratio"]) * 100, 2),
+                    "score": float(score),
+                    "sell": round(float(stats["sell_value"]) / 1e6, 2),
+                    "buy": round(float(stats["buy_value"]) / 1e6, 2),
+                    "scanned": int(stats.get("companies_scanned") or 0),
+                    "anchor": str(insider.get("updated_at", "")),
+                })
+                st.session_state["_ins_hist_msg"] = ("✅ " if _ih_ok else "⚠️ ") + _ih_msg
+            except Exception as _ihe:
+                st.session_state["_ins_hist_msg"] = \
+                    f"⚠️ 記錄歷史例外：{type(_ihe).__name__}: {_ihe}"
+
+        with st.expander("📈 賣壓比例歷史分布（門檻校準用）", expanded=False):
+            if st.session_state.get("_ins_hist_msg"):
+                st.caption(st.session_state["_ins_hist_msg"])
+            try:
+                _ih = load_insider_history()
+            except Exception as _ihl:
+                _ih, st.session_state["_ins_hist_msg"] = {}, str(_ihl)
+            _days = sorted(_ih.keys())
+            _vals = [_ih[d].get("ratio") for d in _days
+                     if isinstance(_ih[d].get("ratio"), (int, float))]
+            _N_MIN = 20     # 低於這個天數，分位數只是雜訊
+
+            if not (GIST_TOKEN and GIST_ID):
+                st.warning("未設定 `GIST_TOKEN` / `GIST_ID`，歷史無處存放，"
+                           "這個校準做不了。（其餘功能不受影響）")
+            elif not _vals:
+                st.info("目前還沒有任何歷史。**這份紀錄從 V27.18 才開始累積** —— "
+                        "既有的劇本快照（snapshots.json）是逐檔個股資料，"
+                        "不含市場級的賣壓比例，沒辦法回頭補。\n\n"
+                        "每天打開這個面板一次就會記一筆。")
+            else:
+                _ser = pd.Series(_vals)
+                _today = _vals[-1]
+                _pct_rank = float((_ser <= _today).mean() * 100)
+                _c1, _c2, _c3, _c4 = st.columns(4)
+                _c1.metric("已累積", f"{len(_vals)} 天")
+                _c2.metric("最低 / 最高",
+                           f"{_ser.min():.1f}% / {_ser.max():.1f}%")
+                _c3.metric("中位數", f"{_ser.median():.1f}%")
+                _c4.metric("今天的百分位",
+                           f"{_pct_rank:.0f}%" if len(_vals) >= _N_MIN else "—",
+                           f"今天 {_today:.1f}%", delta_color="off")
+
+                st.line_chart(pd.DataFrame({"賣壓比例%": _vals}, index=_days),
+                              height=200)
+
+                # ── 這個 expander 存在的**唯一理由**：回答門檻有沒有鑑別力 ──
+                _above85 = int((_ser > 85).sum())
+                _above70 = int((_ser > 70).sum())
+                if len(_vals) < _N_MIN:
+                    st.info(
+                        f"📊 目前 {len(_vals)} 天，**至少要 {_N_MIN} 天**才看得出分布。"
+                        f"（現在 {_above85}/{len(_vals)} 天在 >85% 的「危險」區）")
+                elif _above85 == len(_vals):
+                    st.error(
+                        f"🔴 **這條門檻沒有鑑別力**：{len(_vals)} 天**全部**都 >85%。"
+                        f"分數等於常數，不是變數 —— 而它在「資金面綜合風險指數」裡"
+                        f"佔 40% 權重，等於固定加分。\n\n"
+                        f"建議改用**歷史百分位**（今天 vs 過去 N 天）取代絕對門檻，"
+                        f"或把權重調低。**這個決定要你點頭，我不會自己改。**")
+                elif _above85 >= len(_vals) * 0.9:
+                    st.warning(
+                        f"🟠 **鑑別力很弱**：{_above85}/{len(_vals)} 天（"
+                        f"{_above85/len(_vals)*100:.0f}%）在 >85% 區。"
+                        f"門檻可能訂太低，或該改用百分位。")
+                else:
+                    st.success(
+                        f"🟢 門檻有在動：>85% 出現 {_above85}/{len(_vals)} 天、"
+                        f">70% 出現 {_above70}/{len(_vals)} 天。"
+                        f"目前的絕對門檻可以繼續用。")
+
+                st.caption(
+                    "⚠️ 這張表**不是**買賣訊號，是用來判斷「>70/85% 這組門檻還有沒有用」。"
+                    "內部人在公開市場買進本來就極罕見（高管拿股票是薪酬、賣出是常態），"
+                    "所以高賣壓比例可能是**結構性常態**而非警訊 —— 要看它相對自己的歷史。")
+                with st.expander("📥 下載歷史 CSV"):
+                    _ih_df = pd.DataFrame(
+                        [{"日期": d, **{k: _ih[d].get(k) for k in
+                                        ("ratio", "score", "sell", "buy",
+                                         "scanned", "anchor")}}
+                         for d in _days])
+                    _ih_df = _ih_df.rename(columns={
+                        "ratio": "賣壓比例%", "score": "指數分數",
+                        "sell": "賣出(M)", "buy": "買進(M)",
+                        "scanned": "掃描家數", "anchor": "錨點"})
+                    st.dataframe(_ih_df, width='stretch', hide_index=True)
+                    st.download_button(
+                        "⬇️ 下載 CSV", _ih_df.to_csv(index=False).encode("utf-8-sig"),
+                        file_name=f"insider_ratio_history_{_ih_day}.csv",
+                        mime="text/csv", key="_dl_ins_hist")
 
         # 賣最多 / 買最多 表格
         ts_col1, ts_col2 = st.columns(2)
