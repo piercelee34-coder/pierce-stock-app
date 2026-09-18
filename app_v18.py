@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.19", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.20", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2937,12 +2937,23 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
             _yr_high = float(_hi_win.max()) if len(_hi_win) else None
             _disc = (round((_yr_high - price) / _yr_high * 100, 1)
                      if (_yr_high and _yr_high > 0) else None)
-            # 純文字訊號類型：CSV 拿去程式篩選用。旁邊那欄
-            #   「訊號（類型 日期 金額）」是給人看的，一個字串裡混了三種
-            #   資訊，要 grep 出「所有乖離抄底」會很痛苦。
+            # 訊號類型：CSV 拿去程式篩選用。
+            #   [V27.20] 原本旁邊還有一欄「訊號（類型 日期 金額）」，內容
+            #   跟這欄幾乎重複（只多了價位），已合併刪除 —— 兩欄講同一件事
+            #   遲早會不同步（Rule 7）。
             # [V27.15] 保留 emoji（使用者要看得到圖示）。
             #   bot 仍可用中文子字串比對，不受影響。
-            _sig_types = "｜".join(dict.fromkeys(s[0] for s in uniq))
+            #
+            # [V27.20] 每個訊號帶上自己的**日期與價位**。
+            #   起因：美股全市場掃到 DLXY 標「💰 達標」但 日% = −51.92
+            #   —— 看起來荒謬，其實是兩個數字不同天（達標是前幾天觸發的，
+            #   崩盤是今天）。類型欄不帶日期就看不出這件事。
+            #   多訊號時各自帶各自的日期，不共用。
+            #
+            #   `uniq` 的元素是 (標籤, 日期, 價位)，例如 ("💰 達標", "9/16", 258.5)。
+            #   分隔符用「｜」跟原本一致，bot 的 `"達標" in 訊號類型` 不受影響。
+            _sig_types = "｜".join(
+                f"{_t} {_d} ${_p}" for _t, _d, _p in uniq)
 
             out.append({
                 "代碼": tk,
@@ -4780,10 +4791,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.19" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.19" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.19" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.19")
+st.title("📡 掃描中心 V27.20" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.20" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.20" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.20")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -6012,18 +6023,27 @@ except ImportError:
 
 
 def sig_type_plain(label: str) -> str:
-    """「💰 達標」→「達標」。掃描器發出的標籤格式固定是「emoji 空格 中文」。
+    """任何訊號標籤 →「達標」這種純類型名。
 
     [V27.15] 這是**唯一**一處做這件事的地方。先前 `訊號類型` 欄直接存
     剝好的純文字，使用者反映看不到圖示；改成欄位帶 emoji、要比對時才剝。
     兩邊各剝一次就會變成兩套規則（Rule 7），所以抽成函式。
 
-    對下游沒有影響：bot 是用「達標」這種**中文子字串**比對，
-    前面多一個 emoji 不影響 `"達標" in 訊號類型`。
+    [V27.20] 改用「抓第一段連續中文」而不是 split。
+      原本是 `split(" ", 1)[-1]`，只對付得了「emoji 空格 中文」兩段式。
+      V27.20 把日期與價位也放進同一欄後，標籤變成
+      「💰 達標 9/16 $258.5」，split 會回「達標 9/16 $258.5」——
+      門檻對照的分桶會**全部對不上規則表**（每一類都變 n=0），
+      而且畫面上不會報錯，只是表格靜靜地全空。測試 D5 抓到的就是這個。
+
+      抓中文則對三種寫法都成立：
+        「💰 達標 9/16 $258.5」→ 達標
+        「💰 達標」            → 達標
+        「達標」               → 達標
+    對 bot 沒有影響：它是用「達標」這種中文子字串比對整個欄位值。
     """
-    # 先 strip 再 split：前導空白會讓 split(" ", 1) 在第一個空白就切開，
-    #   結果回傳「🤫 吸籌」而不是「吸籌」—— emoji 沒剝掉，分桶就對不上規則表。
-    return str(label).strip().split(" ", 1)[-1].strip()
+    _m = re.search(r"[\u4e00-\u9fff]+", str(label))
+    return _m.group(0) if _m else str(label).strip()
 
 
 # ── [V27.10] 訊號類型 × 折價% 是否適用 ───────────────────────────
@@ -6457,9 +6477,6 @@ def _render_personal_scan():
 
                 _table_rows = []
                 for r in _res:
-                    _sig_txt = "、".join(
-                        f"{s[0]} {s[1]} ${s[2]}" for s in r["訊號"]
-                    )
                     _sec_r = get_sector(r["代碼"], _sec_map)
                     _sec_den = _uni_by_sec.get(_sec_r, 0)
                     _table_rows.append({
@@ -6480,7 +6497,6 @@ def _render_personal_scan():
                         "分析師上檔%": r.get("分析師上檔%"),
                         "技術目標": r.get("技術目標"),
                         "技術上檔%": r.get("技術上檔%"),
-                        "訊號（類型 日期 金額）": _sig_txt,
                         "報價日": r.get("報價日"),
                         "清單來源": _scope_done,
                         "掃描時間": _scan_ts,
@@ -6488,7 +6504,7 @@ def _render_personal_scan():
                 # [V27.16] 明確指定欄寬。19 欄擠在一起時 Streamlit 會給
                 #   「名稱」很大的寬度（SoFi Technologies 這種長名），把後面
                 #   十幾欄擠到畫面外，使用者得手動拖才看得到現價。
-                #   只有「訊號（類型 日期 金額）」是真的需要寬（一檔多訊號）。
+                #   只有「訊號類型」是真的需要寬（一檔多訊號 × 各帶日期價位）。
                 _W = st.column_config
                 _scan_col_cfg = {
                     "代碼": _W.TextColumn("代碼", width="small"),
@@ -6496,7 +6512,7 @@ def _render_personal_scan():
                     "產業": _W.TextColumn("產業", width="small"),
                     "產業命中率%": _W.NumberColumn("產業命中率%", format="%.1f", width="small"),
                     "產業母體數": _W.NumberColumn("產業母體數", format="%d", width="small"),
-                    "訊號類型": _W.TextColumn("訊號類型", width="medium"),
+                    "訊號類型": _W.TextColumn("訊號類型", width="large"),
                     "現價": _W.NumberColumn("現價", format="%.2f", width="small"),
                     "前日收盤": _W.NumberColumn("前日收盤", format="%.2f", width="small"),
                     "日%": _W.NumberColumn("日%", format="%+.2f", width="small"),
@@ -6506,8 +6522,6 @@ def _render_personal_scan():
                     "分析師上檔%": _W.NumberColumn("分析師上檔%", format="%.1f", width="small"),
                     "技術目標": _W.NumberColumn("技術目標", format="%.2f", width="small"),
                     "技術上檔%": _W.NumberColumn("技術上檔%", format="%.1f", width="small"),
-                    "訊號（類型 日期 金額）": _W.TextColumn(
-                        "訊號（類型 日期 金額）", width="large"),
                     "報價日": _W.TextColumn("報價日", width="small"),
                     "清單來源": _W.TextColumn("清單來源", width="small"),
                     "掃描時間": _W.TextColumn("掃描時間", width="small"),
@@ -6520,7 +6534,8 @@ def _render_personal_scan():
                 _dl_slot = st.container()
                 st.caption(
                     "📄 **欄位說明**（表格右上角 ⬇ 可直接匯出 CSV）："
-                    "`訊號類型` 純文字、以「｜」分隔，給程式篩選用；"
+                    "**`訊號類型` 格式是「類型 日期 $訊號當時價位」，多訊號以「｜」分隔、"
+                    "各自帶各自的日期**（訊號日期跟 `日%` 常常不是同一天 —— 一檔可以前天達標、今天崩盤）；"
                     "`一年高` ＝ 近 252 根 K 的最高價；"
                     "**`折價%` ＝ (一年高 − 現價) / 一年高 × 100，正數＝比一年高便宜多少**"
                     "（注意：跟「上檔%」的正負號相反，那兩欄正數代表還有多少上漲空間）；"
@@ -6705,7 +6720,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.19）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.20）",
                                   "# 先用 `訊號類型` 欄分流，再各自決定要不要套折價門檻。",
                                   ""]
                     for _ty, _use, _why in _SIG_DISC_RULES:
