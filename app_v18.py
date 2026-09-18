@@ -9,6 +9,7 @@ import requests
 import json
 import os
 import re
+import time
 
 # 空頭距離指數引擎（新增）
 try:
@@ -25,7 +26,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.21", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.22", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1636,7 +1637,11 @@ if 'current_ticker' not in st.session_state:
 #   3. 抓不到 → 退回最後一次成功的快取，再退回示範資料
 #   4. 主源 macromicro，後備 NAAIM 官方 XLSX
 # =============================================================
-import time as _time
+# [V27.22] 原本這裡有 `import time as _time`。模組層已經 import time
+#   了，兩個名字指同一個模組是 Rule 7 說的「衝突別平均」——
+#   而且它正是 V27.01 那個 bug 的溫床：當時看到檔案裡有 _time，
+#   就以為 time 也在，於是 _http_json_retry 寫了裸 time.sleep，
+#   每次重試都 NameError。統一成 time。
 
 _SENT_CACHE_DIR = ".sentiment_cache"
 _NAAIM_CACHE_FILE = os.path.join(_SENT_CACHE_DIR, "naaim.json")
@@ -1683,7 +1688,7 @@ def _can_fetch(source_key: str) -> bool:
     if today_log.get("count", 0) >= _MAX_ATTEMPTS_PER_DAY:
         return False
     last_ts = today_log.get("last_ts", 0)
-    if last_ts and (_time.time() - last_ts) < _MIN_ATTEMPT_GAP_MIN * 60:
+    if last_ts and (time.time() - last_ts) < _MIN_ATTEMPT_GAP_MIN * 60:
         return False
     return True
 
@@ -1696,7 +1701,7 @@ def _log_fetch(source_key: str, success: bool):
     if source_key not in log[today]:
         log[today][source_key] = {"count": 0, "last_ts": 0, "has_success": False}
     log[today][source_key]["count"] += 1
-    log[today][source_key]["last_ts"] = _time.time()
+    log[today][source_key]["last_ts"] = time.time()
     if success:
         log[today][source_key]["has_success"] = True
     cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
@@ -4842,10 +4847,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.21" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.21" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.21" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.21")
+st.title("📡 掃描中心 V27.22" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.22" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.22" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.22")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -6805,7 +6810,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.21）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.22）",
                                   "# 先用 `訊號類型` 欄分流，再各自決定要不要套折價門檻。",
                                   ""]
                     for _ty, _use, _why in _SIG_DISC_RULES:
@@ -6919,9 +6924,21 @@ def _render_personal_scan():
                     _ts = (_scan_ts or "").replace(" ", "_").replace(":", "")
                     _sk = _scan_scope_key(_scope_done)
                     _zbuf = _BIO()
+
+                    # [V27.22] **一律 utf-8-sig（帶 BOM）。**
+                    #   ZipFile.writestr(name, str) 會用純 UTF-8 編碼，沒有
+                    #   BOM。Excel 開 .csv 時若沒看到 BOM，預設用系統 ANSI
+                    #   （繁中 Windows 是 cp950）解，中文就全變亂碼。
+                    #   注意這裡只能用 bytes：若傳 str 進 writestr，
+                    #   BOM 字元會被再編碼一次，反而更糟。
+                    #   4253/4359/10801 行的單檔下載本來就已經 utf-8-sig，
+                    #   只有 ZIP 這條路漏掉 —— Rule 7：統一成同一種。
+                    def _zw(_z, _name, _text):
+                        _z.writestr(_name, str(_text).encode("utf-8-sig"))
+
                     with _zf.ZipFile(_zbuf, "w", _zf.ZIP_DEFLATED) as _z:
-                        _z.writestr(
-                            "00_README.txt",
+                        _zw(
+                            _z, "00_README.txt",
                             f"AI 實戰戰情室 掃描輸出\n"
                             f"掃描範圍：{_scope_done}\n"
                             f"掃描時間：{_scan_ts}\n"
@@ -6932,14 +6949,16 @@ def _render_personal_scan():
                             "  02_跨日比對.csv    跟上次掃描的差異。**「❌ 消失」只在這裡**\n"
                             "  03_依產業分組.csv  命中/母體/命中率\n"
                             "  04_折價門檻規則.txt 訊號類型 × 折價% 的適用規則\n\n"
-                            "兩張表用「代碼」做 join。\n")
-                        _z.writestr("01_主表.csv",
-                                    pd.DataFrame(_table_rows).to_csv(index=False))
+                            "兩張表用「代碼」做 join。\n"
+                            "編碼：UTF-8 with BOM（utf-8-sig）。Excel 直接雙擊即可，"
+                            "程式讀請用 encoding='utf-8-sig'。\n")
+                        _zw(_z, "01_主表.csv",
+                            pd.DataFrame(_table_rows).to_csv(index=False))
                         if _diff_rows:
-                            _z.writestr("02_跨日比對.csv",
-                                        pd.DataFrame(_diff_rows).to_csv(index=False))
-                        _z.writestr("03_依產業分組.csv",
-                                    pd.DataFrame([
+                            _zw(_z, "02_跨日比對.csv",
+                                pd.DataFrame(_diff_rows).to_csv(index=False))
+                        _zw(_z, "03_依產業分組.csv",
+                            pd.DataFrame([
                                         {"產業": _k, "命中檔數": len(_v),
                                          "母體檔數": _uni_by_sec.get(_k) or None,
                                          "命中率%": (round(len(_v) / _uni_by_sec[_k] * 100, 1)
@@ -6949,7 +6968,7 @@ def _render_personal_scan():
                                          "個股": "、".join(f"{x['名稱']}({x['代碼']})"
                                                            for x in _v)}
                                         for _k, _v in _order]).to_csv(index=False))
-                        _z.writestr("04_折價門檻規則.txt", "\n".join(_bot_lines))
+                        _zw(_z, "04_折價門檻規則.txt", "\n".join(_bot_lines))
                     with _dl_slot:
                         st.download_button(
                             "　📦　下載本次掃描全部資料（ZIP）　📦　",
