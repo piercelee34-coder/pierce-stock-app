@@ -25,7 +25,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.20", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.21", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -928,6 +928,19 @@ def load_prev_scan(scope: str, scan_date: str):
 # ──────────────────────────────────────────────────────
 INSIDER_HIST_FILE = "insider_history.json"
 INSIDER_HIST_KEEP_DAYS = 180
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def fetch_insider_index(anchor):
+    """抓 SEC Form 4 內部人賣壓指數。**全 app 唯一的抓取入口**（Rule 7）。
+
+    [V27.21] 先前只有個股頁的 `_cached_insider()` 在抓，而它定義在個股頁
+    那一段裡 —— 側邊欄的快照流程跑在更前面，根本呼叫不到。
+    抽到模組層，兩邊共用同一份快取（同錨點只抓一次）。
+    """
+    if not _INSIDER_AVAILABLE:
+        return None
+    return insider_sentiment.get_insider_pressure_index(anchor=anchor)
 
 
 def load_insider_history():
@@ -4265,6 +4278,42 @@ with st.sidebar:
             )
         except Exception as _ge:
             st.session_state["_snap_gist_msg"] = f"⚠️ 雲端同步例外：{str(_ge)[:40]}"
+        # ── [V27.21] 搭便車：順手記錄今天的內部人賣壓比例 ──────────
+        #   V27.18 把記錄綁在「使用者打開個股頁的內部人面板」這個動作上，
+        #   等於要你每天記得做一件事，才能累積一份**要 20 天才有結論**的資料。
+        #   很容易斷，而斷掉就永遠湊不滿樣本 —— 那是設計失誤。
+        #   自動快照本來就每天跑一次，掛在這裡就完全不用你動手。
+        #
+        #   成本：同錨點內有快取則秒回；新錨點要 2-3 分鐘（SEC Form 4 全掃）。
+        #   Rule 12：抓不到／寫不進去都要講，不能靜靜地少一天。
+        if _INSIDER_AVAILABLE:
+            try:
+                _ia = get_cache_anchor()
+                _ip = fetch_insider_index(_ia)
+                if _ip and _ip.get("data_status"):
+                    _ist = _ip["stats"]
+                    _iok, _imsg = save_insider_snapshot(_snap_date, {
+                        "ratio": round(float(_ist["sell_ratio"]) * 100, 2),
+                        "score": float(_ip["score"]),
+                        "sell": round(float(_ist["sell_value"]) / 1e6, 2),
+                        "buy": round(float(_ist["buy_value"]) / 1e6, 2),
+                        "scanned": int(_ist.get("companies_scanned") or 0),
+                        "anchor": str(_ip.get("updated_at", "")),
+                    })
+                    st.session_state["_ins_hist_written"] = _snap_date
+                    st.session_state["_ins_hist_msg"] = \
+                        ("✅ " if _iok else "⚠️ ") + _imsg
+                    st.session_state["_snap_ins_msg"] = (
+                        f"🕵️ 賣壓比例已記錄："
+                        f"{_ist['sell_ratio']*100:.1f}%（{_imsg}）"
+                        if _iok else f"⚠️ 賣壓比例記錄失敗：{_imsg}")
+                else:
+                    st.session_state["_snap_ins_msg"] = \
+                        "⚠️ 內部人資料抓不到，今天的賣壓比例沒記到（明天會再試）"
+            except Exception as _ie:
+                st.session_state["_snap_ins_msg"] = \
+                    f"⚠️ 賣壓比例記錄例外：{type(_ie).__name__}: {_ie}"
+
         # [V26.73] 搭便車：快照存完順手回填先前所有 pending 的「實際隔日價」
         try:
             _bf_f, _bf_p, _bf_a, _bf_msg = backfill_snapshot_actuals()
@@ -4284,6 +4333,8 @@ with st.sidebar:
             st.caption(st.session_state["_snap_gist_msg"])
         if st.session_state.get("_snap_bf_msg"):
             st.caption(st.session_state["_snap_bf_msg"])
+        if st.session_state.get("_snap_ins_msg"):
+            st.caption(st.session_state["_snap_ins_msg"])
 
     # ── [V26.34] 匯出自選股分析包 CSV（手動，含 Gist 全部歷史 + 今日）──
     if st.button("⬇️ 匯出自選股分析包 CSV", width='stretch',
@@ -4791,10 +4842,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.20" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.20" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.20" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.20")
+st.title("📡 掃描中心 V27.21" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.21" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.21" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.21")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -6645,6 +6696,40 @@ def _render_personal_scan():
                                 "折價%": None, "上次折價%": _p.get("d"),
                                 "折價%變化": None,
                             })
+                        # [V27.21] **母體變動偵測。**
+                        #   2026-09-18 實跑：上櫃清單抓取失敗，掃描母體從
+                        #   ~900 掉到 498，主表 128 檔**全是 .TW、0 檔 .TWO**，
+                        #   而「❌ 消失」93 檔裡有 52 檔是上櫃 ——
+                        #   那不是訊號消失，是**根本沒被掃**。
+                        #   下游（bot）會把它讀成 52 檔訊號失效，結論整個歪掉。
+                        #
+                        #   用「命中的市場組成」比對就抓得到，不需要存母體清單：
+                        #   某個市場上次有命中、今天掛零，幾乎一定是沒掃到。
+                        def _mkt_of(_c):
+                            _c = str(_c)
+                            return ("上櫃" if _c.endswith(".TWO")
+                                    else "上市" if _c.endswith(".TW") else "美股")
+                        _pm, _nm = {}, {}
+                        for _c in _prev:
+                            _pm[_mkt_of(_c)] = _pm.get(_mkt_of(_c), 0) + 1
+                        for _c in _now:
+                            _nm[_mkt_of(_c)] = _nm.get(_mkt_of(_c), 0) + 1
+                        _vanished_mkt = [
+                            (_k, _v) for _k, _v in _pm.items()
+                            if _v >= 5 and _nm.get(_k, 0) == 0]
+                        if _vanished_mkt:
+                            st.error(
+                                "🔴 **這次 diff 不可信**：以下市場上次有命中、"
+                                "今天卻**掛零** —— 幾乎一定是清單抓取失敗，"
+                                "不是訊號消失：\n\n"
+                                + "\n".join(
+                                    f"- **{_k}**：上次 {_v} 檔命中 → 今天 0 檔"
+                                    for _k, _v in _vanished_mkt)
+                                + "\n\n這些市場的個股會全部被標成「❌ 消失」，"
+                                  "**那是假的**。請往上看掃描範圍那段的清單檔數"
+                                  "（上市／上櫃各幾檔），確認是不是取得失敗；"
+                                  "重掃一次通常就好。")
+
                         _order_st = {"🆕 新進": 0, "🔁 連續": 1, "❌ 消失": 2}
                         _diff_rows.sort(
                             key=lambda x: (_order_st.get(x["狀態"], 9),
@@ -6720,7 +6805,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.20）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.21）",
                                   "# 先用 `訊號類型` 欄分流，再各自決定要不要套折價門檻。",
                                   ""]
                     for _ty, _use, _why in _SIG_DISC_RULES:
@@ -10453,11 +10538,11 @@ if _INSIDER_AVAILABLE:
             "它們依 Exchange Act Rule 3a12-3(b) 豁免 Section 16，不申報 Form 4。"
             "這是制度性空白，不是抓取失敗。")
 
-    # [V26.01] 把 anchor 傳進 insider_sentiment 模組，
-    # 讓它的 disk cache key 也跟 anchor 連動（解決多裝置不同步問題）
-    @st.cache_data(ttl=21600, show_spinner="🕵️ 正在抓取 SEC Form 4（首次約 2-3 分鐘）...")
-    def _cached_insider(anchor):
-        return insider_sentiment.get_insider_pressure_index(anchor=anchor)
+    # [V26.01] anchor 傳進 insider_sentiment，讓 disk cache key 跟錨點連動
+    #   （解決多裝置不同步問題）。
+    # [V27.21] 改用模組層的 fetch_insider_index —— 它自己帶 @st.cache_data，
+    #   側邊欄的自動快照抓的是同一份，兩邊共用快取，不會重複打 SEC。
+    _cached_insider = fetch_insider_index
 
     # [V26.96] 查詢結果存 session_state：Streamlit 每次互動都重跑整份 script，
     #   不存的話按鈕的效果活不過下一次 rerun（換個 tab 就白按了）。
