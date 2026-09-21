@@ -26,7 +26,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.22", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.23", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1326,15 +1326,64 @@ def _http_json_retry(url, timeout, tries=_TW_HTTP_TRIES, ua="Mozilla/5.0"):
     raise last
 
 
-@st.cache_data(ttl=21600, show_spinner=False)   # 6 小時，與 fetch_tw_universe 一致
-def _fetch_tw_daily_rows():
+# ── [V27.23] 殘缺結果不該被快取六小時 ──────────────────────────
+#   2026-09-18 實例：TPEX 在 17:24 掛掉一次（V27.22 修掉的 NameError），
+#   殘缺結果 `{"twse": [1090 列], "tpex": []}` 連同錯誤字串被寫進
+#   ttl=21600 的快取。17:39 重掃時**根本沒有再打 TPEX 一次**，直接吃
+#   六小時前的死人骨頭 —— 使用者看到的是「修了還是壞的」。
+#
+#   抓取層本來就 fail loud（錯誤有進 diag），但**快取層把一次抖動
+#   放大成六小時停擺**。那正是 52 檔假「消失」的放大機制。
+#
+#   作法：把「世代號」塞進快取鍵。
+#     抓取完整 → 世代號不動 → 6 小時 TTL 照舊生效（不多打端點）
+#     抓取殘缺 → 記下時間；隔 5 分鐘後的下一次 rerun 把世代號 +1
+#                → 三支快取的鍵一起變 → 重抓
+#   為什麼不是「殘缺就完全不快取」：TPEX 真的掛掉時會變成每次 rerun
+#   都去捶它，對一個已經在喘的端點是最糟的作法。5 分鐘是下限。
+_TW_ROWS_TTL_OK = 21600      # 抓取完整：6 小時
+_TW_ROWS_TTL_BAD = 300       # 有來源失敗：5 分鐘
+
+
+def _tw_rows_gen():
+    """本次 rerun 要用的世代號。**整個 rerun 期間固定。**
+
+    固定這件事不是潔癖：fetch_tw_universe 與 _query_tw_name_bulk 在同一次
+    掃描裡都會呼叫 _fetch_tw_daily_rows。中途換號 = 兩邊各抓一次，直接
+    退回 V27.01 修掉的「同一個一萬多列的端點被打兩次 → 對方截斷回應」。
+    """
+    _k = "_tw_gen_frozen"
+    if _k not in st.session_state:
+        _g = st.session_state.get("_tw_rows_gen", 0)
+        _bad = st.session_state.get("_tw_rows_bad_ts")
+        if _bad and (time.time() - _bad) >= _TW_ROWS_TTL_BAD:
+            _g += 1                                   # 殘缺滿 5 分鐘 → 換鍵重抓
+            st.session_state["_tw_rows_gen"] = _g
+            st.session_state["_tw_rows_bad_ts"] = None
+        st.session_state[_k] = _g
+    return st.session_state[_k]
+
+
+# 每次 rerun 重新凍結一次（模組層每次 rerun 都會跑到這裡）
+st.session_state.pop("_tw_gen_frozen", None)
+
+
+@st.cache_data(ttl=_TW_ROWS_TTL_OK, show_spinner=False)
+def _fetch_tw_daily_rows_cached(gen):
+    """⚠️ 參數名**不可以**用底線開頭。st.cache_data 會把 `_foo` 這種
+    參數排除在快取鍵之外（那是官方用來排除不可雜湊物件的語法）——
+    取名 `_gen` 的話整個世代號機制會靜默失效，看起來有做其實沒有。
+    """
     """台股上市/上櫃當日成交的**原始列**，清單與中文名共用這一份。
 
     回傳 ({"twse": [...], "tpex": [...]}, diag)。
     快取用 6 小時（取兩個消費者裡較短的那個）—— 名稱一天內不會變，
     但清單需要當日成交額，以短的為準才不會拿到隔夜資料。
     """
-    rows, diag = {"twse": [], "tpex": []}, {"errors": []}
+    # [V27.23] fetched_ts 記在**快取函式內部** —— 吃到舊快取時這個值
+    #   就是舊的，畫面才看得出「這份資料是幾分鐘前抓的」。
+    rows = {"twse": [], "tpex": []}
+    diag = {"errors": [], "fetched_ts": time.time()}
     for label, url, timeout in (("twse", _TW_LIST_TWSE, 60),
                                 ("tpex", _TW_LIST_TPEX, 90)):
         try:
@@ -1347,8 +1396,20 @@ def _fetch_tw_daily_rows():
     return rows, diag
 
 
+def _fetch_tw_daily_rows():
+    """對外入口：簽章沒變，呼叫端一行都不用改（Rule 3）。"""
+    rows, diag = _fetch_tw_daily_rows_cached(_tw_rows_gen())
+    if diag.get("errors"):
+        # 只記第一次變殘缺的時刻 —— 每次都覆蓋的話 5 分鐘永遠到不了
+        if not st.session_state.get("_tw_rows_bad_ts"):
+            st.session_state["_tw_rows_bad_ts"] = time.time()
+    else:
+        st.session_state["_tw_rows_bad_ts"] = None
+    return rows, diag
+
+
 @st.cache_data(ttl=86400, show_spinner=False)   # 一天一次；全市場只撈一趟
-def _query_tw_name_bulk():
+def _query_tw_name_bulk_cached(gen):
     """回傳 (代碼→中文名 dict, diag)。代碼含 .TW / .TWO 後綴。
 
     只收含中文字的名稱 —— 這兩個端點偶爾會給英文簡稱，那種留給
@@ -1389,6 +1450,11 @@ def _query_tw_name_bulk():
         except Exception as e:
             diag["errors"].append(f"{label}: {type(e).__name__}: {e}")
     return out, diag
+
+
+def _query_tw_name_bulk():
+    """簽章不變。世代號跟 _fetch_tw_daily_rows 共用，殘缺時一起失效。"""
+    return _query_tw_name_bulk_cached(_tw_rows_gen())
 
 
 # [V26.46] 台股中文名 → 代碼對照（226 檔，含 ETF；用於中文搜尋輸入）
@@ -4438,8 +4504,14 @@ with st.sidebar:
     if _clr_msg:
         st.success(_clr_msg)
     # [V26.71] 快取一天一檔，若寫入壞資料會被鎖整天 → 提供清除重掃的逃生門
-    if st.button("🔄 清除今日快取", width='stretch',
-                 help="掃描結果快取一天。若價格看起來不對，先清掉再重新掃描。"):
+    #
+    # [V27.23] 改名。原本叫「清除今日快取」，但它**只**刪自選股圖示檔
+    #   和幾個 session_state key，完全沒碰 st.cache_data —— 名字承諾得
+    #   比實際做的多。2026-09-18 台股清單被鎖在壞快取裡時，使用者照著
+    #   鈕的名字按下去，當然沒用。名實不符比沒有這顆鈕更糟。
+    if st.button("🔄 清除自選股今日快取", width='stretch',
+                 help="只清自選股訊號的當日快取檔。若自選股價格看起來不對，"
+                      "先清掉再按「掃描清單訊號」。**不會**動到台股/美股清單快取。"):
         try:
             if _os_wl.path.exists(_wl_icon_file):
                 _os_wl.remove(_wl_icon_file)
@@ -4453,6 +4525,21 @@ with st.sidebar:
             st.session_state["_cache_clr_msg"] = _msg_clr
         except Exception as _ec:
             st.session_state["_cache_clr_msg"] = f"⚠️ 清除失敗：{type(_ec).__name__}: {_ec}"
+        st.rerun()
+
+    # [V27.23] 真正的全清。上面那顆碰不到 st.cache_data，而被鎖住的
+    #   通常正是那一層（台股清單、中文名表、產業對照、各掃描器結果）。
+    #   先前唯一的逃生門是某幾個掃描器旁邊的「🔄 強制刷新」—— 那是
+    #   副作用，不是設計。放一顆講清楚的在這裡。
+    if st.button("🧹 清除全部快取（含台股清單）", width='stretch',
+                 help="清掉所有 st.cache_data：台股/美股清單、中文名表、"
+                      "產業對照、各掃描器結果。下次掃描全部重抓，會比較慢。"
+                      "清單檔數不對、或畫面顯示的抓取時間太舊時用這顆。"):
+        st.cache_data.clear()
+        for _k2 in ("_tw_rows_gen", "_tw_rows_bad_ts", "_tw_gen_frozen"):
+            st.session_state.pop(_k2, None)
+        st.session_state["_cache_clr_msg"] = (
+            "已清除全部快取。下次掃描會重新抓所有清單（比較慢是正常的）。")
         st.rerun()
 
     if st.button("🔍 掃描清單訊號", width='stretch',
@@ -4847,10 +4934,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.22" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.22" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.22" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.22")
+st.title("📡 掃描中心 V27.23" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.23" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.23" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.23")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -5568,7 +5655,7 @@ def _tw_num(x):
 
 
 @st.cache_data(ttl=21600, show_spinner=False)   # 6 小時，與其他掃描器一致
-def fetch_tw_universe(min_value: int = _TW_MIN_TRADE_VALUE):
+def _fetch_tw_universe_cached(min_value, gen):
     """回傳 (代碼清單, 診斷字典)。兩市場各自獨立抓，一邊失敗不影響另一邊。"""
     out, diag = [], {"twse": None, "tpex": None, "errors": []}
     # [V27.01] 改吃共用的原始列 —— 這支跟 _query_tw_name_bulk 以前各打一次
@@ -5601,6 +5688,11 @@ def fetch_tw_universe(min_value: int = _TW_MIN_TRADE_VALUE):
             diag["errors"].append(f"上櫃清單解析: {type(e).__name__}: {e}")
 
     return list(dict.fromkeys(out)), diag
+
+
+def fetch_tw_universe(min_value: int = _TW_MIN_TRADE_VALUE):
+    """[V27.23] 簽章不變。加世代號是為了讓殘缺的清單不會被鎖六小時。"""
+    return _fetch_tw_universe_cached(min_value, _tw_rows_gen())
 
 
 # ── [V26.92] 美股全市場清單 ─────────────────────────────────────
@@ -6352,6 +6444,27 @@ def _render_personal_scan():
                     f"（原始 {_d2['total']} 筆，其餘為權證與 ETF）"
                     if _d2 else "上櫃：取得失敗")
                 st.caption(f"流動性門檻：日成交額 ≥ {_TW_MIN_TRADE_VALUE:,} 元")
+
+                # [V27.23] 把「這份原始資料是幾分鐘前抓的」印出來。
+                #   沒有這行，一份六小時前的殘缺快取跟一份剛抓的完整
+                #   資料在畫面上長得一模一樣 —— 2026-09-18 就是這樣
+                #   讓人以為「修了還是壞的」。
+                _fts = _tw_diag.get("fetched_ts")
+                if _fts:
+                    _age_m = (time.time() - _fts) / 60
+                    _age_s = ("剛剛" if _age_m < 1 else
+                              f"{_age_m:.0f} 分鐘前" if _age_m < 90 else
+                              f"{_age_m/60:.1f} 小時前")
+                    if _tw_diag.get("errors"):
+                        st.warning(
+                            f"⚠️ 這份清單原始資料抓於 **{_age_s}**，"
+                            "而且當時就有來源失敗 —— 下面的市場檔數是"
+                            "**殘缺的**。殘缺結果只快取 "
+                            f"{_TW_ROWS_TTL_BAD // 60} 分鐘，"
+                            "隔一下再掃一次就會自動重抓。")
+                    else:
+                        st.caption(f"📡 清單原始資料抓於 {_age_s}（兩市場都完整）")
+
                 for _e in _tw_diag.get("errors", []):
                     st.warning(_e)
 
@@ -6810,7 +6923,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.22）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.23）",
                                   "# 先用 `訊號類型` 欄分流，再各自決定要不要套折價門檻。",
                                   ""]
                     for _ty, _use, _why in _SIG_DISC_RULES:
