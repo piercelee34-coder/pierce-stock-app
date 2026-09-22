@@ -26,7 +26,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.24", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.25", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1370,15 +1370,21 @@ st.session_state.pop("_tw_gen_frozen", None)
 
 @st.cache_data(ttl=_TW_ROWS_TTL_OK, show_spinner=False)
 def _fetch_tw_daily_rows_cached(gen):
-    """⚠️ 參數名**不可以**用底線開頭。st.cache_data 會把 `_foo` 這種
-    參數排除在快取鍵之外（那是官方用來排除不可雜湊物件的語法）——
-    取名 `_gen` 的話整個世代號機制會靜默失效，看起來有做其實沒有。
-    """
     """台股上市/上櫃當日成交的**原始列**，清單與中文名共用這一份。
 
     回傳 ({"twse": [...], "tpex": [...]}, diag)。
     快取用 6 小時（取兩個消費者裡較短的那個）—— 名稱一天內不會變，
     但清單需要當日成交額，以短的為準才不會拿到隔夜資料。
+
+    ⚠️ 參數 `gen` 的名字**不可以**用底線開頭。st.cache_data 會把 `_foo`
+    這種參數排除在快取鍵之外（那是官方用來排除不可雜湊物件的語法）——
+    取名 `_gen` 的話整個世代號機制會靜默失效，看起來有做其實沒有。
+
+    [V27.25] 這裡原本有**兩個** docstring：V27.23 加警語時沒把舊的併掉。
+    第二個字串不再是 docstring，而是一個裸運算式 —— 而 Streamlit 的
+    magic 會把裸運算式自動 st.write() 出來，**函式內部也一樣**。
+    又因為這支帶 @st.cache_data，Streamlit 會錄下並重播函式裡的 st 呼叫，
+    所以每次命中快取就再印一次 —— 畫面上整排重複的說明文字就是它。
     """
     # [V27.23] fetched_ts 記在**快取函式內部** —— 吃到舊快取時這個值
     #   就是舊的，畫面才看得出「這份資料是幾分鐘前抓的」。
@@ -4959,10 +4965,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.24" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.24" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.24" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.24")
+st.title("📡 掃描中心 V27.25" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.25" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.25" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.25")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -6957,7 +6963,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.24）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.25）",
                                   "#",
                                   "# [V27.24] 主表新增 `達標靜置` 欄：這次達標之前，有幾根 K 沒碰過",
                                   "#   同一個技術目標。越大＝盤整越久才突破。",
