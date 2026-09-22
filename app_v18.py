@@ -26,7 +26,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.23", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.24", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2755,6 +2755,7 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
                       "lookback_days": lookback_days,
                       "hit_legacy": 0, "by_type_legacy": {},
                       "tap_suppressed": 0, "tap_suppressed_to_zero": 0,
+                      "tap_quiet": [],          # [V27.24] 靜置根數分布
                       "tap_fresh_days": tap_fresh_days})
     try:
         batch = yf.download(tickers, period="1y", auto_adjust=False,
@@ -2803,6 +2804,7 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
             #   目的是讓「這個改動擋掉了多少」變成同一次掃描裡的可比數字。
             _legacy_types = set()
             _tap_blocked = False
+            _quiet_bars = None          # [V27.24] 最近一次達標的靜置根數
 
             # [V27.04] 二次進場：整份 df 判定一次，不進上面的逐日切片迴圈
             #   （它是型態訊號，不是「那天的狀態」）。
@@ -2849,6 +2851,26 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
                     else:
                         hits.append(("💰 達標", md, round(float(row["Close"]), 2)))
                         _hit_backs.add(back); _hit_types.add("💰 達標")
+                        # [V27.24] **靜置根數**：這次觸及之前，有幾根 K 沒
+                        #   碰過同一個門檻。閘門只回答「有沒有超過 10」，
+                        #   這裡回答「到底幾根」。
+                        #
+                        #   為什麼要它：`_TAP_FRESH_DAYS = 10` 的唯一依據是
+                        #   「10 根 ≈ 兩週」（V26.97 的註解自己承認沒量過）。
+                        #   N 寫死在程式裡，就**永遠測不出 N 該是多少**。
+                        #   變成資料之後，才能分桶看後續表現，用證據挑 N。
+                        #
+                        #   比較基準跟閘門完全一致：都拿歷史 High 去比
+                        #   **當根的** _thr_i（不是各自當時的門檻）——
+                        #   問的是「這個價位多久沒被碰過」。
+                        #   定義上 quiet < tap_fresh_days ⇔ 被閘門擋掉，
+                        #   所以這裡出現的值必定 >= tap_fresh_days。
+                        if _quiet_bars is None:   # back 由小到大，只記最近那次
+                            _pv = slice_df["High"].iloc[:-1].values
+                            _tc = np.nonzero(_pv >= _thr_i)[0]
+                            # 沒碰過 → 回傳整段長度，是**下限**不是精確值
+                            _quiet_bars = (len(_pv) - 1 - int(_tc[-1])
+                                           if len(_tc) else len(_pv))
                 # 吸籌 / 乖離抄底 / 破底翻（復用 detect_smart_money_status）
                 status = detect_smart_money_status(slice_df)
                 if status:
@@ -2874,6 +2896,8 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
 
             if stats is not None and hits:
                 stats["hit"] += 1
+                if _quiet_bars is not None:
+                    stats["tap_quiet"].append(_quiet_bars)
                 if 0 in _hit_backs:
                     stats["hit_today"] += 1
                 for _t in _hit_types:
@@ -3054,6 +3078,7 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
                 "分析師上檔%": _an_up,
                 "技術目標": round(_tech, 2) if _tech else None,
                 "技術上檔%": _tech_up,
+                "達標靜置": _quiet_bars,      # [V27.24] 無達標訊號 → None
                 "_an_state": _an_state,
                 "_an_value": _an,
                 "訊號": uniq,
@@ -4934,10 +4959,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.23" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.23" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.23" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.23")
+st.title("📡 掃描中心 V27.24" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.24" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.24" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.24")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -6657,6 +6682,7 @@ def _render_personal_scan():
                                         if _sec_den >= _SEC_RATE_MIN_N else None),
                         "產業母體數": _sec_den or None,
                         "訊號類型": r.get("訊號類型", ""),
+                        "達標靜置": r.get("達標靜置"),
                         "現價": r["現價"],
                         "前日收盤": r.get("前日收盤"),
                         "日%": r.get("日%"),
@@ -6682,6 +6708,10 @@ def _render_personal_scan():
                     "產業命中率%": _W.NumberColumn("產業命中率%", format="%.1f", width="small"),
                     "產業母體數": _W.NumberColumn("產業母體數", format="%d", width="small"),
                     "訊號類型": _W.TextColumn("訊號類型", width="large"),
+                    "達標靜置": _W.NumberColumn(
+                        "達標靜置", format="%d", width="small",
+                        help="這次達標之前，有幾根 K 沒碰過同一個技術目標。"
+                             "越大＝盤整越久才突破。沒有達標訊號的列是空的。"),
                     "現價": _W.NumberColumn("現價", format="%.2f", width="small"),
                     "前日收盤": _W.NumberColumn("前日收盤", format="%.2f", width="small"),
                     "日%": _W.NumberColumn("日%", format="%+.2f", width="small"),
@@ -6710,6 +6740,10 @@ def _render_personal_scan():
                     "（注意：跟「上檔%」的正負號相反，那兩欄正數代表還有多少上漲空間）；"
                     "**`日%` ＝ (現價 − 前日收盤) / 前日收盤**，比的是**前一交易日**；"
                     "跟下方「🔀 跟上次掃描比對」的 `折價%變化`（比**上次掃描**）不是同一件事；"
+                    "**`達標靜置` ＝ 這次達標之前，有幾根 K 沒碰過同一個技術目標**"
+                    f"（越大＝盤整越久才突破；只有帶 💰達標 的列才有值）。"
+                    f"目前閘門是 {_TAP_FRESH_DAYS} 根，所以表上的值必定 ≥ {_TAP_FRESH_DAYS}；"
+                    "上限是該檔可用的 K 線根數（約 250），等於 250 代表「一年內沒碰過」；"
                     "`報價日` ＝ `現價` 那根 K 的日期，用來確認資料夠不夠新；"
                     "`產業命中率%` ＝ 該產業命中檔數 ÷ 該產業在**掃描母體**中的檔數；"
                     "`清單來源` / `掃描時間` 每列重複是為了讓 CSV 單獨拿出去也看得懂。")
@@ -6923,7 +6957,15 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.23）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.24）",
+                                  "#",
+                                  "# [V27.24] 主表新增 `達標靜置` 欄：這次達標之前，有幾根 K 沒碰過",
+                                  "#   同一個技術目標。越大＝盤整越久才突破。",
+                                  f"#   目前閘門 {_TAP_FRESH_DAYS} 根，故值必定 >= {_TAP_FRESH_DAYS}；上限約 250。",
+                                  "#   ⚠️ 這一欄**還沒有任何回測支持**。它存在的目的是讓「該用幾根」",
+                                  "#   第一次變成可量測的問題，不是一個已經驗證過的買賣門檻。",
+                                  "#   要篩請自己分桶比對後續表現，不要直接當成「靜置越大越好」。",
+                                  "#",
                                   "# 先用 `訊號類型` 欄分流，再各自決定要不要套折價門檻。",
                                   ""]
                     for _ty, _use, _why in _SIG_DISC_RULES:
@@ -7059,6 +7101,10 @@ def _render_personal_scan():
                             f"掃描母體：{len(_uni)} 檔\n\n"
                             "檔案說明：\n"
                             "  01_主表.csv        今天掃出訊號的個股（欄位最完整）\n"
+                            f"                     　※ 新欄 `達標靜置`：這次達標前有幾根 K\n"
+                            f"                     　  沒碰過同一個技術目標。越大＝盤整越久才\n"
+                            f"                     　  突破。閘門 {_TAP_FRESH_DAYS} 根，故值必定 ≥ {_TAP_FRESH_DAYS}；\n"
+                            "                     　  上限約 250（＝一年內沒碰過）。無達標則空白。\n"
                             "  02_跨日比對.csv    跟上次掃描的差異。**「❌ 消失」只在這裡**\n"
                             "  03_依產業分組.csv  命中/母體/命中率\n"
                             "  04_折價門檻規則.txt 訊號類型 × 折價% 的適用規則\n\n"
@@ -7152,6 +7198,45 @@ def _render_personal_scan():
                                 f"⚙️ 閘門長度目前 {_fd} 根 K。**太多檔就調大、"
                                 "少到不夠看就調小** —— 常數在 `_TAP_FRESH_DAYS`。"
                                 "調整前請先看下面的類型分布，確認達標仍是大宗才有調的必要。")
+
+                            # [V27.24] 靜置根數分布。**這是校準 N 的唯一依據。**
+                            #   上面三顆數字只說「閘門擋掉多少」，不說「擋對沒有」。
+                            #   累積一段時間後，比較各桶的後續表現，才知道
+                            #   「盤整越久才突破是不是真的比較好」——
+                            #   若各桶表現沒差，N 取多少都沒差，這個閘門就該拿掉。
+                            _q = [x for x in (_st.get("tap_quiet") or [])
+                                  if x is not None]
+                            if _q:
+                                _fd_n = _fd if isinstance(_fd, int) else 10
+                                _edges = [(_fd_n, _fd_n + 10), (_fd_n + 10, _fd_n + 30),
+                                          (_fd_n + 30, 60), (60, 120), (120, 10 ** 9)]
+                                _qrows = []
+                                for _lo, _hi in _edges:
+                                    if _lo >= _hi:
+                                        continue
+                                    _c = sum(1 for x in _q if _lo <= x < _hi)
+                                    _qrows.append({
+                                        "靜置根數": (f"{_lo}+" if _hi > 10 ** 8
+                                                     else f"{_lo}-{_hi - 1}"),
+                                        "檔數": _c,
+                                        "佔達標%": round(_c / len(_q) * 100, 1)})
+                                _qs = sorted(_q)
+                                st.caption(
+                                    f"**達標靜置根數分布**（n={len(_q)}，"
+                                    f"中位數 {_qs[len(_qs) // 2]}、"
+                                    f"P75 {_qs[int(len(_qs) * 0.75)]}、"
+                                    f"最大 {_qs[-1]}）"
+                                    f"　※ 閘門 {_fd_n} 根 ⇒ 值必定 ≥ {_fd_n}；"
+                                    "上限是該檔可用 K 線根數（約 250）")
+                                st.dataframe(pd.DataFrame(_qrows),
+                                             width='stretch', hide_index=True)
+                                st.caption(
+                                    "🎯 **怎麼用**：這是為了**把 N 變成可量測的**才加的。"
+                                    "`_TAP_FRESH_DAYS = 10` 的唯一依據是「10 根 ≈ 兩週」"
+                                    "（V26.97 註解自己寫了沒量過）。累積幾週之後，"
+                                    "把主表的 `達標靜置` 欄拿去比各桶的後續報酬 —— "
+                                    "**各桶沒差就代表 N 取多少都沒差，該拿掉的是閘門本身，"
+                                    "不是把 10 換成 20。**")
                             st.markdown("---")
 
                         _d1, _d2, _d3 = st.columns(3)
