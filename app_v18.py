@@ -26,7 +26,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.33", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.34", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -5476,10 +5476,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.33" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.33" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.33" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.33")
+st.title("📡 掃描中心 V27.34" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.34" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.34" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.34")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -6077,9 +6077,12 @@ if cur_t == "__DASHBOARD__":
                              "損益(美)": st.column_config.TextColumn("損益(美)", width="small"),
                              "損益(台)": st.column_config.TextColumn("損益(台)", width="medium"),
                          })
-            _c1, _c2, _c3 = st.columns(3)  # [V26.75] 加總持有成本
+            # [V27.34] 加第 4 格「美台合計」。數字直接用上方大字同一個 _total_twd，
+            #   不另算一次（Rule 7：同一個總數兩處各算，遲早對不起來）。
+            _c1, _c2, _c4, _c3 = st.columns(4)  # [V26.75] 加總持有成本
             _c1.metric("美股總損益 (USD)", f"${_us_pl_usd:,.0f}", delta=f"≈ NT${_us_pl_usd*USD_TWD:,.0f}")
             _c2.metric("台股總損益 (TWD)", f"NT${_tw_pl_twd:,.0f}")
+            _c4.metric("美台合計損益 (TWD)", f"NT${_total_twd:,.0f}")        # [V27.34]
             _c3.metric("總持有成本 (TWD)", f"NT${_cost_twd_total:,.0f}")  # [V26.75]
             st.caption(f"※ 美股以固定匯率 {USD_TWD:.0f} 換算台幣；訊號/現價來自最近一次掃描。")
 
@@ -7601,7 +7604,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.33）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.34）",
                                   "#",
                                   "# [V27.24] 主表新增 `達標靜置` 欄：這次達標之前，有幾根 K 沒碰過",
                                   "#   同一個技術目標。越大＝盤整越久才突破。",
