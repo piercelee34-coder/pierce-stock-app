@@ -26,7 +26,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.30", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.31", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2776,9 +2776,37 @@ def scan_coverage_message(stats):
         _lines.append(f"下載錯誤樣本：`{_x}`")
     for _x in stats.get("error_samples") or []:
         _lines.append(f"例外樣本：`{_x}`")
-    _lines.append("多半是 Yahoo 暫時限流：隔 10–15 分鐘再按一次「開始掃描」。"
-                  "若連續失敗，把這段文字截圖給我。")
+    for _x in stats.get("nan_close_samples") or []:
+        _lines.append(f"缺收盤價樣本：`{_x}`")
+    # [V27.31] 提示依「哪一類最多」給，不再一律說限流 —— V27.30 實跑是
+    #   「指標算不出 1188、下載空 0」，資料明明有回來，說限流是誤導。
+    _buckets = {"no_data": stats.get("skipped_no_data", 0),
+                "nan": stats.get("skipped_nan", 0),
+                "err": stats.get("errors", 0)}
+    _top = max(_buckets, key=_buckets.get)
+    if _top == "no_data":
+        _lines.append("主要是**下載空**：多半是 Yahoo 暫時限流，隔 10–15 分鐘再掃一次。")
+    elif _top == "nan":
+        _lines.append("主要是**指標算不出**：資料有下載回來，但 K 棒內容不完整"
+                      "（不是限流）。")
+    else:
+        _lines.append("主要是**程式例外**：這是程式的問題，不是資料源。")
+    _lines.append(f"yfinance {stats.get('yf_version', '?')}｜"
+                  "若連續發生，把這段文字截圖給我。")
     return "\n\n".join(_lines)
+
+
+def scan_stale_message(stats):
+    """[V27.31] 覆蓋率正常、但有檔的最新一根缺收盤價而改用前一根時的提醒。
+    不提醒的話，掃描結果看起來是「今天的」，其實是前一個交易日的。"""
+    _n = (stats or {}).get("nan_close_last", 0)
+    if not _n:
+        return None
+    _smp = (stats.get("nan_close_samples") or [""])[0]
+    return (f"⏱ {_n} / {stats.get('listed', '?')} 檔的最新一根 K 沒有收盤價"
+            "（Yahoo 盤中常見），這些檔改用**前一根完整 K** 判定 —— "
+            "看表格的「報價日」欄就知道每檔用的是哪天。"
+            + (f"　樣本：`{_smp}`" if _smp else ""))
 
 
 def scan_personal_signals(tickers, lookback_days=3, stats=None,
@@ -2830,7 +2858,13 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
                       # [V27.30] 失敗原因樣本。只有計數的話，「1200 檔全部
                       #   下載空」看得到卻不知道為什麼（限流？代碼錯？）。
                       "batch_error": None, "dl_error_samples": [],
-                      "error_samples": []})
+                      "error_samples": [],
+                      # [V27.31] 有 K 棒但缺收盤價（Yahoo 盤中常見：最新一根
+                      #   只有部分欄位）。trimmed＝有任何缺收盤的列被剔除；
+                      #   last＝被剔的是**最新**那根（＝這檔實際用的是前一根）。
+                      "nan_close_trimmed": 0, "nan_close_last": 0,
+                      "nan_close_samples": [],
+                      "yf_version": str(getattr(yf, "__version__", "?"))})
     try:
         batch = yf.download(tickers, period="1y", auto_adjust=False,
                             group_by="ticker", progress=False, threads=True)
@@ -2856,6 +2890,27 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
                 d = batch[tk].dropna(how="all").copy()
             else:
                 d = yf.Ticker(tk).history(period="1y", auto_adjust=False)
+            # [V27.31] 剔除缺收盤價的列。上面的 dropna(how="all") 只剔「全空」
+            #   的列；Yahoo 盤中回來的最新一根常常是**部分欄位有值、Close 是
+            #   NaN** → 留下來 → SMA_20 最後一格變 NaN → 整檔被當「指標算不出」
+            #   跳過。V27.30 實跑：1200 檔裡 1188 檔這樣掉。
+            #   個股頁本來就 dropna(subset=OHLC)，這裡跟它對齊（Rule 7）。
+            #   代價：這些檔判定用的是**前一根完整 K** —— 報價日欄會照實顯示。
+            if d is not None and not d.empty and "Close" in d.columns:
+                _nc = d["Close"].isna()
+                if _nc.any():
+                    if stats is not None:
+                        stats["nan_close_trimmed"] += 1
+                        if bool(_nc.iloc[-1]):
+                            stats["nan_close_last"] += 1
+                            if len(stats["nan_close_samples"]) < 3:
+                                _lr = d.iloc[-1]
+                                stats["nan_close_samples"].append(
+                                    f"{tk} {str(d.index[-1])[:16]}: " + ", ".join(
+                                        f"{c}={_lr[c]}" for c in
+                                        ("Open", "High", "Low", "Close", "Volume")
+                                        if c in d.columns))
+                    d = d[~_nc]
             if d is None or d.empty:
                 if stats is not None:
                     stats["skipped_no_data"] += 1
@@ -5280,10 +5335,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.30" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.30" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.30" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.30")
+st.title("📡 掃描中心 V27.31" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.31" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.31" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.31")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -7046,6 +7101,9 @@ def _render_personal_scan():
             _cov_msg = scan_coverage_message(_cov_st)
             if _cov_msg:
                 st.error(_cov_msg)
+            _stale_msg = scan_stale_message(_cov_st)     # [V27.31]
+            if _stale_msg:
+                st.warning(_stale_msg)
             if not _res:
                 if not _cov_msg:
                     st.info("最近 3 個交易日，清單中沒有出現達標 / 吸籌 / 乖離抄底訊號。"
@@ -7392,7 +7450,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.30）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.31）",
                                   "#",
                                   "# [V27.24] 主表新增 `達標靜置` 欄：這次達標之前，有幾根 K 沒碰過",
                                   "#   同一個技術目標。越大＝盤整越久才突破。",
