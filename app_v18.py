@@ -26,7 +26,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.26", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.28", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -1345,27 +1345,61 @@ _TW_ROWS_TTL_OK = 21600      # 抓取完整：6 小時
 _TW_ROWS_TTL_BAD = 300       # 有來源失敗：5 分鐘
 
 
-def _tw_rows_gen():
-    """本次 rerun 要用的世代號。**整個 rerun 期間固定。**
+def _universe_gen(name, allow_bump=True):
+    """清單快取的世代號。**整個 rerun 期間固定。** name = "tw" / "us" / "sector"。
 
     固定這件事不是潔癖：fetch_tw_universe 與 _query_tw_name_bulk 在同一次
     掃描裡都會呼叫 _fetch_tw_daily_rows。中途換號 = 兩邊各抓一次，直接
     退回 V27.01 修掉的「同一個一萬多列的端點被打兩次 → 對方截斷回應」。
+
+    [V27.27] 從 _tw_rows_gen 抽出來，美股也用同一套。**每個清單各有自己的
+    世代號** —— 台股端點掛掉不該讓美股快取失效，反之亦然。
+    session_state 的 key 是 f"_{name}_rows_gen" 等，所以台股的 key
+    跟 V27.23 完全一樣（_tw_rows_gen / _tw_rows_bad_ts / _tw_gen_frozen），
+    既有的清快取按鈕與測試不受影響。
+
+    ※ 常數沿用 _TW_ROWS_TTL_BAD —— 名字是歷史包袱（V27.23 只有台股），
+      但改名會動到五支舊測試。值是通用的（殘缺結果只快取 5 分鐘）。
+
+    [V27.28] allow_bump=False：**這次 rerun 不准換號**，只回傳目前的號碼。
+    給「在畫面顯示區被呼叫」的快取用（產業對照）。那一區每次互動都會重跑
+    —— 點 expander、點 ZIP 下載都算。若允許換號，殘缺後隔 5 分鐘點個下載鈕
+    就會觸發重抓，依序等 Nasdaq（90 秒 timeout）＋ TPEX（重試 3 次），
+    **點一下可能卡好幾分鐘**。這種快取改成只在按「開始掃描」時換號。
     """
-    _k = "_tw_gen_frozen"
+    _k = f"_{name}_gen_frozen"
     if _k not in st.session_state:
-        _g = st.session_state.get("_tw_rows_gen", 0)
-        _bad = st.session_state.get("_tw_rows_bad_ts")
-        if _bad and (time.time() - _bad) >= _TW_ROWS_TTL_BAD:
+        _g = st.session_state.get(f"_{name}_rows_gen", 0)
+        _bad = st.session_state.get(f"_{name}_rows_bad_ts")
+        if allow_bump and _bad and (time.time() - _bad) >= _TW_ROWS_TTL_BAD:
             _g += 1                                   # 殘缺滿 5 分鐘 → 換鍵重抓
-            st.session_state["_tw_rows_gen"] = _g
-            st.session_state["_tw_rows_bad_ts"] = None
+            st.session_state[f"_{name}_rows_gen"] = _g
+            st.session_state[f"_{name}_rows_bad_ts"] = None
         st.session_state[_k] = _g
     return st.session_state[_k]
 
 
+def _universe_mark(name, degraded):
+    """抓完之後記錄結果：殘缺就記下**第一次**變壞的時刻，完整就清掉。
+
+    只記第一次 —— 每次都覆蓋的話 5 分鐘永遠到不了，等於沒修。
+    """
+    if degraded:
+        if not st.session_state.get(f"_{name}_rows_bad_ts"):
+            st.session_state[f"_{name}_rows_bad_ts"] = time.time()
+    else:
+        st.session_state[f"_{name}_rows_bad_ts"] = None
+
+
+def _tw_rows_gen():
+    """[V27.27] 保留原名當薄包裝 —— 呼叫端與既有測試都認這個名字。"""
+    return _universe_gen("tw")
+
+
 # 每次 rerun 重新凍結一次（模組層每次 rerun 都會跑到這裡）
 st.session_state.pop("_tw_gen_frozen", None)
+st.session_state.pop("_us_gen_frozen", None)      # [V27.27]
+st.session_state.pop("_sector_gen_frozen", None)  # [V27.28]
 
 
 @st.cache_data(ttl=_TW_ROWS_TTL_OK, show_spinner=False)
@@ -1405,12 +1439,7 @@ def _fetch_tw_daily_rows_cached(gen):
 def _fetch_tw_daily_rows():
     """對外入口：簽章沒變，呼叫端一行都不用改（Rule 3）。"""
     rows, diag = _fetch_tw_daily_rows_cached(_tw_rows_gen())
-    if diag.get("errors"):
-        # 只記第一次變殘缺的時刻 —— 每次都覆蓋的話 5 分鐘永遠到不了
-        if not st.session_state.get("_tw_rows_bad_ts"):
-            st.session_state["_tw_rows_bad_ts"] = time.time()
-    else:
-        st.session_state["_tw_rows_bad_ts"] = None
+    _universe_mark("tw", bool(diag.get("errors")))
     return rows, diag
 
 
@@ -4797,7 +4826,10 @@ with st.sidebar:
                       "產業對照、各掃描器結果。下次掃描全部重抓，會比較慢。"
                       "清單檔數不對、或畫面顯示的抓取時間太舊時用這顆。"):
         st.cache_data.clear()
-        for _k2 in ("_tw_rows_gen", "_tw_rows_bad_ts", "_tw_gen_frozen"):
+        for _k2 in ("_tw_rows_gen", "_tw_rows_bad_ts", "_tw_gen_frozen",
+                    "_us_rows_gen", "_us_rows_bad_ts", "_us_gen_frozen",    # [V27.27]
+                    "_sector_rows_gen", "_sector_rows_bad_ts",
+                    "_sector_gen_frozen"):                                    # [V27.28]
             st.session_state.pop(_k2, None)
         st.session_state["_cache_clr_msg"] = (
             "已清除全部快取。下次掃描會重新抓所有清單（比較慢是正常的）。")
@@ -5195,10 +5227,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.26" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.26" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.26" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.26")
+st.title("📡 掃描中心 V27.28" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.28" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.28" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.28")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -5999,16 +6031,19 @@ def _us_num(x):
 #   端點內，不必另外濾。
 
 
-@st.cache_data(ttl=21600, show_spinner=False)   # 6 小時，與台股清單一致
-def fetch_us_universe(min_dollar_vol: int = _US_MIN_DOLLAR_VOLUME,
-                      top_n: int = _US_TOP_N):
+@st.cache_data(ttl=_TW_ROWS_TTL_OK, show_spinner=False)   # 6 小時，與台股清單一致
+def _fetch_us_universe_cached(min_dollar_vol, top_n, gen):
     """回傳 (代碼清單, 名稱對照, 診斷字典)。格式異常一律進 errors，不吞。
 
     [V26.95] 名稱對照直接來自 screener 回應的 name 欄位 —— 這份資料本來就
     在手上，之前卻丟掉，改去逐檔打 yfinance .info 查名字，結果整批被限流，
     畫面上就變成 AA、AAOI、ABCL 這種「名稱等於代碼」。零額外請求就能解。
     """
-    out, names, diag = [], {}, {"us": None, "errors": []}
+    # [V27.27] fetched_ts 記在**快取函式內部** —— 吃到舊快取時這個值就是舊的。
+    #   ⚠️ 參數 `gen` **不可以**用底線開頭（st.cache_data 會把 _foo 排除在
+    #   快取鍵之外，世代號機制會靜默失效 —— V27.23 差點踩到）。
+    out, names = [], {}
+    diag = {"us": None, "errors": [], "fetched_ts": time.time()}
     try:
         resp = requests.get(_US_LIST_URL, timeout=90, headers={
             "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -6050,6 +6085,26 @@ def fetch_us_universe(min_dollar_vol: int = _US_MIN_DOLLAR_VOLUME,
     except Exception as e:
         diag["errors"].append(f"美股清單: {type(e).__name__}: {e}")
 
+    return out, names, diag
+
+
+def fetch_us_universe(min_dollar_vol: int = _US_MIN_DOLLAR_VOLUME,
+                      top_n: int = _US_TOP_N):
+    """[V27.27] 對外簽章不變。
+
+    原本直接掛 @st.cache_data(ttl=21600)，跟 V27.23 之前的台股清單是**同一個
+    bug**：端點回應異常 -> raise -> 被接住 -> 空清單 -> **空清單被快取 6 小時**。
+    按再多次「開始掃描」都沒用，因為根本沒再去打端點。
+
+    跟台股的差別只在可見度：台股是**部分**失敗（上櫃靜靜消失，看起來正常），
+    美股是**全部**失敗（會顯示「美股：取得失敗」）。所以美股不會給出假結論，
+    但會讓人卡 6 小時而不知道為什麼。
+
+    「殘缺」的判定：有錯誤訊息，**或**清單是空的。
+    """
+    out, names, diag = _fetch_us_universe_cached(min_dollar_vol, top_n,
+                                                 _universe_gen("us"))
+    _universe_mark("us", bool(diag.get("errors")) or not out)
     return out, names, diag
 
 
@@ -6130,12 +6185,17 @@ def tw_sector_name(raw):
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def _query_sector_map():
+def _query_sector_map_cached(gen):
     """回傳 (代碼→sector dict, diag)。美股用原代碼，台股帶 .TW / .TWO 後綴。
 
     美股與台股各自獨立，一邊失敗不影響另一邊（跟 fetch_tw_universe 同慣例）。
+
+    ⚠️ 參數 `gen` 不可以用底線開頭（st.cache_data 會把它排除在快取鍵外）。
     """
-    out, diag = {}, {"us": None, "twse": None, "tpex": None, "errors": []}
+    # [V27.28] fetched_ts 記在快取函式內部 —— 吃到舊快取時這個值就是舊的
+    out = {}
+    diag = {"us": None, "twse": None, "tpex": None, "errors": [],
+            "fetched_ts": time.time()}
 
     # ── 美股：Nasdaq screener，與 fetch_us_universe 同一個端點 ──
     #   刻意不去改 fetch_us_universe 的回傳簽章：那支是掃描主路徑，
@@ -6210,6 +6270,30 @@ def _query_sector_map():
         except Exception as e:
             diag["errors"].append(f"{label}: {type(e).__name__}: {e}")
 
+    return out, diag
+
+
+def _query_sector_map():
+    """[V27.28] 對外簽章不變。
+
+    原本直接掛 @st.cache_data(ttl=86400) —— 跟 V27.23 前的台股清單、V27.27 前
+    的美股清單是**同一個 bug**，而且更久：任一來源失敗，殘缺的對照表會被
+    快取**一整天**。例如上櫃產業端點抖一下 -> 整天所有上櫃股都顯示「未分類」，
+    產業命中率、03_依產業分組.csv 全部跟著錯。
+
+    跟另外兩個清單的差別：這支在**畫面顯示區**被呼叫（每次互動都會重跑），
+    所以用 allow_bump=False —— 平常只吃快取；換號重抓只發生在按「開始掃描」
+    那一次 rerun（掃描按鈕裡會先呼叫 _universe_gen("sector") 把號碼推進去）。
+
+    ※ 刻意**沒有**跟 fetch_us_universe 共用 Nasdaq 那次抓取。
+      V27.00 的原作者（我）當時寫了理由：「動掃描主路徑的風險遠大於一天多
+      下載一次的成本」。V27.27 之後掃描主路徑已經拆成 _cached + wrapper，
+      風險降低了，但兩邊 TTL 不同（6h vs 24h），同一次掃描真的撞在一起
+      只有「當天第一次掃」；而且目前沒有 Nasdaq 截斷的紀錄（V27.01 那次
+      是 TPEX）。沒有證據的問題不修。若哪天 Nasdaq 也開始截斷，再合併。
+    """
+    out, diag = _query_sector_map_cached(_universe_gen("sector", allow_bump=False))
+    _universe_mark("sector", bool(diag.get("errors")))
     return out, diag
 
 
@@ -6687,6 +6771,10 @@ def _render_personal_scan():
             horizontal=True, key="sig_scan_scope",
         )
         if st.button("🔍 開始掃描", width='stretch', key="sig_scan_btn"):
+            # [V27.28] 產業對照只在「開始掃描」這一次 rerun 允許換號重抓。
+            #   顯示區每次互動都會重跑，若在那裡換號，點個下載鈕就可能卡好幾分鐘。
+            #   這一行把本次 rerun 的產業世代號先凍結（必要時推進）。
+            _universe_gen("sector")
             # 組掃描清單
             if _scan_scope.startswith("📌"):
                 _wls = st.session_state.get("watchlists", {})
@@ -6793,6 +6881,22 @@ def _render_personal_scan():
                         + (f"；本次實際入選線 ${_cut:,.0f}" if _cut else ""))
                 else:
                     st.caption("美股：取得失敗")
+
+                # [V27.27] 跟台股（V27.23）一樣，印出這份清單是幾分鐘前抓的。
+                #   沒有這行，一份六小時前的失敗快取跟剛抓的看起來一模一樣。
+                _ufts = _us_diag.get("fetched_ts")
+                if _ufts:
+                    _uage = (time.time() - _ufts) / 60
+                    _uage_s = ("剛剛" if _uage < 1 else
+                               f"{_uage:.0f} 分鐘前" if _uage < 90 else
+                               f"{_uage/60:.1f} 小時前")
+                    if _us_diag.get("errors") or not _us_list:
+                        st.warning(
+                            f"⚠️ 這份美股清單抓於 **{_uage_s}**，而且當時就失敗了。"
+                            f"失敗結果只快取 {_TW_ROWS_TTL_BAD // 60} 分鐘，"
+                            "隔一下再掃一次就會自動重抓。")
+                    else:
+                        st.caption(f"📡 美股清單原始資料抓於 {_uage_s}（完整）")
                 for _e in _us_diag.get("errors", []):
                     st.error(_e)
                 if not _scan_tickers:
@@ -7211,7 +7315,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.26）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.28）",
                                   "#",
                                   "# [V27.24] 主表新增 `達標靜置` 欄：這次達標之前，有幾根 K 沒碰過",
                                   "#   同一個技術目標。越大＝盤整越久才突破。",
@@ -7264,6 +7368,22 @@ def _render_personal_scan():
                         + (f"上市 {_dt1['sectored']} 檔（欄位 `{_dt1['field']}`）" if _dt1 else "上市：失敗")
                         + "｜"
                         + (f"上櫃 {_dt2['sectored']} 檔（欄位 `{_dt2['field']}`）" if _dt2 else "上櫃：失敗"))
+                    # [V27.28] 產業對照快取一天，要看得出是什麼時候抓的
+                    _sfts = _sec_diag.get("fetched_ts")
+                    if _sfts:
+                        _sage = (time.time() - _sfts) / 60
+                        _sage_s = ("剛剛" if _sage < 1 else
+                                   f"{_sage:.0f} 分鐘前" if _sage < 90 else
+                                   f"{_sage/60:.1f} 小時前")
+                        if _sec_diag.get("errors"):
+                            st.warning(
+                                f"⚠️ 產業對照抓於 **{_sage_s}**，當時就有來源失敗"
+                                "（失敗那一市場的股票會顯示「未分類」）。"
+                                f"失敗結果只快取 {_TW_ROWS_TTL_BAD // 60} 分鐘，"
+                                "**下次按「開始掃描」時**會自動重抓"
+                                "（平常點按鈕不會，避免卡住畫面）。")
+                        else:
+                            st.caption(f"📡 產業對照抓於 {_sage_s}（快取一天）")
                     # [V27.14] 對照表沒有的台股產業代碼。這是驗證「上櫃是否
                     #   沿用上市編碼」的唯一依據 —— 若上櫃用了別套編碼，
                     #   這裡會出現一整排代碼，而不是靜靜地掛上錯誤的名稱。
