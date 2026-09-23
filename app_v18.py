@@ -26,7 +26,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.31", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.32", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2752,6 +2752,98 @@ _TAP_FRESH_DAYS = 10
 #   幾百檔命中；畫面分不出兩者（Rule 12）。
 _SCAN_MIN_COVERAGE = 0.5
 
+def _scan_gate(key, label, note):
+    """[V27.32] 按鈕觸發閘門。回 True = 這個 session 已按過「執行」，可以跑。
+
+    為什麼要它：掃描中心用 st.tabs 分三頁，但 **Streamlit 的分頁每次 rerun
+    都會把三頁全部執行**（只是沒切過去看不到）。V26.89 的註解以為「沒切到
+    那一頁就不會執行」—— 那是錯的。所以每次打開掃描中心，悄悄吸籌、反轉
+    預警、AI 目標（242 檔）、類股動能榜只要快取是空的（每次部署新版、
+    05/08/14/20 換錨點、清快取之後）就會一起去打 Yahoo，跟你按的掃描搶額度。
+    按過一次後這個 session 內就一直開著（換市場／範圍會直接跑，不用再按）。"""
+    if st.session_state.get(key):
+        return True
+    if st.button(label, key=f"{key}_btn"):
+        st.session_state[key] = True
+        return True
+    st.info(note)
+    return False
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def fetch_us_live_bar(ticker):
+    """[V27.32] 用 Yahoo 30 分 K 合成「最近一個交易日」的日 K。
+
+    起因：Yahoo 網站顯示 SNDK 9/22 收盤 1887.04，但 yfinance 日 K 只到 9/21
+    （1766.64）。網站的報價框跟 yfinance 讀的日 K 是**不同服務**，日 K 會
+    落後。30 分 K 是分時資料，通常比較即時 —— **這點還沒在 Streamlit Cloud
+    上證實**，所以回傳值把來源時間帶出來，畫面照實顯示，不假設它一定比較新。
+
+    回傳 dict：date / open / high / low / close / volume / bars / asof，
+    另附 quote_price（history_metadata 的 regularMarketPrice，有的話）。
+    失敗回 {"error": 原因}。"""
+    try:
+        _t = yf.Ticker(ticker)
+        _h = _t.history(period="5d", interval="30m", auto_adjust=False)
+        _md = getattr(_t, "history_metadata", None) or {}
+    except Exception as _e:
+        return {"error": f"{type(_e).__name__}: {str(_e)[:120]}"}
+    if _h is None or _h.empty or "Close" not in _h.columns:
+        return {"error": "30 分 K 沒有資料"}
+    _h = _h.dropna(subset=["Close"])
+    if _h.empty:
+        return {"error": "30 分 K 收盤全空"}
+    _dates = pd.Index([_i.date() for _i in _h.index])
+    _last = _dates[-1]
+    _day = _h[_dates == _last]
+    _out = {"date": _last,
+            "open": float(_day["Open"].iloc[0]),
+            "high": float(_day["High"].max()),
+            "low": float(_day["Low"].min()),
+            "close": float(_day["Close"].iloc[-1]),
+            "volume": float(_day["Volume"].sum()) if "Volume" in _day.columns else 0.0,
+            "bars": int(len(_day)),
+            "asof": str(_h.index[-1])[:16]}
+    try:
+        if _md.get("regularMarketPrice"):
+            _out["quote_price"] = float(_md["regularMarketPrice"])
+    except Exception:
+        pass
+    return _out
+
+
+def bar_date_badge_html(bar_day, exp_day, live):
+    """[V27.32] 個股價格卡上的 K 棒日期小字。落後最近交易日時變紅並講清楚。"""
+    _lines = []
+    if live and live.get("patched"):
+        _lines.append(f'<span style="color:#22c55e;">⚡ {bar_day} 這根由 Yahoo 30 分 K 合成'
+                      f'（日 K 還沒更新；分時到 {live.get("asof", "")}）</span>')
+    elif live and live.get("error"):
+        _lines.append(f'<span style="color:#f97316;">30 分 K 補值失敗：{live["error"]}</span>')
+    if exp_day and bar_day < exp_day:
+        _lines.append(f'<span style="color:#ef4444; font-weight:bold;">⚠️ K 棒日期 {bar_day}，'
+                      f'落後最近交易日 {exp_day} —— 現價與漲跌% 是舊的</span>')
+    else:
+        _lines.append(f'<span style="color:#888;">📅 K 棒日期 {bar_day}</span>')
+    return ('<div style="font-size:11px; margin-bottom:6px; line-height:1.5;">'
+            + "<br>".join(_lines) + "</div>")
+
+
+def merge_live_bar(df, live):
+    """[V27.32] live 的日期比 df 最後一根新 → 補一根（回傳新 df, True）；
+    否則原封不動（df, False）。只補**缺的那天**，不改任何既有 K 棒。"""
+    if not live or live.get("error") or not live.get("date") or df is None or df.empty:
+        return df, False
+    if live["date"] <= df.index[-1].date():
+        return df, False
+    _new = {"Open": live["open"], "High": max(live["high"], live["close"]),
+            "Low": min(live["low"], live["close"]), "Close": live["close"],
+            "Volume": live.get("volume", 0.0)}
+    df = df.copy()
+    df.loc[pd.Timestamp(live["date"])] = pd.Series(_new)
+    return df.sort_index(), True
+
+
 def scan_coverage(stats):
     """[V27.30] 實際完成判定的比例。沒有 stats（舊呼叫端）回 1.0 —— 不知道就不擋。"""
     if not stats or not stats.get("listed"):
@@ -5335,10 +5427,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.31" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.31" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.31" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.31")
+st.title("📡 掃描中心 V27.32" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.32" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.32" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.32")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -7450,7 +7542,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.31）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.32）",
                                   "#",
                                   "# [V27.24] 主表新增 `達標靜置` 欄：這次達標之前，有幾根 K 沒碰過",
                                   "#   同一個技術目標。越大＝盤整越久才突破。",
@@ -7835,6 +7927,7 @@ def _render_personal_scan():
         accum_col1.header("🤫 悄悄吸籌探測器")
         if accum_col2.button("🔄 強制刷新", key="accum_force_refresh",
                               help="清除快取重新掃描（約 1-2 分鐘）"):
+            st.session_state["_gate_accum"] = True    # [V27.32] 按刷新＝要跑
             st.cache_data.clear()
             import shutil as _sh
             try:
@@ -7865,11 +7958,15 @@ def _render_personal_scan():
         def _cached_accum(market, min_signals, anchor):
             return _accum.get_accumulation_signals(market=market, min_signals=min_signals)
 
-        try:
-            accum_result = _cached_accum(market_key, min_sig, get_cache_anchor())
-        except Exception as e:
-            st.error(f"掃描失敗：{e}")
-            accum_result = {"accumulation": [], "edge": []}
+        accum_result = None                           # [V27.32] 按了才跑
+        if _scan_gate("_gate_accum", "▶ 執行悄悄吸籌掃描",
+                      "尚未執行。按上方「▶ 執行悄悄吸籌掃描」才會開始抓資料"
+                      "（V27.32 起不再一打開頁面就自動跑）。"):
+            try:
+                accum_result = _cached_accum(market_key, min_sig, get_cache_anchor())
+            except Exception as e:
+                st.error(f"掃描失敗：{e}")
+                accum_result = {"accumulation": [], "edge": []}
 
         # 拆兩塊：吸籌 / 邊緣
         accum_list = accum_result.get("accumulation", []) if isinstance(accum_result, dict) else []
@@ -7969,7 +8066,7 @@ def _render_personal_scan():
 
             ⚠️ 注意：吸籌訊號不保證一定漲，只是說明「特徵相符」。建議搭配個股戰情室的技術面再做決策。
             """)
-        else:
+        elif accum_result is not None:                # [V27.32] 沒跑過不說「沒有」
             st.info(f"目前沒有符合 {accum_min} 的股票（市場可能太熱或太冷，導致吸籌訊號不明顯）")
 
 
@@ -8135,6 +8232,7 @@ def _render_personal_scan():
         rev_col1.header("💡 反轉預警掃描器（S&P 100）")
         if rev_col2.button("🔄 強制刷新", key="rev_force_refresh",
                             help="清除快取重新掃描（約 2-3 分鐘）"):
+            st.session_state["_gate_rev"] = True      # [V27.32] 按刷新＝要跑
             st.cache_data.clear()
 
         st.caption(
@@ -8143,6 +8241,12 @@ def _render_personal_scan():
         "**回測勝率 81.8%（11 個樣本，需累積 25+ 樣本才正式採用）**。"
         "目前處於「**實戰觀察期**」— 訊號自動追蹤，5/10/20 天後自動評估。"
         )
+
+        # [V27.32] 按了才跑。這段是 _render_personal_scan 的最後一段，直接 return。
+        if not _scan_gate("_gate_rev", "▶ 執行反轉預警掃描",
+                          "尚未執行。按上方「▶ 執行反轉預警掃描」才會開始抓資料"
+                          "（V27.32 起不再一打開頁面就自動跑）。"):
+            return
 
         @st.cache_data(ttl=21600, show_spinner="🔍 正在掃描 S&P 100 反轉預警訊號（首次約 2-3 分鐘）...")
         def _cached_rev_scan(anchor):
@@ -8267,6 +8371,7 @@ def _render_ai_target_scan():
             #   等於把全站快取（台股清單、美股清單、產業對照…）一起清掉。
             #   改成只插旗標；定義完成後、呼叫之前才真的清。
             st.session_state["_tgt_force_clear"] = True
+            st.session_state["_gate_tgt"] = True      # [V27.32] 按刷新＝要跑
 
         _tgt_anchor = get_cache_anchor()
 
@@ -8588,13 +8693,17 @@ def _render_ai_target_scan():
         if st.session_state.pop("_tgt_force_clear", False):   # [V27.29] 見上方「強制刷新」
             _cached_target_scan.clear()
 
-        try:
-            target_scan = _cached_target_scan(_tgt_anchor, universe_key, tuple(selected_tickers))
-        except Exception as e:
-            st.error(f"AI 目標掃描失敗：{e}")
-            target_scan = {"results": [], "scanned": 0, "ok": 0}
+        target_scan = None                            # [V27.32] 按了才跑
+        if _scan_gate("_gate_tgt", "▶ 執行 AI 目標掃描",
+                      "尚未執行。按上方「▶ 執行 AI 目標掃描」才會開始抓資料"
+                      "（V27.32 起不再一打開頁面就自動跑）。"):
+            try:
+                target_scan = _cached_target_scan(_tgt_anchor, universe_key, tuple(selected_tickers))
+            except Exception as e:
+                st.error(f"AI 目標掃描失敗：{e}")
+                target_scan = {"results": [], "scanned": 0, "ok": 0}
 
-        res_list = target_scan.get("results", [])
+        res_list = (target_scan or {}).get("results", [])
 
         # ── 統計摘要 ──
         if res_list:
@@ -8658,7 +8767,7 @@ def _render_ai_target_scan():
             st.dataframe(rows, hide_index=True, width='stretch')
         elif res_list:
             st.info("⏳ 沒有符合篩選條件的股票。試試取消「僅顯示強勢股」勾選。")
-        else:
+        elif target_scan is not None:                 # [V27.32] 沒跑過不顯示這句
             st.info("⏳ 掃描中或失敗。請等待或按「強制刷新」。")
 
         # ── 說明 ──
@@ -8717,13 +8826,18 @@ def _render_ai_target_scan():
             return _rocket.get_top_themes(market=market, top_n=5, period=period)
 
         if rkt_force:
+            st.session_state["_gate_rocket"] = True   # [V27.32] 按刷新＝要跑
             st.cache_data.clear()
 
-        try:
-            rocket_data = _cached_rocket(market_key, period_key, get_cache_anchor())
-        except Exception as e:
-            st.error(f"掃描失敗：{e}")
-            rocket_data = []
+        rocket_data = None                            # [V27.32] 按了才跑
+        if _scan_gate("_gate_rocket", "▶ 執行類股動能榜",
+                      "尚未執行。按上方「▶ 執行類股動能榜」才會開始抓資料"
+                      "（V27.32 起不再一打開頁面就自動跑）。"):
+            try:
+                rocket_data = _cached_rocket(market_key, period_key, get_cache_anchor())
+            except Exception as e:
+                st.error(f"掃描失敗：{e}")
+                rocket_data = []
 
         if rocket_data:
             period_label = {"1w": "本週", "1m": "本月", "3m": "本季"}.get(period_key, "")
@@ -8772,7 +8886,7 @@ def _render_ai_target_scan():
             if rocket_data:
                 upd = rocket_data[0].get("updated_at", "")
                 st.caption(f"⏱ 資料時間：{upd}（快取 4 小時）｜ 點「強制刷新」可立即更新")
-        else:
+        elif rocket_data is not None:                 # [V27.32]
             st.info("正在準備資料，請稍候或點「強制刷新」")
 
 
@@ -8985,6 +9099,24 @@ if _is_tw_main and "日" in time_opt:   # 只在日線模式做（週線/當沖�
             df = df.sort_index()
     else:
         _rt_status = False   # 抓失敗 → 維持 yfinance（延遲）資料，下方標示
+
+# [V27.32] 美股：日 K 落後時用 30 分 K 合成最近一天補上（只補缺的那天）。
+#   跟上面台股的「情況 B」同一個做法，只是來源換成 Yahoo 分時。
+_us_live = None      # None=不適用 / dict=有抓（含 error 或 patched）
+if (not _is_tw_main) and "日" in time_opt:
+    _us_live = dict(fetch_us_live_bar(cur_t) or {"error": "無回應"})
+    df, _us_live["patched"] = merge_live_bar(df, _us_live)
+
+# [V27.32] K 棒日期 vs 最近交易日。之前落後一天畫面完全看不出來 ——
+#   現價、漲跌%、所有指標都是前一天的，卻長得跟今天一樣（Rule 12）。
+_bar_day = df.index[-1].strftime("%Y-%m-%d")
+_exp_day = None
+if "日" in time_opt:
+    try:
+        _exp_day = get_expected_trade_dates(get_cache_anchor()).get(
+            "TW" if _is_tw_main else "US")
+    except Exception:
+        _exp_day = None
 
 df = calculate_indicators(df)
 
@@ -9302,6 +9434,7 @@ with c1:
     elif _rt_status is False:
         _src_html = ('<div style="font-size:11px; color:#f97316; margin-bottom:6px;">'
                      '⏱ 延遲約15分（Yahoo）</div>')
+    _src_html += bar_date_badge_html(_bar_day, _exp_day, _us_live)   # [V27.32]
 
     c1_html = (
         f'<div class="ai-box" style="border: 1px solid #4a9eff; background-color: #16202b; padding: 15px; display: flex; flex-direction: column; justify-content: center;">'
