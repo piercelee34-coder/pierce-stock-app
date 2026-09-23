@@ -26,7 +26,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.25", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.26", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3004,6 +3004,22 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
             _tech = float(threshold) if threshold else None
             _tech_up = round((_tech / price - 1) * 100, 1) if (_tech and price) else None
 
+            # [V27.26] 最近的上下關卡。跟個股頁的階梯**共用同一支**
+            #   build_level_ladder —— 兩個地方各算一套，遲早對不起來。
+            #   成本實測每檔約 12ms（762 檔 ~9.5 秒），相對整次掃描
+            #   5~10 分鐘可忽略，所以不做精簡版。
+            #   一檔十幾個關卡塞不進一列，所以只帶「最近的上下各一個」
+            #   的距離%；完整階梯在個股頁看。
+            _up_pct = _dn_pct = None
+            try:
+                _lg, _dg = nearest_levels(build_level_ladder(d, price), price)
+                if _lg:
+                    _up_pct = round((_lg["價位"] / price - 1) * 100, 1)
+                if _dg:
+                    _dn_pct = round((_dg["價位"] / price - 1) * 100, 1)
+            except Exception:
+                pass
+
             # [V27.09] 相對前高折價%。d 已經在手上（批次抓的 period="1y"），
             #   零額外請求 —— 這是第五次遇到「資料早就抓回來了但被丟掉」的
             #   同一類問題（V26.95 美股名稱／V26.98 台股中文名／V27.00 產業／
@@ -3085,6 +3101,8 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
                 "技術目標": round(_tech, 2) if _tech else None,
                 "技術上檔%": _tech_up,
                 "達標靜置": _quiet_bars,      # [V27.24] 無達標訊號 → None
+                "上方關卡%": _up_pct,          # [V27.26] 正數
+                "下方關卡%": _dn_pct,          # [V27.26] 負數
                 "_an_state": _an_state,
                 "_an_value": _an,
                 "訊號": uniq,
@@ -3599,6 +3617,218 @@ def price_level_strength(df, level_price, band_pct=0.02):
             return "弱"
     except Exception:
         return ""
+
+
+# ── [V27.26] 關卡階梯 ──────────────────────────────────────────
+#   起因：使用者看 YouTube 上的交易員對 SNDK 點出「1230／1400／
+#   1800-1830／2300」，問我們能不能算出同樣的東西。
+#
+#   查下來發現**零件幾乎都有了**，只是散在各處而且只各自用在一個地方：
+#     find_structural_box_bottom() -> 箱底（只畫一條 hline）
+#     calculate_volume_profile()   -> 量價密集（只畫在副圖）
+#     local_maxes 的 rolling(9)    -> 前高壓力／前高支撐（只畫兩條 hline）
+#     price_level_strength()       -> 籌碼強度（只給那三條線貼標籤）
+#     get_technical_target_threshold() / 60日高 / 均線
+#   這是第 9 次「資料已經在手上但沒用」。
+#
+#   真正缺的不是計算能力，是**呈現方式**：app 給一個目標價，
+#   交易員給一串階梯。缺的三塊是量測目標、整數關、以及**共振合併**。
+#
+#   共振才是重點：交易員說的是「1800-1830」而不是「1815」——
+#   那是一個**帶**，因為有兩個以上的理由指向同一處。單一來源的線
+#   隨手都能畫，兩個以上的重疊才值得看。
+#
+#   ⚠️ 這整組是**描述現在的位置**，不是預測。沒有任何一條經過回測，
+#   也沒有證據說價格碰到關卡會停。原型階段就把這句話寫在輸出裡了，
+#   搬進來也要留著（V27.10 犯過「把推導講成量測」的錯）。
+_LADDER_MERGE_PCT = 0.015     # 相距 1.5% 以內視為同一個帶
+_LADDER_BAND_PCT = 0.015      # 判斷「觸及」時的半寬
+
+
+def _ladder_round_levels(price, lo, hi):
+    """整數（心理）關卡。級距從 {1,2,5}x10^k 裡挑**最小但不會太密**的那個。
+
+    原本寫成「price/mag < 2 就用 mag/2，否則用 mag」，結果 1,741 得到級距
+    500（1000/1500/2000，太粗）、25 得到級距 10（20/30，同樣太粗）。
+    改成依「這個視窗裡會產生幾格」來挑：格數 <= _MAX 的最小級距。
+    1,741 -> 級距 200（…1400/1600/1800…，剛好對上交易員常講的那種數字）
+    25    -> 級距 5（15/20/25/30/35/40）
+    """
+    _MAX = 10
+    try:
+        price, lo, hi = float(price), float(lo), float(hi)
+        if not all(np.isfinite(x) for x in (price, lo, hi)) or hi <= lo:
+            return []
+        k0 = int(np.floor(np.log10(max(price, 1e-9))))
+        cands = sorted(m * (10 ** k)
+                       for k in range(k0 - 3, k0 + 2) for m in (1, 2, 5))
+        for step in cands:
+            if step <= 0:
+                continue
+            n = int(np.floor(hi / step)) - int(np.ceil(lo / step)) + 1
+            if 0 < n <= _MAX:
+                out, x = [], np.ceil(lo / step) * step
+                while x <= hi + 1e-9:
+                    out.append(round(float(x), 4))
+                    x += step
+                return out
+        return []
+    except Exception:
+        return []
+
+
+def _ladder_last_touch(d, lo, hi):
+    """最近一次觸及這個帶是幾根 K 之前（0 = 今天還在裡面）。
+
+    判定用「K 棒的高低區間與 [lo, hi] 有交集」—— 跟 price_level_strength
+    同一條規則。兩個欄位講同一件事卻用兩套判定，遲早會對不起來。
+    """
+    try:
+        m = (d["Low"] <= hi) & (d["High"] >= lo)
+        idx = np.nonzero(m.values)[0]
+        return (len(d) - 1 - int(idx[-1])) if len(idx) else None
+    except Exception:
+        return None
+
+
+def _ladder_merge(rows):
+    """把相近的關卡併成一個帶。
+
+    ⚠️ 判斷的是**整條帶的總寬度**，不是「跟上一個的距離」。
+    只比相鄰距離會鏈式擴張：A~B 1.5%、B~C 1.5% -> A~C 變成 3%，
+    那已經不是同一個價位了。原型實跑就是這樣發現的。
+    """
+    rows = sorted(rows, key=lambda r: r["價位"])
+    out = []
+    for r in rows:
+        if out and (max(r["價位"], out[-1]["_hi"])
+                    / max(min(r["價位"], out[-1]["_lo"]), 1e-9) - 1) <= _LADDER_MERGE_PCT:
+            g = out[-1]
+            g["來源"].append(r["來源"])
+            g["_lo"] = min(g["_lo"], r["價位"])
+            g["_hi"] = max(g["_hi"], r["價位"])
+            g["價位"] = (g["_lo"] + g["_hi"]) / 2
+        else:
+            out.append({"價位": r["價位"], "來源": [r["來源"]],
+                        "_lo": r["價位"], "_hi": r["價位"]})
+    return out
+
+
+def build_level_ladder(d, price):
+    """回傳由低到高的關卡帶清單。每一筆：
+        價位 / _lo / _hi / 來源(list) / 強度 / 觸及
+
+    成本：實測每檔約 12ms，762 檔約 9.5 秒 —— 相對於一次全市場掃描
+    5~10 分鐘可以忽略，所以**面板與掃描表共用這一份**，不另做精簡版
+    （Rule 7：同一件事只有一個定義）。
+    """
+    # ⚠️ 這支**刻意不包 try/except**。原本包了一層 `except: return []`，
+    #   結果測試少給兩個模組層常數 -> NameError -> 被吞掉 -> 回空清單，
+    #   畫面上什麼都不顯示、也不說為什麼。那是 Rule 12 的違規：
+    #   「沒有關卡」和「算關卡時爆炸」在畫面上長得一模一樣。
+    #   呼叫端各自決定：個股頁印出錯誤訊息，掃描器讓該檔留空。
+    px = float(price)
+    if d is None or len(d) < 120 or not np.isfinite(px) or px <= 0:
+        return []
+    rows = []
+
+    def add(v, src):
+        try:
+            v = float(v)
+        except Exception:
+            return
+        if np.isfinite(v) and v > 0:
+            rows.append({"價位": v, "來源": src})
+
+    p = d.tail(120)
+    _ah = p["High"].max()
+    _lx = p["High"][(p["High"] == p["High"].rolling(9, center=True).max())].dropna()
+    for v in sorted(set(_lx[_lx < _ah].round(4))):
+        add(v, "前高")
+    _ln = p["Low"][(p["Low"] == p["Low"].rolling(9, center=True).min())].dropna()
+    for v in sorted(set(_ln.round(4))):
+        add(v, "前低")
+
+    _iron, _bs, _be, _brk = find_structural_box_bottom(d, px)
+    add(_iron, "箱底(跌破中)" if _brk else "箱底")
+
+    _vp = calculate_volume_profile(d.tail(60), bins=40)
+    if not _vp.empty and float(_vp["Volume"].sum()) > 0:
+        for i, (_, r) in enumerate(_vp.nlargest(3, "Volume").iterrows()):
+            add(r["Price"], "量價密集" if i == 0 else "量價次密")
+
+    try:
+        add(float(get_technical_target_threshold_series(d).iloc[-1]), "技術目標")
+    except Exception:
+        pass
+    add(float(d["High"].tail(60).max()), "60日高")
+    add(float(d["High"].tail(252).max()), "一年高")
+    add(float(d["Low"].tail(252).min()), "一年低")
+    for _n in (20, 60, 200):
+        _c = f"SMA_{_n}"
+        if _c in d.columns and not pd.isna(d[_c].iloc[-1]):
+            add(float(d[_c].iloc[-1]), f"MA{_n}")
+
+    # 量測目標：區間高度往上／往下投射。這是 app 原本沒有的三塊之一。
+    _bh = float(p["High"].max())
+    _bl = float(_iron) if np.isfinite(_iron) else float(p["Low"].min())
+    if _bh > _bl > 0:
+        add(_bh + (_bh - _bl), "量測目標(上)")
+        add(_bl - (_bh - _bl), "量測目標(下)")
+
+    for v in _ladder_round_levels(px, px * 0.6, px * 1.6):
+        add(v, "整數關")
+
+    out = _ladder_merge([r for r in rows
+                         if px * 0.55 <= r["價位"] <= px * 1.7])
+    for g in out:
+        g["強度"] = price_level_strength(d, g["價位"])
+        g["觸及"] = _ladder_last_touch(d, g["_lo"] * (1 - _LADDER_BAND_PCT),
+                                       g["_hi"] * (1 + _LADDER_BAND_PCT))
+    # 濾掉純噪音：只有一個來源、強度弱、而且歷史上從沒碰過。
+    # 多半是遠方的整數關，只會把表撐長又不帶資訊。
+    return [g for g in out
+            if not (len(set(g["來源"])) == 1 and g["強度"] == "弱"
+                    and g["觸及"] is None)]
+
+
+def nearest_levels(ladder, price):
+    """回傳 (上方最近的帶, 下方最近的帶)，沒有就是 None。"""
+    try:
+        px = float(price)
+        up = min([g for g in ladder if g["_lo"] > px],
+                 key=lambda g: g["_lo"], default=None)
+        dn = max([g for g in ladder if g["_hi"] < px],
+                 key=lambda g: g["_hi"], default=None)
+        return up, dn
+    except Exception:
+        return None, None
+
+
+def volatility_block(d):
+    """[V27.26] 隔日波動幅度。**只講幅度，不碰方向。**
+
+    為什麼沒有方向：隔日方向我們量過三次，三次都沒有邊際 ——
+      V27.19 訊號驗證：命中 50.17% vs 無腦基準 50.41%，超額 -0.23pp
+      快照歷史（86 天 x 70 檔）：方向相關 +0.047、幅度 MAE 還輸給「一律猜 0%」
+      2026-09-22 達標回測（17,600 筆）：中位數超額扣成本約等於 0
+    而波動群聚（今天波動大、明天多半也大）是真實且文獻紮實的現象，
+    所以「會動多少」可以講，「往哪動」不行。
+    """
+    try:
+        r = (d["Close"].pct_change().abs() * 100).dropna().tail(252)
+        tr = pd.concat([d["High"] - d["Low"],
+                        (d["High"] - d["Close"].shift()).abs(),
+                        (d["Low"] - d["Close"].shift()).abs()], axis=1).max(axis=1)
+        atr = (tr.rolling(14).mean() / d["Close"] * 100).dropna().tail(252)
+        if len(r) < 60 or len(atr) < 60:
+            return None
+        cur = float(atr.iloc[-1])
+        return {"med": float(r.median()), "p80": float(r.quantile(.80)),
+                "p95": float(r.quantile(.95)), "atr": cur,
+                "pct": float((atr < cur).mean() * 100), "n": int(len(r))}
+    except Exception:
+        return None
 
 
 def predict_target_and_rating(df, mc_result=None):
@@ -4965,10 +5195,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.25" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.25" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.25" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.25")
+st.title("📡 掃描中心 V27.26" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.26" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.26" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.26")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -6698,6 +6928,12 @@ def _render_personal_scan():
                         "分析師上檔%": r.get("分析師上檔%"),
                         "技術目標": r.get("技術目標"),
                         "技術上檔%": r.get("技術上檔%"),
+                        # [V27.26] 放在技術目標旁邊，跟它同一類（都是相對現價
+                        #   的價位）。原本插在「現價」與「前日收盤」中間，被
+                        #   test_v2713 D3 擋下 —— 那條釘著「現價→前日收盤→日%
+                        #   要相鄰，看得出因果」，是對的，該搬的是新欄位。
+                        "上方關卡%": r.get("上方關卡%"),
+                        "下方關卡%": r.get("下方關卡%"),
                         "報價日": r.get("報價日"),
                         "清單來源": _scope_done,
                         "掃描時間": _scan_ts,
@@ -6719,6 +6955,13 @@ def _render_personal_scan():
                         help="這次達標之前，有幾根 K 沒碰過同一個技術目標。"
                              "越大＝盤整越久才突破。沒有達標訊號的列是空的。"),
                     "現價": _W.NumberColumn("現價", format="%.2f", width="small"),
+                    "上方關卡%": _W.NumberColumn(
+                        "上方關卡%", format="%+.1f", width="small",
+                        help="離上方最近一個關卡帶還有多少%。關卡＝前高／箱頂／"
+                             "量價密集／技術目標／均線／整數關等的合流處。"),
+                    "下方關卡%": _W.NumberColumn(
+                        "下方關卡%", format="%+.1f", width="small",
+                        help="離下方最近一個關卡帶有多少%（負數）。完整階梯在個股頁。"),
                     "前日收盤": _W.NumberColumn("前日收盤", format="%.2f", width="small"),
                     "日%": _W.NumberColumn("日%", format="%+.2f", width="small"),
                     "一年高": _W.NumberColumn("一年高", format="%.2f", width="small"),
@@ -6750,6 +6993,11 @@ def _render_personal_scan():
                     f"（越大＝盤整越久才突破；只有帶 💰達標 的列才有值）。"
                     f"目前閘門是 {_TAP_FRESH_DAYS} 根，所以表上的值必定 ≥ {_TAP_FRESH_DAYS}；"
                     "上限是該檔可用的 K 線根數（約 250），等於 250 代表「一年內沒碰過」；"
+                    "**`上方關卡%` / `下方關卡%` ＝ 離最近一個關卡帶還有多少%**"
+                    "（關卡＝前高／前低／箱底／量價密集／技術目標／60日高／一年高低／"
+                    "均線／量測目標／整數關的**合流處**，相距 1.5% 內併成一帶）。"
+                    "完整階梯含來源與強度在**個股頁**看。"
+                    "⚠️ 關卡沒有經過回測，是描述位置、不是買賣訊號；"
                     "`報價日` ＝ `現價` 那根 K 的日期，用來確認資料夠不夠新；"
                     "`產業命中率%` ＝ 該產業命中檔數 ÷ 該產業在**掃描母體**中的檔數；"
                     "`清單來源` / `掃描時間` 每列重複是為了讓 CSV 單獨拿出去也看得懂。")
@@ -6963,7 +7211,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.25）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.26）",
                                   "#",
                                   "# [V27.24] 主表新增 `達標靜置` 欄：這次達標之前，有幾根 K 沒碰過",
                                   "#   同一個技術目標。越大＝盤整越久才突破。",
@@ -7107,6 +7355,10 @@ def _render_personal_scan():
                             f"掃描母體：{len(_uni)} 檔\n\n"
                             "檔案說明：\n"
                             "  01_主表.csv        今天掃出訊號的個股（欄位最完整）\n"
+                            "                     　※ 新欄 `上方關卡%` / `下方關卡%`：離最近\n"
+                            "                     　  一個關卡帶的距離%。關卡＝前高／箱底／量價\n"
+                            "                     　  密集／技術目標／均線／整數關等的合流處。\n"
+                            "                     　  **未經回測**，描述位置而非買賣訊號。\n"
                             f"                     　※ 新欄 `達標靜置`：這次達標前有幾根 K\n"
                             f"                     　  沒碰過同一個技術目標。越大＝盤整越久才\n"
                             f"                     　  突破。閘門 {_TAP_FRESH_DAYS} 根，故值必定 ≥ {_TAP_FRESH_DAYS}；\n"
@@ -8597,6 +8849,82 @@ st.markdown(
     f'<div class="tactical-body">💡 <b>行動指南：</b> {tac_body}</div></div>',
     unsafe_allow_html=True
 )
+
+# ── [V27.26] 關卡階梯 + 隔日波動 ──────────────────────────────
+#   放在戰術建議下面、走勢圖上面 —— 那是「一眼看完」的位置。
+#   ⚠️ 這一段**刻意沒有方向預測**。理由寫在畫面上，不是寫在註解裡就好：
+#   不然下次（包括我自己）會以為是忘了做，又補一個「明天 89% 會跌」回來。
+try:
+    _lad = build_level_ladder(df, close_v)
+    _vb = volatility_block(df)
+    if _lad:
+        _up_g, _dn_g = nearest_levels(_lad, close_v)
+
+        def _lad_lab(g):
+            return (f"{g['_lo']:,.2f}" if g["_hi"] - g["_lo"] < g["_lo"] * 0.002
+                    else f"{g['_lo']:,.2f}-{g['_hi']:,.2f}")
+
+        def _lad_line(g):
+            _n = len(set(g["來源"]))
+            _t = g.get("觸及")
+            return (f"{_lad_lab(g):>21} {(g['價位']/close_v-1)*100:+7.1f}%  "
+                    f"{(g['強度'] or '—'):<3} {(f'x{_n}' if _n >= 2 else ''):>4} "
+                    f"{('今天' if _t == 0 else f'{_t}根前' if _t is not None else '—'):>6}  "
+                    + "、".join(dict.fromkeys(g["來源"])))
+
+        _c1, _c2, _c3 = st.columns(3)
+        _c1.metric("⬆️ 上方最近關卡",
+                   f"{(_up_g['價位']/close_v-1)*100:+.1f}%" if _up_g else "無",
+                   (f"{_up_g['價位']:,.2f}　{_up_g['強度']}" if _up_g else "區間內沒有"),
+                   delta_color="off")
+        _c2.metric("⬇️ 下方最近關卡",
+                   f"{(_dn_g['價位']/close_v-1)*100:+.1f}%" if _dn_g else "無",
+                   (f"{_dn_g['價位']:,.2f}　{_dn_g['強度']}" if _dn_g else "區間內沒有"),
+                   delta_color="off")
+        _c3.metric("📏 隔日波動幅度",
+                   f"±{_vb['p80']:.1f}%" if _vb else "—",
+                   (f"P80／ATR 第 {_vb['pct']:.0f} 百分位" if _vb else "資料不足"),
+                   delta_color="off")
+
+        _above = sorted([g for g in _lad if g["_lo"] > close_v],
+                        key=lambda g: g["_lo"])
+        _below = sorted([g for g in _lad if g["_hi"] < close_v],
+                        key=lambda g: -g["_hi"])
+
+        def _render(n_side):
+            _ls = [_lad_line(g) for g in reversed(_above[:n_side])]
+            _ls.append("━" * 8 + f" 現價 {close_v:,.2f} " + "━" * 34)
+            _ls += [_lad_line(g) for g in _below[:n_side]]
+            return "\n".join(_ls)
+
+        # 預設只給上下各 3 格 —— 個股頁已經很長，全開會變成要捲的第二張表
+        st.code(_render(3), language=None)
+        _hid = max(0, len(_above) - 3) + max(0, len(_below) - 3)
+        if _hid:
+            with st.expander(f"📐 展開全部 {len(_lad)} 格關卡（還有 {_hid} 格）",
+                             expanded=False):
+                st.code(_render(99), language=None)
+        st.caption(
+            "關卡來源：前高／前低（120 根內的轉折）、箱底、量價密集（60 根）、"
+            "技術目標、60 日高、一年高低、均線、量測目標（區間高度投射）、整數關。"
+            "　**`xN` = 有 N 個不同方法指到同一帶**，N 越大越值得看 —— "
+            "單一來源的線隨手都能畫，重疊的才有意義。"
+            "　強度＝該價位 ±2% 的歷史成交量占比。"
+            "　觸及＝最近一次碰到是幾根 K 之前。")
+        if _vb:
+            st.caption(
+                f"📏 **隔日波動**：過去 {_vb['n']} 根 |漲跌| 中位 {_vb['med']:.1f}%、"
+                f"P80 {_vb['p80']:.1f}%、P95 {_vb['p95']:.1f}%；"
+                f"目前 ATR(14) {_vb['atr']:.2f}% 位於近一年第 {_vb['pct']:.0f} 百分位"
+                f"（{'偏高' if _vb['pct'] >= 70 else '偏低' if _vb['pct'] <= 30 else '中性'}）。")
+        st.caption(
+            "⚠️ **這裡沒有「明天漲或跌」，是刻意的。** 隔日方向我們量過三次都沒有邊際："
+            "V27.19 訊號驗證超額 −0.23pp、快照歷史方向相關 +0.047、"
+            "2026-09-22 達標回測（17,600 筆）中位數超額扣掉成本約等於 0。"
+            "波動幅度可以講（波動群聚是真的），方向不行。有的話會放，沒有就不假裝有。"
+            "　關卡本身也**沒有經過回測** —— 它描述現在的位置，不保證價格會在那裡停。")
+except Exception as _le:
+    st.caption(f"關卡階梯暫時無法計算：{type(_le).__name__}: {_le}")
 
 # ==========================================
 # [v25 新增] 大盤崩跌警示欄位（只對指數/ETF顯示）
