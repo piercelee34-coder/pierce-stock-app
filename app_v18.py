@@ -26,7 +26,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.29", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.30", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2746,6 +2746,41 @@ def detect_smart_money_status(df):
 _TAP_FRESH_DAYS = 10
 
 
+# [V27.30] 掃描覆蓋率下限：實際完成判定的檔數 / 清單檔數。
+#   低於這個比例，「0 檔有訊號」不能當成「沒訊號」—— 那是資料沒抓到。
+#   V27.29 實跑：美股 1200 檔回報「沒有訊號」，但同一套邏輯歷史上是
+#   幾百檔命中；畫面分不出兩者（Rule 12）。
+_SCAN_MIN_COVERAGE = 0.5
+
+def scan_coverage(stats):
+    """[V27.30] 實際完成判定的比例。沒有 stats（舊呼叫端）回 1.0 —— 不知道就不擋。"""
+    if not stats or not stats.get("listed"):
+        return 1.0
+    return stats.get("evaluated", 0) / stats["listed"]
+
+
+def scan_coverage_message(stats):
+    """[V27.30] 覆蓋率不足時回一段給使用者看的錯誤訊息；足夠回 None。"""
+    if scan_coverage(stats) >= _SCAN_MIN_COVERAGE:
+        return None
+    _l, _e = stats.get("listed", 0), stats.get("evaluated", 0)
+    _lines = [
+        f"⚠️ **這次掃描的資料沒抓到：{_l} 檔只有 {_e} 檔完成判定。**"
+        "「沒有訊號」不成立 —— 大部分股票根本沒被檢查。",
+        f"下載空 {stats.get('skipped_no_data', 0)}｜歷史不足 {stats.get('skipped_short', 0)}"
+        f"｜指標算不出 {stats.get('skipped_nan', 0)}｜程式例外 {stats.get('errors', 0)}",
+    ]
+    if stats.get("batch_error"):
+        _lines.append(f"批次下載例外：`{stats['batch_error']}`")
+    for _x in stats.get("dl_error_samples") or []:
+        _lines.append(f"下載錯誤樣本：`{_x}`")
+    for _x in stats.get("error_samples") or []:
+        _lines.append(f"例外樣本：`{_x}`")
+    _lines.append("多半是 Yahoo 暫時限流：隔 10–15 分鐘再按一次「開始掃描」。"
+                  "若連續失敗，把這段文字截圖給我。")
+    return "\n\n".join(_lines)
+
+
 def scan_personal_signals(tickers, lookback_days=3, stats=None,
                           tap_fresh_days=_TAP_FRESH_DAYS):
     """[V26.28] 掃描指定清單在『最近 lookback_days 個交易日』內出現的
@@ -2791,12 +2826,27 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
                       "hit_legacy": 0, "by_type_legacy": {},
                       "tap_suppressed": 0, "tap_suppressed_to_zero": 0,
                       "tap_quiet": [],          # [V27.24] 靜置根數分布
-                      "tap_fresh_days": tap_fresh_days})
+                      "tap_fresh_days": tap_fresh_days,
+                      # [V27.30] 失敗原因樣本。只有計數的話，「1200 檔全部
+                      #   下載空」看得到卻不知道為什麼（限流？代碼錯？）。
+                      "batch_error": None, "dl_error_samples": [],
+                      "error_samples": []})
     try:
         batch = yf.download(tickers, period="1y", auto_adjust=False,
                             group_by="ticker", progress=False, threads=True)
-    except Exception:
+    except Exception as _be:
         batch = None
+        if stats is not None:
+            stats["batch_error"] = f"{type(_be).__name__}: {str(_be)[:160]}"
+    if stats is not None:
+        # 批次下載失敗時**不丟例外**，只把原因塞進 yf.shared._ERRORS
+        #   並印到 log（Streamlit Cloud 上使用者看不到）。撈前 5 筆出來。
+        try:
+            _yerr = dict(getattr(getattr(yf, "shared", None), "_ERRORS", {}) or {})
+            stats["dl_error_samples"] = [
+                f"{k}: {str(v)[:160]}" for k, v in list(_yerr.items())[:5]]
+        except Exception:
+            pass
 
     out = []
     for tk in tickers:
@@ -3138,9 +3188,12 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
                 "金叉": cross_info,
                 "_mini": _mini,
             })
-        except Exception:
+        except Exception as _te:
             if stats is not None:
                 stats["errors"] += 1
+                if len(stats["error_samples"]) < 3:      # [V27.30]
+                    stats["error_samples"].append(
+                        f"{tk}: {type(_te).__name__}: {str(_te)[:160]}")
             continue
     return out
 
@@ -5227,10 +5280,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.29" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.29" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.29" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.29")
+st.title("📡 掃描中心 V27.30" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.30" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.30" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.30")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -6971,7 +7024,12 @@ def _render_personal_scan():
                     _pdate, _prev = load_prev_scan(_scan_scope, _sd)
                     st.session_state["_sig_scan_prev"] = _prev
                     st.session_state["_sig_scan_prev_date"] = _pdate
-                    _sv_ok, _sv_msg = save_scan_snapshot(_scan_scope, _sd, _sig_results)
+                    # [V27.30] 資料沒抓齊的掃描不寫進歷史 —— 存一份空快照，
+                    #   下次比對會把所有命中都標成「🆕 新進」。
+                    if scan_coverage(_sig_stats) < _SCAN_MIN_COVERAGE:
+                        _sv_ok, _sv_msg = False, "本次資料覆蓋率不足，未寫入掃描歷史"
+                    else:
+                        _sv_ok, _sv_msg = save_scan_snapshot(_scan_scope, _sd, _sig_results)
                     st.session_state["_sig_scan_hist_msg"] = (
                         ("✅ " if _sv_ok else "⚠️ ") + _sv_msg)
                 except Exception as _he:
@@ -6983,8 +7041,16 @@ def _render_personal_scan():
         # 顯示上次掃描結果
         _res = st.session_state.get("_sig_scan_results")
         if _res is not None:
+            # [V27.30] 先看資料有沒有抓齊，再談有沒有訊號。
+            _cov_st = st.session_state.get("_sig_scan_stats") or {}
+            _cov_msg = scan_coverage_message(_cov_st)
+            if _cov_msg:
+                st.error(_cov_msg)
             if not _res:
-                st.info("最近 3 個交易日，清單中沒有出現達標 / 吸籌 / 乖離抄底訊號。")
+                if not _cov_msg:
+                    st.info("最近 3 個交易日，清單中沒有出現達標 / 吸籌 / 乖離抄底訊號。"
+                            f"（已完成判定 {_cov_st.get('evaluated', '?')} / "
+                            f"{_cov_st.get('listed', '?')} 檔）")
             else:
                 st.success(f"找到 {len(_res)} 檔有訊號（範圍：{st.session_state.get('_sig_scan_scope_done','')}）")
                 # [V27.00] 產業別。零額外請求（Nasdaq screener / 公開資訊
@@ -7326,7 +7392,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.29）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.30）",
                                   "#",
                                   "# [V27.24] 主表新增 `達標靜置` 欄：這次達標之前，有幾根 K 沒碰過",
                                   "#   同一個技術目標。越大＝盤整越久才突破。",
