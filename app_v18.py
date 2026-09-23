@@ -26,7 +26,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.28", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.29", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -5227,10 +5227,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.28" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.28" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.28" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.28")
+st.title("📡 掃描中心 V27.29" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.29" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.29" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.29")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -5788,6 +5788,17 @@ if cur_t == "__DASHBOARD__":
                 st.caption(
                     f"({_sim_px:,.2f} − {_sim_cost:,.2f}) × {_sim_sh:,} "
                     f"= {_sim_cur}{_amt:,.0f}")
+                # [V27.29] 選美金時，美金數字留著，下面再加一列台幣換算。
+                #   匯率用 USD_TWD —— 跟持倉表、已實現損益同一個數字（Rule 7：
+                #   同一頁不能出現兩個匯率，否則試算跟持倉表會對不起來）。
+                if _sim_cur == "$":
+                    _t1, _t2, _t3 = st.columns(3)
+                    _t1.metric("損益（台幣）", f"NT${_amt * USD_TWD:,.0f}")
+                    _t2.metric("總成本（台幣）", f"NT${_sim_cost * _sim_sh * USD_TWD:,.0f}")
+                    _t3.metric("總市值（台幣）", f"NT${_sim_px * _sim_sh * USD_TWD:,.0f}")
+                    st.caption(
+                        f"× 匯率 {USD_TWD:g} = NT${_amt * USD_TWD:,.0f}"
+                        f"　※ 固定匯率（程式頂端 USD_TWD），不是即時報價；與持倉表同一個數字。")
 
         # ── 下方：損益表（唯讀，代碼/損益%/損益美/損益台）──
         if _pl_rows:
@@ -7315,7 +7326,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.28）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.29）",
                                   "#",
                                   "# [V27.24] 主表新增 `達標靜置` 欄：這次達標之前，有幾根 K 沒碰過",
                                   "#   同一個技術目標。越大＝盤整越久才突破。",
@@ -8127,11 +8138,11 @@ def _render_ai_target_scan():
         if tgt_hdr_col2.button("🔄 強制刷新", key="target_force_refresh",
                                 help="清除本掃描器的快取重新跑"):
             # [V26.02] 只清掉本掃描器的 cache，不動其他掃描器
-            try:
-                _cached_target_scan.clear()
-            except Exception:
-                st.cache_data.clear()
-            st.rerun()
+            # [V27.29] 這裡還沒走到 _cached_target_scan 的 def（在下面約 250 行），
+            #   以前直接 .clear() 每次都 NameError → except 退回 st.cache_data.clear()，
+            #   等於把全站快取（台股清單、美股清單、產業對照…）一起清掉。
+            #   改成只插旗標；定義完成後、呼叫之前才真的清。
+            st.session_state["_tgt_force_clear"] = True
 
         _tgt_anchor = get_cache_anchor()
 
@@ -8449,6 +8460,9 @@ def _render_ai_target_scan():
                 except Exception:
                     continue
             return {"results": results, "scanned": len(tickers), "ok": len(results)}
+
+        if st.session_state.pop("_tgt_force_clear", False):   # [V27.29] 見上方「強制刷新」
+            _cached_target_scan.clear()
 
         try:
             target_scan = _cached_target_scan(_tgt_anchor, universe_key, tuple(selected_tickers))
