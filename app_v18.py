@@ -26,7 +26,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.32", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.33", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2888,17 +2888,45 @@ def scan_coverage_message(stats):
     return "\n\n".join(_lines)
 
 
+def fill_last_close(d):
+    """[V27.33] 最新一根 K 的 Close 是空的、但同一根的 Adj Close 有值 → 用它補。
+
+    V27.32 實跑樣本：MU 2026-09-22 Open=1033.28 High=1097.25 Low=1030.02
+    Close=nan Volume=28773640 —— 開高低量跟 Yahoo 網站一模一樣，**只缺收盤**。
+    最新一根的 Adj Close 必定等於 Close（還原權息只調整「事件之前」的日子，
+    最新一根之後沒有事件），所以拿來補是精確值，不是估計。
+
+    回傳 (d, 狀態)：None＝不需要補；"adj"＝已補；"missing"＝Adj Close 也沒有。"""
+    if d is None or d.empty or "Close" not in d.columns:
+        return d, None
+    if not pd.isna(d["Close"].iloc[-1]):
+        return d, None
+    if "Adj Close" in d.columns and pd.notna(d["Adj Close"].iloc[-1]):
+        d = d.copy()
+        d.iloc[-1, d.columns.get_loc("Close")] = float(d["Adj Close"].iloc[-1])
+        return d, "adj"
+    return d, "missing"
+
+
 def scan_stale_message(stats):
     """[V27.31] 覆蓋率正常、但有檔的最新一根缺收盤價而改用前一根時的提醒。
-    不提醒的話，掃描結果看起來是「今天的」，其實是前一個交易日的。"""
+    不提醒的話，掃描結果看起來是「今天的」，其實是前一個交易日的。
+    [V27.33] 用 Adj Close 補回的也要講（補過的數字不能假裝是原始資料）。"""
     _n = (stats or {}).get("nan_close_last", 0)
-    if not _n:
+    _f = (stats or {}).get("nan_close_filled_adj", 0)
+    if not _n and not _f:
         return None
-    _smp = (stats.get("nan_close_samples") or [""])[0]
-    return (f"⏱ {_n} / {stats.get('listed', '?')} 檔的最新一根 K 沒有收盤價"
-            "（Yahoo 盤中常見），這些檔改用**前一根完整 K** 判定 —— "
-            "看表格的「報價日」欄就知道每檔用的是哪天。"
-            + (f"　樣本：`{_smp}`" if _smp else ""))
+    _parts = []
+    if _f:
+        _parts.append(f"🩹 {_f} / {stats.get('listed', '?')} 檔的最新一根 K 沒有收盤價，"
+                      "已用同一根的 Adj Close 補回（最新一根兩者相同）。")
+    if _n:
+        _smp = (stats.get("nan_close_samples") or [""])[0]
+        _parts.append(f"⏱ {_n} / {stats.get('listed', '?')} 檔的最新一根 K 沒有收盤價、"
+                      "Adj Close 也沒有，這些檔改用**前一根完整 K** 判定 —— "
+                      "看表格的「報價日」欄就知道每檔用的是哪天。"
+                      + (f"　樣本：`{_smp}`" if _smp else ""))
+    return "\n\n".join(_parts)
 
 
 def scan_personal_signals(tickers, lookback_days=3, stats=None,
@@ -2956,6 +2984,7 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
                       #   last＝被剔的是**最新**那根（＝這檔實際用的是前一根）。
                       "nan_close_trimmed": 0, "nan_close_last": 0,
                       "nan_close_samples": [],
+                      "nan_close_filled_adj": 0,   # [V27.33]
                       "yf_version": str(getattr(yf, "__version__", "?"))})
     try:
         batch = yf.download(tickers, period="1y", auto_adjust=False,
@@ -2988,6 +3017,10 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
             #   跳過。V27.30 實跑：1200 檔裡 1188 檔這樣掉。
             #   個股頁本來就 dropna(subset=OHLC)，這裡跟它對齊（Rule 7）。
             #   代價：這些檔判定用的是**前一根完整 K** —— 報價日欄會照實顯示。
+            # [V27.33] 先試著用 Adj Close 補最新一根，補不到才剔除
+            d, _fc = fill_last_close(d)
+            if _fc == "adj" and stats is not None:
+                stats["nan_close_filled_adj"] += 1
             if d is not None and not d.empty and "Close" in d.columns:
                 _nc = d["Close"].isna()
                 if _nc.any():
@@ -3000,7 +3033,8 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
                                 stats["nan_close_samples"].append(
                                     f"{tk} {str(d.index[-1])[:16]}: " + ", ".join(
                                         f"{c}={_lr[c]}" for c in
-                                        ("Open", "High", "Low", "Close", "Volume")
+                                        ("Open", "High", "Low", "Close",
+                                         "Adj Close", "Volume")
                                         if c in d.columns))
                     d = d[~_nc]
             if d is None or d.empty:
@@ -3372,6 +3406,19 @@ def scan_watchlist_icons(tickers, lookback_days=5):
                 d.columns = d.columns.get_level_values(0)
             d = d.loc[:, ~d.columns.duplicated()]
             d = d.replace([np.inf, -np.inf], np.nan)
+            # [V27.33] 最新一根缺收盤 → 先用 Adj Close 補；美股再不行用 30 分 K
+            #   （同一天才補）。以前這裡 dropna 直接把那根丟掉 → 持倉總表的現價
+            #   安靜地變成前一天（V27.32 實跑：SNDK 1766.64，應為 1887.04）。
+            d, _fc = fill_last_close(d)
+            if _fc == "missing" and ".TW" not in tk:
+                _lv = fetch_us_live_bar(tk)
+                if (_lv and not _lv.get("error")
+                        and _lv.get("date") == d.index[-1].date()):
+                    d = d.copy()
+                    d.iloc[-1, d.columns.get_loc("Close")] = float(_lv["close"])
+                    _fc = "30m"
+            if _fc in ("adj", "30m"):
+                icons.setdefault("_close_fill", {})[tk] = _fc
             d = d.dropna(subset=['Open', 'High', 'Low', 'Close'])
             if len(d) < 60:
                 icons.setdefault("_errors", {})[tk] = f"資料不足({len(d)}天)"
@@ -5049,6 +5096,8 @@ with st.sidebar:
         _scan_prev_high = _icons.pop("_prev_high", {}) if isinstance(_icons, dict) else {}
         _scan_iron = _icons.pop("_iron", {}) if isinstance(_icons, dict) else {}
         _scan_scores = _icons.pop("_scores", {}) if isinstance(_icons, dict) else {}
+        _scan_close_fill = _icons.pop("_close_fill", {}) if isinstance(_icons, dict) else {}  # [V27.33]
+        st.session_state["_wl_close_fill"] = _scan_close_fill
         st.session_state["_wl_icons"] = _icons
         st.session_state["_wl_prices"] = _scan_prices  # [V26.51] 現價供持倉總表
         st.session_state["_wl_src"] = f"本次掃描 {_dt_wl.now().strftime('%m/%d %H:%M:%S')}"  # [V26.71]
@@ -5427,10 +5476,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.32" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.32" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.32" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.32")
+st.title("📡 掃描中心 V27.33" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.33" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.33" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.33")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -5494,6 +5543,16 @@ if cur_t == "__DASHBOARD__":
                 else:
                     st.caption(f"✅ 資料日檢查通過（交易日基準：美股 {_exp_dates.get('US','—')}"
                                f"｜台股 {_exp_dates.get('TW','—')}）")
+        # [V27.33] 補過的收盤要講出來
+        _cf = st.session_state.get("_wl_close_fill") or {}
+        if _cf:
+            _cf_adj = sorted(k for k, v in _cf.items() if v == "adj")
+            _cf_30 = sorted(k for k, v in _cf.items() if v == "30m")
+            st.caption(f"🩹 {len(_cf)} 檔的最新收盤是補回的（Yahoo 日 K 那根沒給收盤價）："
+                       + (f"用 Adj Close 補 {len(_cf_adj)} 檔" if _cf_adj else "")
+                       + ("、" if _cf_adj and _cf_30 else "")
+                       + (f"用 30 分 K 補 {len(_cf_30)} 檔（{', '.join(_cf_30[:8])}）"
+                          if _cf_30 else ""))
 
         # [V26.71] 價格資料診斷 — 抓「現價寫錯」的現行犯
         with st.expander("🔧 價格資料診斷"):
@@ -7542,7 +7601,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.32）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.33）",
                                   "#",
                                   "# [V27.24] 主表新增 `達標靜置` 欄：這次達標之前，有幾根 K 沒碰過",
                                   "#   同一個技術目標。越大＝盤整越久才突破。",
