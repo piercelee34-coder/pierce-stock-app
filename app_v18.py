@@ -26,7 +26,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.34", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.35", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -5476,10 +5476,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.34" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.34" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.34" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.34")
+st.title("📡 掃描中心 V27.35" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.35" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.35" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.35")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -7604,7 +7604,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.34）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.35）",
                                   "#",
                                   "# [V27.24] 主表新增 `達標靜置` 欄：這次達標之前，有幾根 K 沒碰過",
                                   "#   同一個技術目標。越大＝盤整越久才突破。",
@@ -8654,6 +8654,9 @@ def _render_ai_target_scan():
         _TGT_UNIVERSE_MAP = {
             f"🚀 美股熱門（{len(_EXTENDED_TGT_TICKERS)} 檔，~7-12 分鐘）": ("extended", _EXTENDED_TGT_TICKERS),
             f"🇹🇼 台股熱門（{len(_TW_HOT_TICKERS)} 檔，~12-18 分鐘）": ("tw_hot", _TW_HOT_TICKERS),
+            # [V27.35] 跟「個人清單訊號掃描 → 美股全市場」同一份清單（成交金額前 1200）。
+            #   None = 選到才去抓清單（Nasdaq screener，有快取），沒選不打任何請求。
+            f"🇺🇸 美股全市場（成交金額前 {_US_TOP_N} 檔，估計 35-60 分鐘）": ("us_all", None),
         }
 
         # ── 範圍選擇器（一定要在 scan 前）──
@@ -8665,6 +8668,22 @@ def _render_ai_target_scan():
             help="切換不會立刻重跑 — 各範圍快取獨立，已掃過的會秒回。",
         )
         universe_key, selected_tickers = _TGT_UNIVERSE_MAP[universe_label]
+        if selected_tickers is None:                  # [V27.35] 美股全市場
+            try:
+                _tgt_us, _tgt_us_names, _tgt_us_diag = fetch_us_universe()
+            except Exception as _tue:
+                _tgt_us, _tgt_us_diag = [], {"errors": [f"{type(_tue).__name__}: {_tue}"]}
+            for _e in (_tgt_us_diag or {}).get("errors", []):
+                st.error(_e)
+            selected_tickers = list(_tgt_us or [])
+            if not selected_tickers:
+                st.error("美股清單取不到，無法掃描全市場。")
+            st.warning(
+                f"⏳ {len(selected_tickers)} 檔每檔跑 1000 次蒙地卡羅，**估計 35-60 分鐘**"
+                "（依 242 檔約 7-12 分鐘等比推算，沒實測過）。跑的途中盡量別關掉或切走頁面，"
+                "連線斷掉可能要重跑。跑完會快取到下一個刷新時段（05/08/14/20 點）。"
+                "要另外按下面的「▶ 執行美股全市場 AI 目標掃描」才會開始 —— "
+                "按過其他範圍的執行鍵不算，免得一切過來就自動跑一小時。")
 
         st.caption(
             "用蒙地卡羅 30 日推演的 **p50 中位數（短）/ p90 樂觀（長）** 當目標價，"
@@ -8681,6 +8700,7 @@ def _render_ai_target_scan():
         """
             tickers = list(tickers_tuple)
             results = []
+            _n_filled = _n_stale = 0          # [V27.35] 補收盤 / 退回前一根的檔數
             # 批次下載提升效率（yf 一次抓很多檔比逐檔快）
             try:
                 batch = yf.download(
@@ -8699,6 +8719,16 @@ def _render_ai_target_scan():
                         hist = batch[tk].dropna(how="all").copy()
                     else:
                         hist = yf.Ticker(tk).history(period="1y", auto_adjust=False)
+
+                    # [V27.35] 最新一根缺收盤（Yahoo 從 9/22 起常見）→ 以前 SMA_20
+                    #   變 NaN 整檔跳過，美股幾乎全軍覆沒。跟個人掃描器同一套處理。
+                    hist, _fc = fill_last_close(hist)
+                    if _fc == "adj":
+                        _n_filled += 1
+                    if hist is not None and not hist.empty and "Close" in hist.columns:
+                        if pd.isna(hist["Close"].iloc[-1]):
+                            _n_stale += 1
+                        hist = hist[hist["Close"].notna()]
 
                     if hist is None or hist.empty or len(hist) < 80:
                         continue
@@ -8750,15 +8780,20 @@ def _render_ai_target_scan():
                     })
                 except Exception:
                     continue
-            return {"results": results, "scanned": len(tickers), "ok": len(results)}
+            return {"results": results, "scanned": len(tickers), "ok": len(results),
+                    "filled_adj": _n_filled, "stale_last": _n_stale}   # [V27.35]
 
         if st.session_state.pop("_tgt_force_clear", False):   # [V27.29] 見上方「強制刷新」
             _cached_target_scan.clear()
 
         target_scan = None                            # [V27.32] 按了才跑
-        if _scan_gate("_gate_tgt", "▶ 執行 AI 目標掃描",
-                      "尚未執行。按上方「▶ 執行 AI 目標掃描」才會開始抓資料"
-                      "（V27.32 起不再一打開頁面就自動跑）。"):
+        # [V27.35] 美股全市場用另一把鍵：同一個 session 按過 242 檔的執行鍵，
+        #   切到全市場時不能直接開跑一小時。
+        if _scan_gate("_gate_tgt" if universe_key != "us_all" else "_gate_tgt_all",
+                      "▶ 執行 AI 目標掃描" if universe_key != "us_all"
+                      else "▶ 執行美股全市場 AI 目標掃描",
+                      "尚未執行。按上方「▶ 執行」才會開始抓資料"
+                      "（V27.32 起不再一打開頁面就自動跑）。") and selected_tickers:
             try:
                 target_scan = _cached_target_scan(_tgt_anchor, universe_key, tuple(selected_tickers))
             except Exception as e:
@@ -8779,6 +8814,12 @@ def _render_ai_target_scan():
             s3.metric("平均長期空間", f"{avg_up_l:+.2f}%")
             s4.metric("MC 看多比例", f"{positive_count}/{target_scan['ok']}",
                       f"{positive_count/max(target_scan['ok'],1)*100:.0f}% 短期上漲")
+            # [V27.35] 補過或退回前一根的要講
+            if target_scan.get("stale_last"):
+                st.caption(f"⏱ {target_scan['stale_last']} 檔的最新一根 K 沒有收盤價，"
+                           "改用前一根完整 K 計算（現價是前一個交易日的收盤）。")
+            if target_scan.get("filled_adj"):
+                st.caption(f"🩹 {target_scan['filled_adj']} 檔最新收盤由 Adj Close 補回。")
 
         # ── 控制列 ──
         tgt_ctrl1, tgt_ctrl2, tgt_ctrl3 = st.columns([2, 1.2, 1])
