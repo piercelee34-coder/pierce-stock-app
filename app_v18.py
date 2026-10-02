@@ -26,7 +26,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.35", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.36", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2793,23 +2793,106 @@ def fetch_us_live_bar(ticker):
     _h = _h.dropna(subset=["Close"])
     if _h.empty:
         return {"error": "30 分 K 收盤全空"}
-    _dates = pd.Index([_i.date() for _i in _h.index])
-    _last = _dates[-1]
-    _day = _h[_dates == _last]
-    _out = {"date": _last,
-            "open": float(_day["Open"].iloc[0]),
-            "high": float(_day["High"].max()),
-            "low": float(_day["Low"].min()),
-            "close": float(_day["Close"].iloc[-1]),
-            "volume": float(_day["Volume"].sum()) if "Volume" in _day.columns else 0.0,
-            "bars": int(len(_day)),
-            "asof": str(_h.index[-1])[:16]}
+    _out = live_bar_from_intraday(_h)      # [V27.36] 跟批次版共用同一套合成
     try:
         if _md.get("regularMarketPrice"):
             _out["quote_price"] = float(_md["regularMarketPrice"])
     except Exception:
         pass
     return _out
+
+
+def live_bar_from_intraday(h):
+    """[V27.36] 分時 K → 「最近一個交易日」的日 K dict；沒資料回 None。
+    fetch_us_live_bar（個股頁、單檔）與 batch_live_bars（掃描器、批次）共用 ——
+    兩處各寫一套合成邏輯，遲早會對不起來（Rule 7）。"""
+    if h is None or h.empty or "Close" not in h.columns:
+        return None
+    h = h.dropna(subset=["Close"])
+    if h.empty:
+        return None
+    _dates = pd.Index([_i.date() for _i in h.index])
+    _last = _dates[-1]
+    _day = h[_dates == _last]
+    return {"date": _last,
+            "open": float(_day["Open"].iloc[0]),
+            "high": float(_day["High"].max()),
+            "low": float(_day["Low"].min()),
+            "close": float(_day["Close"].iloc[-1]),
+            "volume": float(_day["Volume"].sum()) if "Volume" in _day.columns else 0.0,
+            "bars": int(len(_day)),
+            "asof": str(h.index[-1])[:16]}
+
+
+def batch_live_bars(tickers):
+    """[V27.36] 一次批次抓 30 分 K（period=5d），回 ({代碼: 日K dict}, 錯誤或 None)。
+    只給「日 K 最新一根缺收盤」的那些檔用 —— Yahoo 正常時這份清單是空的，
+    一個額外請求都不會發。"""
+    tickers = list(dict.fromkeys(tickers))
+    if not tickers:
+        return {}, None
+    try:
+        _b = yf.download(tickers, period="5d", interval="30m", auto_adjust=False,
+                         group_by="ticker", progress=False, threads=True)
+    except Exception as _e:
+        return {}, f"{type(_e).__name__}: {str(_e)[:160]}"
+    if _b is None or _b.empty:
+        return {}, "30 分 K 批次下載是空的"
+    _out = {}
+    for _tk in tickers:
+        try:
+            if isinstance(_b.columns, pd.MultiIndex):
+                if _tk not in _b.columns.get_level_values(0):
+                    continue
+                _h = _b[_tk]
+            elif len(tickers) == 1:
+                _h = _b
+            else:
+                continue
+            _lv = live_bar_from_intraday(_h)
+            if _lv:
+                _out[_tk] = _lv
+        except Exception:
+            continue
+    return _out, None
+
+
+def prefetch_live_for_missing(batch, tickers):
+    """[V27.36] 從日 K 批次裡挑出「最新一根 Close 與 Adj Close 都空」的檔，
+    替它們批次抓 30 分 K。回 (live_map, 需要補的檔數, 錯誤或 None)。
+    個人掃描器與 AI 目標掃描器共用。"""
+    if batch is None or not isinstance(batch.columns, pd.MultiIndex):
+        return {}, 0, None
+    _lv0 = set(batch.columns.get_level_values(0))
+    _need = []
+    for _tk in tickers:
+        if _tk not in _lv0:
+            continue
+        try:
+            _d0 = batch[_tk].dropna(how="all")
+            if len(_d0) and fill_last_close(_d0)[1] == "missing":
+                _need.append(_tk)
+        except Exception:
+            continue
+    if not _need:
+        return {}, 0, None
+    _map, _err = batch_live_bars(_need)
+    return _map, len(_need), _err
+
+
+def apply_live_close(d, live):
+    """[V27.36] 最新一根 Close 是空的、且 live 是**同一天** → 用 live 的收盤補。
+    只補 Close：同一根的開高低量 Yahoo 有給（V27.32 樣本跟網站一致），不動它們。
+    回 (d, 有沒有補)。"""
+    if d is None or d.empty or not live or "Close" not in d.columns:
+        return d, False
+    if pd.notna(d["Close"].iloc[-1]):
+        return d, False
+    if live.get("date") != pd.Timestamp(d.index[-1]).date():
+        return d, False
+    d = d.copy()
+    d.iloc[-1, d.columns.get_loc("Close")] = float(live["close"])
+    return d, True
 
 
 def bar_date_badge_html(bar_day, exp_day, live):
@@ -2914,12 +2997,21 @@ def scan_stale_message(stats):
     [V27.33] 用 Adj Close 補回的也要講（補過的數字不能假裝是原始資料）。"""
     _n = (stats or {}).get("nan_close_last", 0)
     _f = (stats or {}).get("nan_close_filled_adj", 0)
-    if not _n and not _f:
+    _f30 = (stats or {}).get("nan_close_filled_30m", 0)       # [V27.36]
+    if not _n and not _f and not _f30:
         return None
     _parts = []
     if _f:
         _parts.append(f"🩹 {_f} / {stats.get('listed', '?')} 檔的最新一根 K 沒有收盤價，"
                       "已用同一根的 Adj Close 補回（最新一根兩者相同）。")
+    if _f30:
+        _parts.append(f"🩹 {_f30} / {stats.get('listed', '?')} 檔的最新一根 K 沒有收盤價，"
+                      "已用**同一天** 30 分 K 的最後價補回（跟官方收盤可能差約 0.1%，"
+                      "收盤競價不在 30 分 K 裡）。")
+    if _n and stats.get("live_requested"):
+        _parts.append(f"30 分 K 補值：要補 {stats['live_requested']} 檔、抓到 {stats.get('live_got', 0)} 檔"
+                      + (f"（錯誤：`{stats['live_error']}`）" if stats.get("live_error") else "")
+                      + "。")
     if _n:
         _smp = (stats.get("nan_close_samples") or [""])[0]
         _parts.append(f"⏱ {_n} / {stats.get('listed', '?')} 檔的最新一根 K 沒有收盤價、"
@@ -2985,6 +3077,9 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
                       "nan_close_trimmed": 0, "nan_close_last": 0,
                       "nan_close_samples": [],
                       "nan_close_filled_adj": 0,   # [V27.33]
+                      # [V27.36] 30 分 K 補當天收盤
+                      "nan_close_filled_30m": 0, "live_requested": 0,
+                      "live_got": 0, "live_error": None,
                       "yf_version": str(getattr(yf, "__version__", "?"))})
     try:
         batch = yf.download(tickers, period="1y", auto_adjust=False,
@@ -3002,6 +3097,12 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
                 f"{k}: {str(v)[:160]}" for k, v in list(_yerr.items())[:5]]
         except Exception:
             pass
+
+    # [V27.36] 最新一根缺收盤的檔 → 先批次抓一次 30 分 K 備用（沒缺就不抓）
+    _live_map, _n_need, _live_err = prefetch_live_for_missing(batch, tickers)
+    if stats is not None:
+        stats["live_requested"], stats["live_got"] = _n_need, len(_live_map)
+        stats["live_error"] = _live_err
 
     out = []
     for tk in tickers:
@@ -3021,6 +3122,10 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
             d, _fc = fill_last_close(d)
             if _fc == "adj" and stats is not None:
                 stats["nan_close_filled_adj"] += 1
+            if _fc == "missing":                       # [V27.36] 再試 30 分 K
+                d, _lv_ok = apply_live_close(d, _live_map.get(tk))
+                if _lv_ok and stats is not None:
+                    stats["nan_close_filled_30m"] += 1
             if d is not None and not d.empty and "Close" in d.columns:
                 _nc = d["Close"].isna()
                 if _nc.any():
@@ -5476,10 +5581,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.35" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.35" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.35" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.35")
+st.title("📡 掃描中心 V27.36" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.36" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.36" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.36")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -7604,7 +7709,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.35）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.36）",
                                   "#",
                                   "# [V27.24] 主表新增 `達標靜置` 欄：這次達標之前，有幾根 K 沒碰過",
                                   "#   同一個技術目標。越大＝盤整越久才突破。",
@@ -8700,7 +8805,7 @@ def _render_ai_target_scan():
         """
             tickers = list(tickers_tuple)
             results = []
-            _n_filled = _n_stale = 0          # [V27.35] 補收盤 / 退回前一根的檔數
+            _n_filled = _n_stale = _n_live = 0   # [V27.35] 補收盤 / 退回前一根 /[V27.36] 30 分 K
             # 批次下載提升效率（yf 一次抓很多檔比逐檔快）
             try:
                 batch = yf.download(
@@ -8710,6 +8815,8 @@ def _render_ai_target_scan():
                 )
             except Exception:
                 batch = None
+            # [V27.36] 缺收盤的檔先批次抓 30 分 K（跟個人掃描器同一支）
+            _live_map, _n_live_need, _live_err = prefetch_live_for_missing(batch, tickers)
 
             for tk in tickers:
                 try:
@@ -8725,6 +8832,10 @@ def _render_ai_target_scan():
                     hist, _fc = fill_last_close(hist)
                     if _fc == "adj":
                         _n_filled += 1
+                    if _fc == "missing":               # [V27.36]
+                        hist, _lv_ok = apply_live_close(hist, _live_map.get(tk))
+                        if _lv_ok:
+                            _n_live += 1
                     if hist is not None and not hist.empty and "Close" in hist.columns:
                         if pd.isna(hist["Close"].iloc[-1]):
                             _n_stale += 1
@@ -8781,7 +8892,8 @@ def _render_ai_target_scan():
                 except Exception:
                     continue
             return {"results": results, "scanned": len(tickers), "ok": len(results),
-                    "filled_adj": _n_filled, "stale_last": _n_stale}   # [V27.35]
+                    "filled_adj": _n_filled, "stale_last": _n_stale,   # [V27.35]
+                    "filled_30m": _n_live, "live_error": _live_err}    # [V27.36]
 
         if st.session_state.pop("_tgt_force_clear", False):   # [V27.29] 見上方「強制刷新」
             _cached_target_scan.clear()
@@ -8820,6 +8932,11 @@ def _render_ai_target_scan():
                            "改用前一根完整 K 計算（現價是前一個交易日的收盤）。")
             if target_scan.get("filled_adj"):
                 st.caption(f"🩹 {target_scan['filled_adj']} 檔最新收盤由 Adj Close 補回。")
+            if target_scan.get("filled_30m"):
+                st.caption(f"🩹 {target_scan['filled_30m']} 檔最新收盤由同一天 30 分 K 的最後價補回"
+                           "（跟官方收盤可能差約 0.1%）。")
+            if target_scan.get("live_error"):
+                st.caption(f"⚠️ 30 分 K 補值失敗：{target_scan['live_error']}")
 
         # ── 控制列 ──
         tgt_ctrl1, tgt_ctrl2, tgt_ctrl3 = st.columns([2, 1.2, 1])
