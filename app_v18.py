@@ -26,7 +26,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.36", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.38", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3021,8 +3021,19 @@ def scan_stale_message(stats):
     return "\n\n".join(_parts)
 
 
+def compact_signal_text(sigs):
+    """[V27.37] (類型, 日期, 價位) 清單 → 「💰 達標 9/22｜💎 乖離抄底 9/19」。
+    同一類型只留最新一次（清單本來就是新到舊）。給 AI 目標掃描器的「訊號」欄用。"""
+    _seen = {}
+    for _t, _d, _p in (sigs or []):
+        if _t not in _seen:
+            _seen[_t] = _d
+    return "｜".join(f"{_t} {_d}" for _t, _d in _seen.items())
+
+
 def scan_personal_signals(tickers, lookback_days=3, stats=None,
-                          tap_fresh_days=_TAP_FRESH_DAYS):
+                          tap_fresh_days=_TAP_FRESH_DAYS,
+                          pre_batch=None, pre_live=None, fetch_analyst=True):
     """[V26.28] 掃描指定清單在『最近 lookback_days 個交易日』內出現的
     達標 / 吸籌 / 乖離抄底訊號。回傳 list of dict（一檔可多訊號合併一列）。
 
@@ -3081,25 +3092,33 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
                       "nan_close_filled_30m": 0, "live_requested": 0,
                       "live_got": 0, "live_error": None,
                       "yf_version": str(getattr(yf, "__version__", "?"))})
-    try:
-        batch = yf.download(tickers, period="1y", auto_adjust=False,
-                            group_by="ticker", progress=False, threads=True)
-    except Exception as _be:
-        batch = None
-        if stats is not None:
-            stats["batch_error"] = f"{type(_be).__name__}: {str(_be)[:160]}"
-    if stats is not None:
-        # 批次下載失敗時**不丟例外**，只把原因塞進 yf.shared._ERRORS
-        #   並印到 log（Streamlit Cloud 上使用者看不到）。撈前 5 筆出來。
+    # [V27.37] pre_batch / pre_live：呼叫端（AI 目標掃描器）已經下載好同一份
+    #   日 K 與 30 分 K，直接拿來用，不重抓 —— 同一批股票抓兩次只是多被限流。
+    if pre_batch is not None:
+        batch = pre_batch
+    else:
         try:
-            _yerr = dict(getattr(getattr(yf, "shared", None), "_ERRORS", {}) or {})
-            stats["dl_error_samples"] = [
-                f"{k}: {str(v)[:160]}" for k, v in list(_yerr.items())[:5]]
-        except Exception:
-            pass
+            batch = yf.download(tickers, period="1y", auto_adjust=False,
+                                group_by="ticker", progress=False, threads=True)
+        except Exception as _be:
+            batch = None
+            if stats is not None:
+                stats["batch_error"] = f"{type(_be).__name__}: {str(_be)[:160]}"
+        if stats is not None:
+            # 批次下載失敗時**不丟例外**，只把原因塞進 yf.shared._ERRORS
+            #   並印到 log（Streamlit Cloud 上使用者看不到）。撈前 5 筆出來。
+            try:
+                _yerr = dict(getattr(getattr(yf, "shared", None), "_ERRORS", {}) or {})
+                stats["dl_error_samples"] = [
+                    f"{k}: {str(v)[:160]}" for k, v in list(_yerr.items())[:5]]
+            except Exception:
+                pass
 
     # [V27.36] 最新一根缺收盤的檔 → 先批次抓一次 30 分 K 備用（沒缺就不抓）
-    _live_map, _n_need, _live_err = prefetch_live_for_missing(batch, tickers)
+    if pre_live is not None:
+        _live_map, _n_need, _live_err = pre_live
+    else:
+        _live_map, _n_need, _live_err = prefetch_live_for_missing(batch, tickers)
     if stats is not None:
         stats["live_requested"], stats["live_got"] = _n_need, len(_live_map)
         stats["live_error"] = _live_err
@@ -3356,7 +3375,7 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
             #   限流（V26.93 實跑：AAPL/ABNB/ACGL 全數失敗），而限流回來的
             #   空值跟「真的沒覆蓋」長得一模一樣。少打幾百次請求，剩下的才
             #   信得過。沒查的標「未查」，不是空白 —— 空白會被讀成無覆蓋。
-            if _is_dip:
+            if _is_dip and fetch_analyst:    # [V27.37] AI 目標掃描器借用時不查（省請求）
                 _an_state, _an = _query_target_mean(tk)
             else:
                 _an_state, _an = "skip", None
@@ -5581,10 +5600,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.36" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.36" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.36" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.36")
+st.title("📡 掃描中心 V27.38" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.38" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.38" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.38")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -6685,6 +6704,11 @@ _MACRO_SPEC = {
     "hy_oas":      ("HY 利差", 4.5, "above", "short", "FRED"),
     "yield_curve": ("10Y-2Y", 0.0, "below", "short", "FRED"),
     "cape":        ("Shiller CAPE", 30.0, "above", "long", "multpl"),
+    # [V27.38] 內部人賣壓 ＝ 賣出金額 ÷（賣出＋買進），S&P 100、近 30 天、只算
+    #   公開市場買賣（SEC Form 4）。門檻 75 ＝ App 內部人面板本來的「高度賣壓」線，
+    #   沿用同一條線，兩個畫面才不會對同一個數字講不同的話（Rule 7）。
+    #   原始 17 項 prompt 已確認不存在（使用者請 bot 找過），沒有「原版門檻」可對。
+    "insider":     ("內部人賣壓%", 75.0, "above", "short", "SEC Form 4"),
 }
 _FRED_CSV = "https://fred.stlouisfed.org/graph/fredgraph.csv?id={sid}"
 _FRED_API = "https://api.stlouisfed.org/fred/series/observations"
@@ -6793,14 +6817,36 @@ def _vix_latest():
             float(c.iloc[-2]) if len(c) > 1 else None)
 
 
+def _insider_latest():
+    """[V27.38] 回 (日期, 賣壓%, 前一筆賣壓%)。資料直接用 fetch_insider_index
+    （全 app 唯一的內部人抓取入口，同錨點有快取）；前一筆取自雲端的每日紀錄。"""
+    if not _INSIDER_AVAILABLE:
+        raise RuntimeError("insider_sentiment 模組未載入")
+    _ip = fetch_insider_index(get_cache_anchor())
+    if not _ip or not _ip.get("data_status"):
+        raise RuntimeError((_ip or {}).get("reason") or "內部人資料取不到")
+    _v = round(float(_ip["stats"]["sell_ratio"]) * 100, 2)
+    _d = str(_ip.get("updated_at") or "")[:10] or None
+    _prev = None
+    try:
+        _hist = load_insider_history() or {}
+        _older = sorted(k for k in _hist if _d is None or k < _d)
+        if _older:
+            _prev = float(_hist[_older[-1]]["ratio"])
+    except Exception:
+        _prev = None
+    return _d, _v, _prev
+
+
 @st.cache_data(ttl=3600)
 def fetch_macro_risk():
-    """四項各自獨立抓，一項失敗不影響其他三項（Rule 12：失敗要說出來）。"""
+    """各項獨立抓，一項失敗不影響其他項（Rule 12：失敗要說出來）。"""
     out = {}
     for k, fn in (("vix", _vix_latest),
                   ("hy_oas", lambda: _fred_latest("BAMLH0A0HYM2")),
                   ("yield_curve", lambda: _fred_latest("T10Y2Y")),
-                  ("cape", _cape_latest)):
+                  ("cape", _cape_latest),
+                  ("insider", _insider_latest)):           # [V27.38]
         try:
             d, v, prev = fn()
             out[k] = {"date": d, "value": v, "prev": prev, "err": None}
@@ -6810,10 +6856,19 @@ def fetch_macro_risk():
     return out
 
 
+# [V27.38] 舊字樣「完整 17 項掃描請用原本的 prompt 手動跑」指向一份不存在的
+#   prompt（2026-10-03 使用者請 bot 找過：記憶、排程、工作資料夾都沒有）。
+#   一句指向不存在東西的提示，比沒有提示更糟 —— 讀的人會以為有個地方能補齊。
+_MACRO_OFFLINE_NOTE = (
+    "ⓘ 另外 2 項沒有穩定的程式來源，交給 bot 上網查（附來源連結與日期）："
+    "BofA 牛熊指標（≥8 觸發，每週）、FINRA 融資餘額（連續 3 個月下降觸發，每月）。"
+    "原本說的「17 項 prompt」已確認不存在。")
+
+
 def render_macro_risk():
     st.header("🌡️ 宏觀風險")
-    st.caption("4 項可自動取得的指標。FRED 的 CSV 端點是即時產生檔案，"
-               "冷啟動可能要 30-60 秒。")
+    st.caption(f"{len(_MACRO_SPEC)} 項可自動取得的指標。FRED 的 CSV 端點是即時產生檔案，"
+               "冷啟動可能要 30-60 秒；內部人賣壓換時段後第一次要 2-3 分鐘（SEC 全掃）。")
 
     # [V26.90] 按了才抓。分頁化之後「切過去才執行」已經擋掉大部分不必要的
     #   請求，但切過去那一次仍會抓 —— 而 FRED 冷啟動要半分鐘以上，只是
@@ -6832,9 +6887,7 @@ def render_macro_risk():
     if not data:
         st.info("按上方「📡 抓取宏觀指標」載入。VIX 走 yfinance、"
                 "HY 利差與殖利率曲線走 FRED、CAPE 走 multpl。")
-        st.caption("ⓘ 另有 3 項硬閾值無法自動取得：BofA Bull & Bear、"
-                   "Insider Buy/Sell、Margin Debt 連續 3 月。"
-                   "完整 17 項掃描請用原本的 prompt 手動跑。")
+        st.caption(_MACRO_OFFLINE_NOTE)                 # [V27.38]
         return
 
     short_ok, fired, failed = 0, 0, []
@@ -6852,7 +6905,7 @@ def render_macro_risk():
     light = "🔴" if fired >= 2 else "🟡" if fired == 1 else "🟢"
     st.markdown(f"### {light} 短期風險：可量測 {short_ok} 項中觸發 {fired} 項")
 
-    cols = st.columns(4)
+    cols = st.columns(len(_MACRO_SPEC))                  # [V27.38] 4 → 5 項
     for col, (k, (label, thresh, direction, horizon, src)) in zip(
             cols, _MACRO_SPEC.items()):
         d = data.get(k, {})
@@ -6876,9 +6929,7 @@ def render_macro_risk():
     st.caption(
         "長期指標（CAPE）不計入觸發統計：它一年可能都不變號，"
         "併進去會讓計數永久卡住，整區就沒人看了。")
-    st.caption(
-        "ⓘ 另有 3 項硬閾值無法自動取得：BofA Bull & Bear、Insider Buy/Sell、"
-        "Margin Debt 連續 3 月。完整 17 項掃描請用原本的 prompt 手動跑。")
+    st.caption(_MACRO_OFFLINE_NOTE)                     # [V27.38]
 
 
 # ── [V26.92] reversal_scanner 模組層級載入 ─────────────────────
@@ -7709,7 +7760,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.36）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.38）",
                                   "#",
                                   "# [V27.24] 主表新增 `達標靜置` 欄：這次達標之前，有幾根 K 沒碰過",
                                   "#   同一個技術目標。越大＝盤整越久才突破。",
@@ -8818,6 +8869,22 @@ def _render_ai_target_scan():
             # [V27.36] 缺收盤的檔先批次抓 30 分 K（跟個人掃描器同一支）
             _live_map, _n_live_need, _live_err = prefetch_live_for_missing(batch, tickers)
 
+            # [V27.37] 「訊號」欄：直接呼叫個人清單掃描的 scan_personal_signals，
+            #   用同一份已下載的資料 —— 判定邏輯只有一份（Rule 7），
+            #   兩個掃描器才不會對同一檔講不同的話。
+            _sig_map, _sig_err = {}, None
+            if batch is not None:
+                try:
+                    for _sr in scan_personal_signals(
+                            tickers, lookback_days=3, pre_batch=batch,
+                            pre_live=(_live_map, _n_live_need, _live_err),
+                            fetch_analyst=False):
+                        _sig_map[_sr["代碼"]] = compact_signal_text(_sr.get("訊號"))
+                except Exception as _se:
+                    _sig_err = f"{type(_se).__name__}: {str(_se)[:120]}"
+            else:
+                _sig_err = "日 K 批次下載失敗，訊號沒有計算"
+
             for tk in tickers:
                 try:
                     # 從 batch 取出單股 df；若 batch 失敗則退回單檔抓
@@ -8888,12 +8955,14 @@ def _render_ai_target_scan():
                         "upside_l": upside_l,
                         "downside": downside,
                         "rating": rating,
+                        "signal": _sig_map.get(tk, ""),     # [V27.37]
                     })
                 except Exception:
                     continue
             return {"results": results, "scanned": len(tickers), "ok": len(results),
                     "filled_adj": _n_filled, "stale_last": _n_stale,   # [V27.35]
-                    "filled_30m": _n_live, "live_error": _live_err}    # [V27.36]
+                    "filled_30m": _n_live, "live_error": _live_err,    # [V27.36]
+                    "sig_error": _sig_err}                             # [V27.37]
 
         if st.session_state.pop("_tgt_force_clear", False):   # [V27.29] 見上方「強制刷新」
             _cached_target_scan.clear()
@@ -8949,11 +9018,16 @@ def _render_ai_target_scan():
                                      horizontal=True, index=2, key="tgt_topn")
         only_uptrend = tgt_ctrl3.checkbox("僅顯示強勢股", value=False, key="tgt_uptrend_only",
                                            help="只顯示現價 > SMA_20 的股票")
+        only_signal = tgt_ctrl3.checkbox(                  # [V27.37]
+            "僅顯示有訊號", value=False, key="tgt_signal_only",
+            help="只顯示最近 3 個交易日出現 💰達標／🤫吸籌／💎乖離抄底／🔁二次進場 的股票")
 
         # ── 篩選 + 排序 ──
         filtered = list(res_list)
         if only_uptrend:
             filtered = [r for r in filtered if r["rating"] == "強勢"]
+        if only_signal:
+            filtered = [r for r in filtered if r.get("signal")]
 
         if "短期" in sort_mode:
             filtered = sorted(filtered, key=lambda r: r["upside_s"], reverse=True)
@@ -8983,10 +9057,19 @@ def _render_ai_target_scan():
                     "長期空間": f"{r['upside_l']:+.2f}%",
                     "下跌風險 p10": f"{r['downside']:+.2f}%",
                     "強弱": rating_disp,
+                    "訊號": r.get("signal") or "—",           # [V27.37]
                 })
             st.dataframe(rows, hide_index=True, width='stretch')
+            # [V27.37] 訊號欄的定義與限制講在表下，不讓人把它讀成買點清單
+            st.caption(
+                "「訊號」＝最近 3 個交易日出現的 💰達標／🤫吸籌／💎乖離抄底／🔁二次進場，"
+                "跟「個人清單訊號掃描」用同一支判定。⚠️ 回測（17,600 筆）顯示達標**不是買點**"
+                "（扣成本後中位數超額 ≈ 0，較適合當減碼參考）；其餘三種訊號與本表的 MC 目標價"
+                "**都沒有經過回測**，只能當觀察名單，不是進場建議。")
+            if target_scan and target_scan.get("sig_error"):
+                st.caption(f"⚠️ 訊號欄沒算出來：{target_scan['sig_error']}")
         elif res_list:
-            st.info("⏳ 沒有符合篩選條件的股票。試試取消「僅顯示強勢股」勾選。")
+            st.info("⏳ 沒有符合篩選條件的股票。試試取消「僅顯示強勢股」「僅顯示有訊號」勾選。")
         elif target_scan is not None:                 # [V27.32] 沒跑過不顯示這句
             st.info("⏳ 掃描中或失敗。請等待或按「強制刷新」。")
 
