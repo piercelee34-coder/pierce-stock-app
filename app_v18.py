@@ -26,7 +26,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.40", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.41", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -5733,10 +5733,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.40" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.40" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.40" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.40")
+st.title("📡 掃描中心 V27.41" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.41" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.41" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.41")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -7309,6 +7309,44 @@ def _render_dip_charts(res):
                              f"{type(_e).__name__}: {_e}")
 
 
+def client_download_html(data, file_name, label):
+    """[V27.41] 在**瀏覽器端**產生下載（base64 → Blob → <a download>），不經伺服器。
+
+    為什麼：V27.40 部署後，st.download_button 的伺服器下載網址（/media/<雜湊>.zip）
+    在使用者自己的 Chrome 與 bot 的瀏覽器都失敗（「無法存取網站」），而且雜湊已經穩定
+    —— 不是 App 換網址，是 Streamlit Cloud 那條下載路徑本身取不到。
+    表格右上角內建的「下載 CSV」一直能用，因為它也是瀏覽器端產生的；這裡用同一個原理。
+    元件 iframe 的 sandbox 有 allow-downloads（Streamlit 1.59 前端原始碼確認）。"""
+    import base64 as _b64
+    import html as _html
+    _data = _b64.b64encode(data).decode("ascii")
+    # 中文檔名 → JS 字串（\uXXXX）；「</」再跳脫一次，檔名裡就算有 </script> 也斷不掉標籤
+    _name = json.dumps(file_name).replace("</", "<\\/")
+    _label = _html.escape(label)
+    return (
+        '<div style="font-family:system-ui,-apple-system,sans-serif">'
+        f'<button id="dl" style="width:100%;padding:.65rem 1rem;border:0;border-radius:.5rem;'
+        f'background:#ff4b4b;color:#fff;font-size:1rem;font-weight:600;cursor:pointer">{_label}</button>'
+        '<div id="msg" style="font-size:.8rem;color:#888;margin-top:.3rem"></div>'
+        '<script>'
+        f'const B64="{_data}",NAME={_name};'
+        'document.getElementById("dl").onclick=function(){'
+        'const m=document.getElementById("msg");'
+        'try{const b=atob(B64),u=new Uint8Array(b.length);'
+        'for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i);'
+        # 錨點建在**上層頁面**（Streamlit 主畫面，同源）是保險：不依賴元件 iframe 的
+        #   sandbox 設定。上層拿不到（跨來源）就退回在 iframe 裡下載。
+        #   實測（Chromium，UTF-8 語系）：檔名中文正確、bytes 與伺服器端打包的完全相同。
+        'let W=window;try{if(window.parent&&window.parent.document)W=window.parent;}catch(_){}'
+        'const url=W.URL.createObjectURL(new W.Blob([u],{type:"application/zip"}));'
+        'const a=W.document.createElement("a");a.href=url;a.download=NAME;a.style.display="none";'
+        'W.document.body.appendChild(a);a.click();'
+        'setTimeout(function(){W.URL.revokeObjectURL(url);a.remove();},60000);'
+        'm.textContent="已開始下載："+NAME;}'
+        'catch(e){m.textContent="下載失敗："+e+"（請改用表格右上角 ⬇ 下載 CSV）";}};'
+        '</script></div>')
+
+
 def _render_personal_scan():
     st.header("🎯 個人清單訊號掃描")
 
@@ -7904,7 +7942,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.40）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.41）",
                                   "#",
                                   "# [V27.24] 主表新增 `達標靜置` 欄：這次達標之前，有幾根 K 沒碰過",
                                   "#   同一個技術目標。越大＝盤整越久才突破。",
@@ -8109,15 +8147,15 @@ def _render_personal_scan():
                                         for _k, _v in _order]).to_csv(index=False))
                         _zw(_z, "04_折價門檻規則.txt", "\n".join(_bot_lines))
                     with _dl_slot:
-                        st.download_button(
-                            "　📦　下載本次掃描全部資料（ZIP）　📦　",
-                            _zbuf.getvalue(),
-                            file_name=f"戰情室掃描_{_sk}_{_ts or 'now'}.zip",
-                            mime="application/zip", width='stretch',
-                            type="primary", key="_dl_scan_zip",
-                            # [V27.40] 按下載不要 rerun 整個 App（雙保險：
-                            #   不 rerun 就不會在下載途中換掉檔案網址）
-                            on_click="ignore")
+                        # [V27.41] 改成瀏覽器端下載（見 client_download_html）。
+                        #   V27.40 的 st.download_button 在 Streamlit Cloud 上取不到檔案。
+                        import streamlit.components.v1 as _components
+                        _components.html(
+                            client_download_html(
+                                _zbuf.getvalue(),
+                                f"戰情室掃描_{_sk}_{_ts or 'now'}.zip",
+                                "📦　下載本次掃描全部資料（ZIP）　📦"),
+                            height=72)
                         st.caption(
                             "內含 主表／跨日比對／產業分組／折價門檻規則 四份，"
                             "檔名帶掃描範圍與時間，不會撞名。"
