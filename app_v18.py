@@ -26,7 +26,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.39", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.40", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -5733,10 +5733,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.39" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.39" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.39" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.39")
+st.title("📡 掃描中心 V27.40" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.40" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.40" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.40")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -7904,7 +7904,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.39）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.40）",
                                   "#",
                                   "# [V27.24] 主表新增 `達標靜置` 欄：這次達標之前，有幾根 K 沒碰過",
                                   "#   同一個技術目標。越大＝盤整越久才突破。",
@@ -8051,8 +8051,21 @@ def _render_personal_scan():
                     #   BOM 字元會被再編碼一次，反而更糟。
                     #   4253/4359/10801 行的單檔下載本來就已經 utf-8-sig，
                     #   只有 ZIP 這條路漏掉 —— Rule 7：統一成同一種。
+                    # [V27.40] ZIP 內每個檔的時間戳固定成「掃描時間」。
+                    #   原本 writestr(檔名, …) 會蓋上**當下時間**，所以每次 rerun
+                    #   打出來的 ZIP bytes 都不一樣 → Streamlit 換一個新的下載網址、
+                    #   把舊的刪掉。按下載鈕本身會觸發 rerun，正在下載的舊網址就被
+                    #   刪掉 → 瀏覽器顯示「canceled」（2026-10-21 bot 連兩次）。
+                    #   內容相同 → bytes 相同 → 網址不變，下載不會被打斷。
+                    try:
+                        _zdt = datetime.strptime(_scan_ts or "", "%Y-%m-%d %H:%M").timetuple()[:6]
+                    except Exception:
+                        _zdt = (1980, 1, 1, 0, 0, 0)
+
                     def _zw(_z, _name, _text):
-                        _z.writestr(_name, str(_text).encode("utf-8-sig"))
+                        _zi = _zf.ZipInfo(_name, date_time=_zdt)
+                        _zi.compress_type = _zf.ZIP_DEFLATED
+                        _z.writestr(_zi, str(_text).encode("utf-8-sig"))
 
                     with _zf.ZipFile(_zbuf, "w", _zf.ZIP_DEFLATED) as _z:
                         _zw(
@@ -8101,7 +8114,10 @@ def _render_personal_scan():
                             _zbuf.getvalue(),
                             file_name=f"戰情室掃描_{_sk}_{_ts or 'now'}.zip",
                             mime="application/zip", width='stretch',
-                            type="primary", key="_dl_scan_zip")
+                            type="primary", key="_dl_scan_zip",
+                            # [V27.40] 按下載不要 rerun 整個 App（雙保險：
+                            #   不 rerun 就不會在下載途中換掉檔案網址）
+                            on_click="ignore")
                         st.caption(
                             "內含 主表／跨日比對／產業分組／折價門檻規則 四份，"
                             "檔名帶掃描範圍與時間，不會撞名。"
