@@ -26,7 +26,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.38", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.39", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -3031,9 +3031,123 @@ def compact_signal_text(sigs):
     return "｜".join(f"{_t} {_d}" for _t, _d in _seen.items())
 
 
+# ── [V27.39] 🔇 相對量縮 ────────────────────────────────────────────
+#   使用者 2026-10-15：「大盤一起砸下來，💎 乖離抄底就一直亮」。
+#   回測（signal_backtest v1.4–v1.5，美股 1200 ＋ 台股 680，各兩年）：
+#     - 改用「個股 ÷ 大盤」算乖離抄底 → 大盤崩時同一天亮的檔數 380 → 102，
+#       但報酬跟原版一樣 ≈ 同一天隨機買
+#     - 再加「當天量 ≤ 20 日均量 0.7 倍」＋「折價 > 10%」→ 兩個市場、4 種出場、
+#       樣本內外 16 段全為正，每筆比隨機買多約 0.6～1.5 個百分點；
+#       單一市場 t 1.1～2.1，**未達嚴格顯著** → 只當觀察標記，不取代原版。
+#   判定式跟回測**同一套**（Rule 7）：
+#     相對 K 線＝開÷開、高÷高、低÷低、收÷收（×100、四捨五入 8 位）→
+#     calculate_indicators → detect_smart_money_status 回抄底／破底翻；
+#     折價% 四捨五入 1 位 > 10；量比（量 ÷ Vol_SMA20）四捨五入 2 位 ≤ 0.7。
+#   門檻是事先定好、兩個市場驗過的，不要看單次結果調。
+_REL_BENCH_US = "SPY"
+_REL_BENCH_TW = "0050.TW"     # 分兩行：回測腳本只抽「單一名稱」的常數，tuple 指派抽不到（v1.6 一致性比對抓到）
+_QUIET_DIP_DISC = 10.0
+_QUIET_DIP_VOL = 0.7
+
+
+def rel_bench_symbol(tk):
+    """這檔用哪個大盤當分母：台股（.TW／.TWO）→ 0050，其他 → SPY。"""
+    return _REL_BENCH_TW if str(tk).upper().endswith((".TW", ".TWO")) else _REL_BENCH_US
+
+
+def relative_ohlc(d, bench):
+    """個股 ÷ 大盤 的相對 K 線（同欄位相除，×100，四捨五入 8 位消浮點雜訊）。
+    大盤缺的日子往前補，不往後補。跟個股同步漲跌時是一條水平線。"""
+    b = bench.reindex(d.index).ffill()
+    rel = pd.DataFrame({c: (d[c] / b[c] * 100).round(8)
+                        for c in ("Open", "High", "Low", "Close")}, index=d.index)
+    rel["Volume"] = d["Volume"]
+    return rel
+
+
+def quiet_rel_dip_backs(d, bench, lookback_days):
+    """回傳最近 lookback_days 根裡，哪幾個 back（0＝最新一根）符合 🔇 相對量縮。
+    d 必須已經 calculate_indicators（要 Vol_SMA20）。大盤那天沒有實際 K 棒
+    （例如 Yahoo 還沒更新）→ 那天不判斷，不拿前一天的大盤硬算。"""
+    out = set()
+    if bench is None or len(bench) == 0 or len(d) < 80 or "Vol_SMA20" not in d.columns:
+        return out
+    # 先用個股自己的條件（量縮、折價、大盤當天有 K）篩出候選日 —— 便宜，
+    #   而且絕大多數檔三天都不量縮，就不必再算一整套相對 K 線的指標
+    #   （實測：400 檔不先篩要多 18 秒，先篩後幾乎不增加）。條件跟順序無關，結果一樣。
+    b_days = set(bench.index)
+    cands = []
+    for back in range(lookback_days):
+        end = len(d) - back
+        t = end - 1
+        if end < 60:
+            break
+        if d.index[t] not in b_days:
+            continue
+        hi = float(d["High"].iloc[max(0, end - 252):end].max())
+        c = float(d["Close"].iloc[t])
+        if not (hi > 0 and round((hi - c) / hi * 100, 1) > _QUIET_DIP_DISC):
+            continue
+        v20 = d["Vol_SMA20"].iloc[t]
+        if not (pd.notna(v20) and v20 > 0
+                and round(float(d["Volume"].iloc[t]) / float(v20), 2) <= _QUIET_DIP_VOL):
+            continue
+        cands.append(back)
+    if not cands:
+        return out
+    rel = relative_ohlc(d, bench)
+    ok = rel["Close"].notna().values
+    if not ok.any():
+        return out
+    first = int(np.argmax(ok))
+    ri = calculate_indicators(rel.iloc[first:].copy())
+    if "Bollinger_Lower" not in ri.columns:
+        return out
+    for back in cands:
+        k = len(d) - 1 - back - first
+        if k < 59:
+            continue
+        rr = ri.iloc[k]
+        # 兩條抄底路徑都要先破相對下軌（低÷低 不一定 ≤ 收÷收，兩個都看）
+        if not (rr["Low"] < rr["Bollinger_Lower"] or rr["Close"] < rr["Bollinger_Lower"]):
+            continue
+        st_ = detect_smart_money_status(ri.iloc[:k + 1])
+        if not st_ or "吸籌" in st_ or not ("抄底" in st_ or "破底翻" in st_):
+            continue
+        out.add(back)
+    return out
+
+
+def fetch_rel_benches(tickers, pre_bench=None):
+    """回傳 ({大盤代碼: 日K}, 錯誤訊息或 None)。pre_bench（dict）給了就直接用，不抓。
+    只抓清單裡真的用得到的大盤（純美股清單不抓 0050）。"""
+    if pre_bench is not None:
+        return dict(pre_bench), None
+    need = sorted({rel_bench_symbol(t) for t in tickers})
+    out, errs = {}, []
+    for sym in need:
+        try:
+            b = yf.download(sym, period="1y", auto_adjust=False, progress=False)
+            if b is None or b.empty:
+                errs.append(f"{sym}: 空資料")
+                continue
+            if isinstance(b.columns, pd.MultiIndex):
+                b.columns = b.columns.get_level_values(0)
+            b, _ = fill_last_close(b)
+            b = b[b["Close"].notna()]
+            if len(b):
+                out[sym] = b
+            else:
+                errs.append(f"{sym}: 沒有收盤價")
+        except Exception as _e:
+            errs.append(f"{sym}: {type(_e).__name__}: {str(_e)[:80]}")
+    return out, ("；".join(errs) or None)
+
+
 def scan_personal_signals(tickers, lookback_days=3, stats=None,
                           tap_fresh_days=_TAP_FRESH_DAYS,
-                          pre_batch=None, pre_live=None, fetch_analyst=True):
+                          pre_batch=None, pre_live=None, fetch_analyst=True,
+                          pre_bench=None):
     """[V26.28] 掃描指定清單在『最近 lookback_days 個交易日』內出現的
     達標 / 吸籌 / 乖離抄底訊號。回傳 list of dict（一檔可多訊號合併一列）。
 
@@ -3091,6 +3205,7 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
                       # [V27.36] 30 分 K 補當天收盤
                       "nan_close_filled_30m": 0, "live_requested": 0,
                       "live_got": 0, "live_error": None,
+                      "rel_bench_error": None,      # [V27.39] 大盤抓不到 → 🔇 這次不判斷
                       "yf_version": str(getattr(yf, "__version__", "?"))})
     # [V27.37] pre_batch / pre_live：呼叫端（AI 目標掃描器）已經下載好同一份
     #   日 K 與 30 分 K，直接拿來用，不重抓 —— 同一批股票抓兩次只是多被限流。
@@ -3122,6 +3237,10 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
     if stats is not None:
         stats["live_requested"], stats["live_got"] = _n_need, len(_live_map)
         stats["live_error"] = _live_err
+    # [V27.39] 🔇 相對量縮要用的大盤（美 SPY／台 0050）。抓不到只影響這一種訊號
+    _benches, _bench_err = fetch_rel_benches(tickers, pre_bench)
+    if stats is not None:
+        stats["rel_bench_error"] = _bench_err
 
     out = []
     for tk in tickers:
@@ -3272,6 +3391,20 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
                         hits.append(("💎 乖離抄底", md, round(float(row["Close"]), 2)))
                         _hit_backs.add(back); _hit_types.add("💎 乖離抄底")
                         _legacy_types.add("💎 乖離抄底")
+
+            # [V27.39] 🔇 相對量縮。自己包 try：次要訊號不能殺掉主要訊號（同二次進場）
+            try:
+                _qbacks = quiet_rel_dip_backs(
+                    d, _benches.get(rel_bench_symbol(tk)), lookback_days)
+            except Exception:
+                _qbacks = set()
+            for _qb in sorted(_qbacks):
+                _qi = len(d) - 1 - _qb
+                _qdt = d.index[_qi]
+                hits.append(("🔇 相對量縮", f"{_qdt.month}/{_qdt.day}",
+                             round(float(d["Close"].iloc[_qi]), 2)))
+                _hit_backs.add(_qb); _hit_types.add("🔇 相對量縮")
+                _legacy_types.add("🔇 相對量縮")
 
             if stats is not None:
                 if _legacy_types:
@@ -5600,10 +5733,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.38" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.38" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.38" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.38")
+st.title("📡 掃描中心 V27.39" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.39" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.39" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.39")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -7006,6 +7139,9 @@ _SIG_DISC_RULES = [
      "但技術上檔% 中位數 0.0、P75 僅 1.2。"
      "套「折價>10%」會誤砍 40%（28/70）。"
      "要看「離突破多近」請改用 `技術上檔%`，那才是達標的特徵量。"),
+    ("相對量縮", False,
+     "[V27.39] 判定式**已經內含**「折價% > 10」（加上個股÷大盤破底、量 ≤ 20 日均量 0.7 倍），"
+     "再套一次折價篩選是重複的，不會多砍也不會多留。"),
     ("二次進場", False,
      "判定式是多頭排列維持中、回檔觸月線但收盤未破季線、且低點高於前低 —— "
      "上升趨勢裡的**淺**回檔，回檔深度由月線／季線決定，跟一年高無關。"
@@ -7190,7 +7326,12 @@ def _render_personal_scan():
             f"{_SECOND_ENTRY_FRESH_DAYS} 個交易日** —— 低點要等右邊 "
             f"{_SECOND_ENTRY_ZIGZAG_N} 根都比它高才算數，所以表上顯示的日期"
             f"會是 {_SECOND_ENTRY_ZIGZAG_N}~{_SECOND_ENTRY_ZIGZAG_N + _SECOND_ENTRY_FRESH_DAYS - 1}"
-            f" 個交易日前，那是定義使然，不是資料延遲。")
+            f" 個交易日前，那是定義使然，不是資料延遲。\n\n"
+            f"🔇 **相對量縮**（V27.39）＝把股價換成「個股 ÷ 大盤」（美股 SPY／台股 0050）"
+            f"仍跌破布林下軌且超賣、離一年高 > {_QUIET_DIP_DISC:g}%、當天量 ≤ 20 日均量 "
+            f"{_QUIET_DIP_VOL:g} 倍 —— 比大盤跌得兇、但沒人在恐慌賣。跟大盤一起砸的不會亮。"
+            "回測（美股 1200、台股 680，各兩年）比同一天隨機買每筆多約 0.6～1.5 個百分點，"
+            "兩個市場方向一致但**未達嚴格顯著**：觀察標記，不是買進建議。")
         _scan_scope = st.radio(
             "掃描範圍",
             ["📌 自選股清單", "🎯 AI 目標清單（242 檔，約 2-4 分鐘）",
@@ -7414,6 +7555,9 @@ def _render_personal_scan():
             _stale_msg = scan_stale_message(_cov_st)     # [V27.31]
             if _stale_msg:
                 st.warning(_stale_msg)
+            if _cov_st.get("rel_bench_error"):           # [V27.39]
+                st.warning("⚠️ 大盤資料沒抓到，🔇 相對量縮這次沒有判斷（其他訊號不受影響）："
+                           f"{_cov_st['rel_bench_error']}")
             if not _res:
                 if not _cov_msg:
                     st.info("最近 3 個交易日，清單中沒有出現達標 / 吸籌 / 乖離抄底訊號。"
@@ -7760,7 +7904,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.38）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.39）",
                                   "#",
                                   "# [V27.24] 主表新增 `達標靜置` 欄：這次達標之前，有幾根 K 沒碰過",
                                   "#   同一個技術目標。越大＝盤整越久才突破。",
@@ -9020,7 +9164,7 @@ def _render_ai_target_scan():
                                            help="只顯示現價 > SMA_20 的股票")
         only_signal = tgt_ctrl3.checkbox(                  # [V27.37]
             "僅顯示有訊號", value=False, key="tgt_signal_only",
-            help="只顯示最近 3 個交易日出現 💰達標／🤫吸籌／💎乖離抄底／🔁二次進場 的股票")
+            help="只顯示最近 3 個交易日出現 💰達標／🤫吸籌／💎乖離抄底／🔁二次進場／🔇相對量縮 的股票")
 
         # ── 篩選 + 排序 ──
         filtered = list(res_list)
@@ -9062,10 +9206,12 @@ def _render_ai_target_scan():
             st.dataframe(rows, hide_index=True, width='stretch')
             # [V27.37] 訊號欄的定義與限制講在表下，不讓人把它讀成買點清單
             st.caption(
-                "「訊號」＝最近 3 個交易日出現的 💰達標／🤫吸籌／💎乖離抄底／🔁二次進場，"
+                "「訊號」＝最近 3 個交易日出現的 💰達標／🤫吸籌／💎乖離抄底／🔁二次進場／🔇相對量縮，"
                 "跟「個人清單訊號掃描」用同一支判定。⚠️ 回測（17,600 筆）顯示達標**不是買點**"
-                "（扣成本後中位數超額 ≈ 0，較適合當減碼參考）；其餘三種訊號與本表的 MC 目標價"
-                "**都沒有經過回測**，只能當觀察名單，不是進場建議。")
+                "（扣成本後中位數超額 ≈ 0，較適合當減碼參考）。[V27.39] 回測（美股 1200、台股 680，"
+                "各兩年）：🤫吸籌／💎乖離抄底／🔁二次進場 跟同一天隨機買**沒有可區分的差別**；"
+                "🔇相對量縮 兩個市場都略好但未達嚴格顯著。本表的 MC 目標價沒有經過回測。"
+                "全部只能當觀察名單，不是進場建議。")
             if target_scan and target_scan.get("sig_error"):
                 st.caption(f"⚠️ 訊號欄沒算出來：{target_scan['sig_error']}")
         elif res_list:
