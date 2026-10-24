@@ -26,7 +26,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.41", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.42", layout="wide", page_icon="🚨")
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -2691,6 +2691,47 @@ def get_relative_strength(ticker, stock_df):
     except Exception:
         pass
     return "⚖️ 跟隨大盤", "sig-gray"
+
+
+# ── [V27.42] 事後確認的低點、乖離抄底的結果 ─────────────────────────
+#   使用者 2026-10-24：「圖上的低點看起來很清楚，為什麼抓不出來？」→ 把「事後才知道的
+#   低點」跟「當天就亮的 💎 乖離抄底」畫在同一張圖，每個訊號標出之後有沒有再跌。
+#   低點定義：收盤是**前後各 SWING_LOW_WINDOW 個交易日**裡最低（使用者選 20 天：
+#   一檔一年約 4 個，跟肉眼看到的波段低點最接近）。右邊要滿 20 根才確認，
+#   所以**最新 20 根永遠標不出來** —— 這是定義，不是漏標。
+#   全市場實測（美股 1200／台股 680，兩年）：乖離抄底那天事後是 20 天低點的
+#   比例 15.5%／19.9%；真正的 20 天低點當天有乖離抄底 23.7%／24.5%。
+SWING_LOW_WINDOW = 20
+
+
+def swing_low_flags(close, w=SWING_LOW_WINDOW):
+    """回傳布林 Series：這天的收盤是前後各 w 天（含當天）裡最低，而且前後都滿 w 天。
+    同一段裡收盤一樣低的只標第一天。只用來事後檢討，不能當當天的訊號（用到未來 w 天）。"""
+    c = pd.Series(close, dtype=float)
+    n = len(c)
+    out = np.zeros(n, dtype=bool)
+    v = c.values
+    for t in range(w, n - w):
+        seg = v[t - w:t + w + 1]
+        if np.isnan(v[t]) or np.isnan(seg).any():
+            continue
+        if v[t] <= seg.min() and not (v[t - w:t] <= v[t]).any():
+            out[t] = True
+    return pd.Series(out, index=c.index)
+
+
+def dip_outcome(close, t, w=SWING_LOW_WINDOW):
+    """乖離抄底（第 t 根）之後的結果：之後 w 天的最低收盤比它低多少。
+    回傳 (狀態, 再跌%)：'✅' 之後 w 天收盤都沒更低；'❌' 有更低（附再跌%，負數）；
+    '⏳' 之後還不滿 w 天（附目前為止的再跌%，可能是 0）。"""
+    v = pd.Series(close, dtype=float).values
+    fut = v[t + 1:t + 1 + w]
+    if len(fut) == 0:
+        return "⏳", 0.0
+    drop = min(0.0, (float(np.nanmin(fut)) / float(v[t]) - 1) * 100)
+    if len(fut) < w:
+        return "⏳", round(drop, 1)
+    return ("✅", 0.0) if drop >= 0 else ("❌", round(drop, 1))
 
 
 def detect_smart_money_status(df):
@@ -5733,10 +5774,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.41" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.41" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.41" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.41")
+st.title("📡 掃描中心 V27.42" if cur_t == "__SCANNER__"
+         else "🎯 訊號驗證 V27.42" if cur_t == "__VERIFY__"
+         else "📊 持倉戰情總表 V27.42" if cur_t == "__DASHBOARD__"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.42")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -7942,7 +7983,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.41）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.42）",
                                   "#",
                                   "# [V27.24] 主表新增 `達標靜置` 欄：這次達標之前，有幾根 K 沒碰過",
                                   "#   同一個技術目標。越大＝盤整越久才突破。",
@@ -11216,6 +11257,49 @@ if mobile_mode and len(p_data) >= 15:
     except Exception:
         _mob_yrange = None
 
+# [V27.42] 事後確認的低點（▲）＋每個 💎 乖離抄底之後有沒有再跌。只在日線畫。
+_swl_stats = None
+if "日" in time_opt:
+    try:
+        _swl_full = swing_low_flags(df["Close"])
+        _swl = _swl_full.reindex(p_data.index, fill_value=False)
+        _swl_dates = list(p_data.index[_swl.values])
+        if _swl_dates:
+            fig.add_trace(go.Scatter(
+                x=_swl_dates, y=[float(p_data.loc[_d, "Low"]) * 0.985 for _d in _swl_dates],
+                mode="markers", marker=dict(symbol="triangle-up", size=12, color="#22d3ee",
+                                            line=dict(color="#0e7490", width=1)),
+                hovertext=[f"事後確認低點（前後各 {SWING_LOW_WINDOW} 天最低收盤）"
+                           f"<br>{_d:%Y-%m-%d} 收 {float(p_data.loc[_d, 'Close']):.2f}" for _d in _swl_dates],
+                hoverinfo="text", showlegend=False), row=1, col=1)
+        _full_pos = {d: k for k, d in enumerate(df.index)}
+        _dip_res = []
+        for _i in range(len(p_data)):
+            _st = precomputed_status[_i]
+            if not (_st and ("抄底" in _st or "破底翻" in _st) and "吸籌" not in _st):
+                continue
+            _d = p_data.index[_i]
+            _mark, _drop = dip_outcome(df["Close"], _full_pos[_d])
+            _dip_res.append((_d, _mark, _drop, bool(_swl.loc[_d])))
+            fig.add_annotation(
+                x=_d, y=float(p_data.loc[_d, "Low"]),
+                text=(_mark if _mark == "✅" else f"{_mark}{_drop:+.1f}%"),
+                showarrow=False, yshift=-88, row=1, col=1,
+                font=dict(size=10, color="#e5e7eb"),
+                bgcolor="rgba(17,24,39,0.85)", bordercolor="#6b7280", borderwidth=1)
+        _done = [r for r in _dip_res if r[1] != "⏳"]
+        _bad = [r for r in _done if r[1] == "❌"]
+        _swl_stats = {
+            "lows": len(_swl_dates),
+            "lows_with_dip": sum(1 for _d in _swl_dates if any(r[0] == _d for r in _dip_res)),
+            "dips": len(_dip_res), "done": len(_done),
+            "ok": len(_done) - len(_bad), "bad": len(_bad),
+            "bad_avg": (round(float(np.mean([r[2] for r in _bad])), 1) if _bad else None),
+            "pending": len(_dip_res) - len(_done),
+        }
+    except Exception as _swl_e:
+        _swl_stats = {"error": f"{type(_swl_e).__name__}: {_swl_e}"}
+
 fig.update_layout(
     dragmode=False if mobile_mode else 'zoom',
     height=800, template="plotly_dark",
@@ -11239,6 +11323,20 @@ st.caption(
     f"所以最新 {_SECOND_ENTRY_ZIGZAG_N} 根永遠不會有標記 —— 這是定義使然，不是漏標。"
     f"　淡色標＝條件成立但大盤/MA60 未過。"
 )
+# [V27.42] 低點對照的統計。這一行是給人看、也給 bot 照抄的，所以數字講完整。
+if _swl_stats and "error" not in _swl_stats:
+    _ss = _swl_stats
+    st.caption(
+        f"📍 **低點對照**（▲＝事後確認低點：前後各 {SWING_LOW_WINDOW} 個交易日的最低收盤）："
+        f"本畫面 ▲ **{_ss['lows']}** 個，其中 **{_ss['lows_with_dip']}** 個當天有 💎 乖離抄底。"
+        f"　💎 乖離抄底 **{_ss['dips']}** 次：✅ {_ss['ok']} 次（之後 {SWING_LOW_WINDOW} 天收盤沒再更低）、"
+        f"❌ {_ss['bad']} 次"
+        + (f"（之後平均再跌 {_ss['bad_avg']}%）" if _ss['bad_avg'] is not None else "")
+        + f"、⏳ {_ss['pending']} 次（還不滿 {SWING_LOW_WINDOW} 天）。"
+        f"　⚠️ ▲ 要等右邊 {SWING_LOW_WINDOW} 根才確認，最新 {SWING_LOW_WINDOW} 根永遠不會有 ▲；"
+        "它是用來**檢討訊號**的，不是買點。全市場兩年實測：乖離抄底事後是低點的只有 15～20%。")
+elif _swl_stats:
+    st.caption(f"⚠️ 低點對照沒算出來：{_swl_stats['error']}")
 
 # ──────────────────────────────────────────────────────
 # ──────────────────────────────────────────────────────
