@@ -26,7 +26,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.42", layout="wide", page_icon="🚨")
+st.set_page_config(page_title="AI 實戰戰情室 V27.43", layout="wide", page_icon="🚨")  # page_title="AI 實戰戰情室 V27.42"
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -74,6 +74,9 @@ DEFAULT_WATCHLISTS = {
     "🇹🇼 台持股": ['00403A.TW', '0050.TW', '00878.TW', '2330.TW', '5534.TW', '3037.TW', '7610.TW'],
     "🔭 台觀察": ['^TWII', '8150.TW', '3535.TW', '1504.TW', '6830.TW', '8021.TW', '2327.TW',
                   '1815.TWO', '5347.TWO', '2344.TW', '2324.TW', '8215.TW', '4958.TW'],
+    # [V27.43] 潛力股觀察：偵察追蹤名單，來源 tracking-baseline.csv
+    "🚀 潛力股觀察": ['ALGM', 'MYRG', 'FN', 'MTZ', 'AAON', 'STRL', 'DY',
+                    '5309.TWO', '2421.TW', '2481.TW', '3042.TW', '2355.TW', '3338.TW', '5469.TW', '5536.TWO'],
 }
 
 # [修復 #3 v2] 拿掉 hardcoded fallback；抓不到環境變數時回空字串並印警告
@@ -1164,11 +1167,19 @@ def load_watchlists():
         st.session_state['gist_synced'] = True
         st.session_state['gist_status'] = "ok"
         json_save(WATCHLIST_FILE, remote)  # 同步刷新本地離線備援
-        return remote
+        return _ensure_potential_list(remote)
     # 讀不到 Gist → 備援模式，禁止本 session 回寫 Gist（決策 #3）
     st.session_state['gist_synced'] = False
     st.session_state['gist_status'] = "unconfigured" if not (GIST_TOKEN and GIST_ID) else "error"
-    return json_load(WATCHLIST_FILE, DEFAULT_WATCHLISTS)
+    return _ensure_potential_list(json_load(WATCHLIST_FILE, DEFAULT_WATCHLISTS))
+
+def _ensure_potential_list(data):
+    """[V27.43] Gist／本地檔已存在時 DEFAULT 不會生效；缺「潛力股觀察」就補上（只補不改）。"""
+    if isinstance(data, dict):
+        for _k, _v in DEFAULT_WATCHLISTS.items():
+            if '潛力股觀察' in _k and not any('潛力股觀察' in x for x in data):
+                data[_k] = list(_v)
+    return data
 
 def save_watchlists(data):
     """一律寫本地 + session_state；僅在本 session 成功讀過 Gist 時才回寫 Gist
@@ -2448,6 +2459,61 @@ def find_structural_box_bottom(df, current_price):
     return p['Low'].min(), p.index[0], p.index[-1], True
 
 
+def drop_fake_candles(df):
+    """[V27.43] 剔除假K：成交量為0且開高低收四價同值（如颱風休市、假日K）。"""
+    if df is None or df.empty or 'Volume' not in df.columns:
+        return df
+    mask = (
+        (df['Volume'].fillna(0) == 0) &
+        (df['Open'] == df['High']) &
+        (df['High'] == df['Low']) &
+        (df['Low'] == df['Close'])
+    )
+    return df[~mask]
+
+
+def load_level_tracker():
+    """[V27.43] 讀入 level-tracker.csv（yt財經筆記頻道點位）。
+    多價位欄（如 346/329/325）逐一拆解。
+    回傳 dict: {ticker: [float, ...]}，檔案不存在回空 dict。
+    """
+    try:
+        _path = os.path.join(os.path.dirname(os.path.abspath(__file__)) if "__file__" in dir() else ".", "level-tracker.csv")
+        if not os.path.isfile(_path):
+            return {}
+        _lt = pd.read_csv(_path, encoding="utf-8-sig", dtype=str)
+        _lt.columns = [c.strip() for c in _lt.columns]
+        result = {}
+        _ticker_col = next((c for c in _lt.columns if c.lower() in ("代碼", "ticker", "symbol")), None)
+        if _ticker_col is None:
+            return {}
+        for _, row in _lt.iterrows():
+            _tk = str(row[_ticker_col]).strip()
+            if not _tk or _tk == "nan":
+                continue
+            _levels = []
+            for _col in _lt.columns:
+                if _col == _ticker_col:
+                    continue
+                _val = str(row.get(_col, "")).strip()
+                if not _val or _val == "nan":
+                    continue
+                # 拆解 "346/329/325" 等多價位格式
+                for _part in re.split(r"[/,;｜|]+", _val):
+                    _p = _part.strip()
+                    try:
+                        _lv = float(_p)
+                        if _lv > 0:
+                            _levels.append(_lv)
+                    except ValueError:
+                        pass
+            if _levels:
+                result[_tk] = sorted(set(round(v, 4) for v in _levels))
+        return result
+    except Exception:
+        return {}
+
+
 def generate_projection_points(df, trend_text, cur_p, iron_p, is_brk, ph_support, ph_resist):
     last_d = df.index[-1]
     f_d = []
@@ -3321,6 +3387,7 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
                                          "Adj Close", "Volume")
                                         if c in d.columns))
                     d = d[~_nc]
+            d = drop_fake_candles(d)  # [V27.43] 剔除假K
             if d is None or d.empty:
                 if stats is not None:
                     stats["skipped_no_data"] += 1
@@ -3561,6 +3628,11 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
 
             _tech = float(threshold) if threshold else None
             _tech_up = round((_tech / price - 1) * 100, 1) if (_tech and price) else None
+            # [V27.43] 技術目標低於現價：標記「已突破技術目標」，上檔%不顯示負值
+            _tech_note = None
+            if _tech_up is not None and _tech_up < 0:
+                _tech_note = "已突破技術目標"
+                _tech_up = 0.0
 
             # [V27.26] 最近的上下關卡。跟個股頁的階梯**共用同一支**
             #   build_level_ladder —— 兩個地方各算一套，遲早對不起來。
@@ -3643,6 +3715,81 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
             _sig_types = "｜".join(
                 f"{_t} {_d} ${_p}" for _t, _d, _p in uniq)
 
+            # ── [V27.43] 新欄位：req 4 達到點位、req 5 交叉/▲/抄底、req 7 ATR注解 ──
+            _reached_flags = []  # req 4
+            try:
+                _sr43 = find_key_sr_levels(d)
+                _ns43, _nr43 = _sr43.get("nearest_support"), _sr43.get("nearest_resist")
+                _ld43 = str(d.index[-1].date())
+                if _ns43 and abs(price - _ns43) / max(_ns43, 1e-9) <= 0.005:
+                    _reached_flags.append(f"碰支撐 {_ld43} ${_ns43:.2f}")
+                if _nr43 and abs(price - _nr43) / max(_nr43, 1e-9) <= 0.005:
+                    _reached_flags.append(f"碰壓力 {_ld43} ${_nr43:.2f}")
+                if threshold and not pd.isna(d["High"].iloc[-1]) and float(d["High"].iloc[-1]) >= threshold:
+                    _reached_flags.append(f"最高≥技術目標 {_ld43} ${threshold:.2f}")
+                if "ATR_Trailing_Stop" in d.columns:
+                    _atr_s43 = float(d["ATR_Trailing_Stop"].iloc[-1])
+                    if not pd.isna(_atr_s43) and price <= _atr_s43:
+                        _reached_flags.append(f"收盤≤ATR停損 {_ld43} ${_atr_s43:.2f}")
+                _iron43, _, _, _brk43 = find_structural_box_bottom(d, price)
+                if _brk43:
+                    _reached_flags.append(f"箱底跌破 {_ld43} ${float(_iron43):.2f}")
+            except Exception:
+                pass
+
+            # req 5: MACD / MA 交叉日期
+            _macd_gold_dt = _macd_dead_dt = _ma_gold_dt = _ma_dead_dt = None
+            try:
+                if "MACD" in d.columns and "Signal_Line" in d.columns:
+                    _mg = (d["MACD"] > d["Signal_Line"]) & (d["MACD"].shift(1) <= d["Signal_Line"].shift(1))
+                    _md = (d["MACD"] < d["Signal_Line"]) & (d["MACD"].shift(1) >= d["Signal_Line"].shift(1))
+                    _gi = _mg[_mg].index; _macd_gold_dt = str(_gi[-1].date()) if len(_gi) else None
+                    _di = _md[_md].index; _macd_dead_dt = str(_di[-1].date()) if len(_di) else None
+                if "SMA_20" in d.columns and "SMA_60" in d.columns:
+                    _ag = (d["SMA_20"] > d["SMA_60"]) & (d["SMA_20"].shift(1) <= d["SMA_60"].shift(1))
+                    _ad = (d["SMA_20"] < d["SMA_60"]) & (d["SMA_20"].shift(1) >= d["SMA_60"].shift(1))
+                    _agi = _ag[_ag].index; _ma_gold_dt = str(_agi[-1].date()) if len(_agi) else None
+                    _adi = _ad[_ad].index; _ma_dead_dt = str(_adi[-1].date()) if len(_adi) else None
+            except Exception:
+                pass
+
+            # req 5: 最近 ▲ 日期/價格 + 最近抄底結果
+            _last_swing_dt = _last_swing_px = _last_dip_result = None
+            try:
+                _swl43 = swing_low_flags(d["Close"])
+                _swl_idx43 = _swl43[_swl43].index
+                if len(_swl_idx43):
+                    _ls43 = _swl_idx43[-1]
+                    _last_swing_dt = str(_ls43.date())
+                    _last_swing_px = round(float(d.loc[_ls43, "Close"]), 2)
+                for _ri in range(len(d) - 1, max(0, len(d) - 30), -1):
+                    _sm43 = detect_smart_money_status(d.iloc[max(0, _ri - 9):_ri + 1])
+                    if _sm43 and ("抄底" in _sm43 or "破底翻" in _sm43):
+                        _sym43, _pct43 = dip_outcome(d["Close"], _ri)
+                        _last_dip_result = f"{_sym43}{_pct43:+.1f}%" if _pct43 != 0 else str(_sym43)
+                        break
+            except Exception:
+                pass
+
+            # req 7: ATR 停損跌破分析
+            _atr_breach_info = None
+            try:
+                if "ATR_Trailing_Stop" in d.columns and "ATR" in d.columns:
+                    _atr_st = d["ATR_Trailing_Stop"]
+                    _blw = d["Close"] < _atr_st
+                    if bool(_blw.iloc[-1]):
+                        _fb = _blw & ~_blw.shift(1, fill_value=False)
+                        _bd_idx = _fb[_fb].index
+                        if len(_bd_idx):
+                            _bd = _bd_idx[-1]
+                            _days_b = int((d.index[-1] - _bd).days)
+                            _atr_now = float(d["ATR"].iloc[-1])
+                            _dist_b = round(abs(float(_atr_st.iloc[-1]) - price) / _atr_now, 1) if _atr_now > 0 else None
+                            _depth_b = "剛跌破" if _days_b <= 5 else "已深跌"
+                            _atr_breach_info = f"{_depth_b} {_days_b}天前 距停損{_dist_b}ATR"
+            except Exception:
+                pass
+
             out.append({
                 "代碼": tk,
                 "名稱": get_stock_name(tk),
@@ -3658,9 +3805,19 @@ def scan_personal_signals(tickers, lookback_days=3, stats=None,
                 "分析師上檔%": _an_up,
                 "技術目標": round(_tech, 2) if _tech else None,
                 "技術上檔%": _tech_up,
+                "技術目標_備註": _tech_note,   # [V27.43] 已突破技術目標 or None
                 "達標靜置": _quiet_bars,      # [V27.24] 無達標訊號 → None
                 "上方關卡%": _up_pct,          # [V27.26] 正數
                 "下方關卡%": _dn_pct,          # [V27.26] 負數
+                "達到點位": "｜".join(_reached_flags) if _reached_flags else None,  # [V27.43] req4
+                "MACD金叉日": _macd_gold_dt,   # [V27.43] req5
+                "MACD死叉日": _macd_dead_dt,   # [V27.43] req5
+                "MA金叉日": _ma_gold_dt,       # [V27.43] req5
+                "MA死叉日": _ma_dead_dt,       # [V27.43] req5
+                "最近▲日": _last_swing_dt,     # [V27.43] req5
+                "最近▲價": _last_swing_px,     # [V27.43] req5
+                "最近抄底結果": _last_dip_result,  # [V27.43] req5
+                "ATR停損狀態": _atr_breach_info,   # [V27.43] req7
                 "_an_state": _an_state,
                 "_an_value": _an,
                 "訊號": uniq,
@@ -4152,6 +4309,9 @@ def find_key_sr_levels(df, n_levels=3):
     else:
         range_pos = 50.0
 
+    # [V27.43] 一年高低旗標：距一年低/高在 1% 以內視為「已在極值」
+    at_1yr_low = (price <= _52w_low * 1.01)
+    at_1yr_high = (price >= _52w_high * 0.99)
     return {
         "supports": supports[:n_levels],
         "resists": resists[:n_levels],
@@ -4160,6 +4320,8 @@ def find_key_sr_levels(df, n_levels=3):
         "range_pos": round(min(100, max(0, range_pos)), 1),
         "_52w_high": _52w_high,
         "_52w_low": _52w_low,
+        "at_1yr_low": at_1yr_low,
+        "at_1yr_high": at_1yr_high,
     }
 
 
@@ -5774,10 +5936,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.42" if cur_t == "__SCANNER__"
-         else "🎯 訊號驗證 V27.42" if cur_t == "__VERIFY__"
-         else "📊 持倉戰情總表 V27.42" if cur_t == "__DASHBOARD__"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.42")
+st.title("📡 掃描中心 V27.43" if cur_t == "__SCANNER__"  # "📡 掃描中心 V27.42"
+         else "🎯 訊號驗證 V27.43" if cur_t == "__VERIFY__"   # "🎯 訊號驗證 V27.42"
+         else "📊 持倉戰情總表 V27.43" if cur_t == "__DASHBOARD__"  # "📊 持倉戰情總表 V27.42"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.43")  # 實戰戰情室 V27.42")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -7983,7 +8145,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.42）",
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.43）",  # （來源：AI 實戰戰情室 V27.42）
                                   "#",
                                   "# [V27.24] 主表新增 `達標靜置` 欄：這次達標之前，有幾根 K 沒碰過",
                                   "#   同一個技術目標。越大＝盤整越久才突破。",
@@ -9600,6 +9762,7 @@ if df.index.tz is not None:
 
 df = df.replace([np.inf, -np.inf], np.nan)
 df = df.dropna(subset=['Open', 'High', 'Low', 'Close'])
+df = drop_fake_candles(df)  # [V27.43] 剔除假K（颱風休市等成交量0且四價同值）
 if len(df) < 2:
     st.error("數據連線異常或資料量不足以進行 AI 分析，請稍後再試。")
     st.stop()
@@ -9663,6 +9826,17 @@ if "日" in time_opt:
         _exp_day = None
 
 df = calculate_indicators(df)
+
+# [V27.43] req8 歷史不足 200 根時明示 MA200／一年高低不完整
+if len(df) < 200 and "日" in time_opt:
+    _hist_note_parts = []
+    if len(df) < 200:
+        _hist_note_parts.append(f"MA200（需 200 根，現有 {len(df)} 根，部分 NaN）")
+    _yr_bars = min(len(df), 252)
+    if _yr_bars < 252:
+        _hist_note_parts.append(f"一年高低僅含 {_yr_bars} 根（非完整 252 交易日）")
+    if _hist_note_parts:
+        st.warning(f"⚠️ **歷史資料不足**：{'、'.join(_hist_note_parts)}。以下指標值僅供參考。")
 
 latest = df.iloc[-1]
 close_v = float(latest['Close'])
@@ -9838,6 +10012,32 @@ try:
             with st.expander(f"📐 展開全部 {len(_lad)} 格關卡（還有 {_hid} 格）",
                              expanded=False):
                 st.code(_render(99), language=None)
+
+        # [V27.43] req6 頻道點位對照（level-tracker.csv）
+        try:
+            _lt_map = load_level_tracker()
+            _ch_levels = _lt_map.get(cur_t, [])
+            if _ch_levels:
+                _ch_lines = []
+                for _cv in _ch_levels:
+                    _pct_cv = (_cv / close_v - 1) * 100
+                    # 找最近的 App 點位
+                    _closest_app = min(_lad, key=lambda g: abs(g["價位"] - _cv)) if _lad else None
+                    if _closest_app:
+                        _diff_pct = abs(_closest_app["價位"] - _cv) / max(_cv, 1e-9) * 100
+                        if _diff_pct < 5:
+                            _rel = f"⚡ 共振（App {_closest_app['價位']:,.2f} 差{_diff_pct:.1f}%）"
+                        else:
+                            _rel = f"⚠️ 衝突（App最近點 {_closest_app['價位']:,.2f} 差{_diff_pct:.1f}%）"
+                    else:
+                        _rel = "—"
+                    _above_price = "⚠️ 頻道支撐已高於現價" if _cv > close_v else ""
+                    _ch_lines.append(f"  {_cv:>10,.2f}  {_pct_cv:+7.1f}%  {_rel}  {_above_price}")
+                st.caption("📺 **yt財經筆記頻道點位**（level-tracker.csv）：")
+                st.code("\n".join(_ch_lines), language=None)
+        except Exception:
+            pass
+
         st.caption(
             "關卡來源：前高／前低（120 根內的轉折）、箱底、量價密集（60 根）、"
             "技術目標、60 日高、一年高低、均線、量測目標（區間高度投射）、整數關。"
@@ -10073,6 +10273,8 @@ if sr_info:
     _n_s = sr_info.get("nearest_support")
     _n_r = sr_info.get("nearest_resist")
     _52h = sr_info.get("_52w_high")
+    _at_1yr_low = sr_info.get("at_1yr_low", False)   # [V27.43]
+    _at_1yr_high = sr_info.get("at_1yr_high", False)  # [V27.43]
     _mc_ran_sr = st.session_state.get('_mc_status_v27', {}).get('ran', False)
 
     # 區間位置 bar 顏色
@@ -10112,9 +10314,11 @@ if sr_info:
         _sr_verdict = "⚪ 無明確方向 → <b>等待訊號</b>"
         _verdict_clr = "#9ca3af"
 
-    # 格式化支撐/阻力列表
-    def _fmt_sr(levels, prefix, color):
+    # 格式化支撐/阻力列表  [V27.43] 一年高低無壓/無撐顯示明確說明
+    def _fmt_sr(levels, prefix, color, at_extreme=False, extreme_msg=""):
         if not levels:
+            if at_extreme and extreme_msg:
+                return f'<span style="color:#f97316;font-size:12px;">{extreme_msg}</span>'
             return f'<span style="color:#666;">—</span>'
         parts = []
         for i, lv in enumerate(levels[:3]):
@@ -10130,9 +10334,9 @@ if sr_info:
             st.markdown(
                 f'<div style="background:#141416;border-radius:8px;padding:12px;border:1px solid #333;">'
                 f'<div style="margin-bottom:8px;font-size:13px;">'
-                f'🟢 支撐位：{_fmt_sr(_sr_s, "S", "#22c55e")}</div>'
+                f'🟢 支撐位：{_fmt_sr(_sr_s, "S", "#22c55e", _at_1yr_low, "無下方支撐（已在一年低）")}</div>'
                 f'<div style="margin-bottom:8px;font-size:13px;">'
-                f'🔴 阻力位：{_fmt_sr(_sr_r, "R", "#ef4444")}</div>'
+                f'🔴 阻力位：{_fmt_sr(_sr_r, "R", "#ef4444", _at_1yr_high, "無上方壓力（已在一年高）")}</div>'
                 f'<div style="font-size:12px;color:#aaa;">'
                 f'📏 52W 高: <b>${_52h:.2f}</b>'
                 f'{"  ← 距 " + f"{(_52h/close_v-1)*100:.1f}%" if _52h and close_v > 0 else ""}'
