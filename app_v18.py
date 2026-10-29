@@ -26,7 +26,7 @@ except ImportError:
     _INSIDER_AVAILABLE = False
 
 # --- 0. 系統設定 ---
-st.set_page_config(page_title="AI 實戰戰情室 V27.43", layout="wide", page_icon="🚨")  # page_title="AI 實戰戰情室 V27.42"
+st.set_page_config(page_title="AI 實戰戰情室 V27.44", layout="wide", page_icon="🚨")  # page_title="AI 實戰戰情室 V27.42"
 
 # --- CSS 美化 ---
 st.markdown("""
@@ -4838,6 +4838,72 @@ def _calc_pl(price, cost, shares):
     return amount, pct
 
 
+# ── [V27.44] 分批持股（同一檔不同時間買入）──────────────────────
+#   使用者 2026-10-29：「同一支股票有不同時間點買入，想自己區分開來」。
+#   holdings 結構向下相容：{代碼: {"cost": 加權平均成本, "shares": 總股數,
+#                                   "lots": [{"cost", "shares", "date", "note"}, ...]}}
+#   - 「lots」只在有分批（≥2 筆）或單筆有填日期／備註時才存
+#   - cost／shares 永遠是 lots 的加權合計 → App 其他用到持倉的地方一行都不用改
+#   - 有 2 筆以上的檔，**分批明細是唯一來源**；上方持倉表改那兩格不會生效（會提示）
+def holding_lots(h):
+    """回傳這檔的分批清單；沒有分批的舊資料當成一筆。"""
+    if not h:
+        return []
+    lots = h.get("lots")
+    if lots:
+        return [l for l in lots if float(l.get("shares") or 0) > 0 and float(l.get("cost") or 0) > 0]
+    if h.get("cost") and h.get("shares"):
+        return [{"cost": float(h["cost"]), "shares": int(h["shares"]), "date": "", "note": ""}]
+    return []
+
+
+def build_lot_holding(lots):
+    """把一檔的分批清單合成 holdings 的一筆：加權平均成本（4 位小數）＋總股數。"""
+    lots = [{"cost": round(float(l["cost"]), 4), "shares": int(l["shares"]),
+             "date": str(l.get("date") or ""), "note": str(l.get("note") or "")}
+            for l in lots if float(l.get("cost") or 0) > 0 and int(l.get("shares") or 0) > 0]
+    if not lots:
+        return None
+    tot = sum(l["shares"] for l in lots)
+    avg = sum(l["cost"] * l["shares"] for l in lots) / tot
+    entry = {"cost": round(avg, 4), "shares": tot}
+    if len(lots) >= 2 or any(l["date"] or l["note"] for l in lots):
+        lots.sort(key=lambda l: (l["date"] or "9999"))
+        entry["lots"] = lots
+    return entry
+
+
+def apply_lot_editor(old_hold, rows, tickers):
+    """分批明細表存檔：rows＝[(代碼, 日期, 股數, 成本, 備註), ...]。
+    只動表裡出現的代碼與「原本有分批、這次整檔被刪光」的代碼（後者退回單筆，數字不變）；
+    其他持股原封不動。刪除持股請用上方持倉表。回傳 (新 holdings, 有改到的代碼)。"""
+    new = {k: dict(v) for k, v in (old_hold or {}).items()}
+    groups = {}
+    for tk, dt, sh, cost, note in rows:
+        tk = str(tk or "").strip().upper()
+        if not tk or tk not in tickers:
+            continue
+        try:
+            sh, cost = int(sh), float(cost)
+        except (TypeError, ValueError):
+            continue
+        if sh <= 0 or cost <= 0:
+            continue
+        groups.setdefault(tk, []).append({"cost": cost, "shares": sh,
+                                          "date": str(dt or ""), "note": str(note or "")})
+    changed = []
+    for tk, v in list(new.items()):
+        if v.get("lots") and tk not in groups:          # 分批被刪光 → 退回單筆
+            new[tk] = {"cost": v["cost"], "shares": v["shares"]}
+            changed.append(tk)
+    for tk, lots in groups.items():
+        e = build_lot_holding(lots)
+        if e and e != new.get(tk):
+            new[tk] = e
+            changed.append(tk)
+    return new, changed
+
+
 def get_technical_target_threshold_series(df):
     """[V27.02] 逐根版的「達標」閾值 —— 回傳與 df 同 index 的 Series。
 
@@ -5936,10 +6002,10 @@ with st.sidebar:
 # --- 5. 主體資料載入 ---
 main_title_name = get_stock_name(cur_t)
 disp_main_title = f"{main_title_name} ({cur_t})" if main_title_name != cur_t else cur_t
-st.title("📡 掃描中心 V27.43" if cur_t == "__SCANNER__"  # "📡 掃描中心 V27.42"
-         else "🎯 訊號驗證 V27.43" if cur_t == "__VERIFY__"   # "🎯 訊號驗證 V27.42"
-         else "📊 持倉戰情總表 V27.43" if cur_t == "__DASHBOARD__"  # "📊 持倉戰情總表 V27.42"
-         else f"📈 {disp_main_title} 實戰戰情室 V27.43")  # 實戰戰情室 V27.42")
+st.title("📡 掃描中心 V27.44" if cur_t == "__SCANNER__"  # "📡 掃描中心 V27.42"
+         else "🎯 訊號驗證 V27.44" if cur_t == "__VERIFY__"   # "🎯 訊號驗證 V27.42"
+         else "📊 持倉戰情總表 V27.44" if cur_t == "__DASHBOARD__"  # "📊 持倉戰情總表 V27.42"
+         else f"📈 {disp_main_title} 實戰戰情室 V27.44")  # 實戰戰情室 V27.42")
 
 # ── [V27.08] 快速查股跳過來的股票通常不在任何清單裡 → 講明白 + 一鍵加入 ──
 #   只在個股頁顯示；三個特殊頁（總表／掃描中心／訊號驗證）跳過。
@@ -6237,6 +6303,9 @@ if cur_t == "__DASHBOARD__":
             s_name = get_stock_name(tk)
             disp_name = s_name if s_name != tk else ""
             h = _hold.get(tk, {})
+            _nlots = len(h.get("lots") or [])
+            if _nlots >= 2:                                   # [V27.44]
+                disp_name = f"{disp_name} 📑{_nlots}批".strip()
             _editor_rows.append({
                 "代碼": tk,
                 "名稱": disp_name,
@@ -6257,25 +6326,39 @@ if cur_t == "__DASHBOARD__":
             px = _prices.get(tk)
             h = _hold.get(tk)
             if h and px:
-                cost = h["cost"]; shares = h["shares"]
-                pl_pct = (px / cost - 1) * 100
+                # [V27.44] 逐批算。沒有分批的舊資料 holding_lots 會回一筆，結果跟以前一樣。
+                #   總計也逐批加，不用平均成本 × 總股數 —— 平均成本有四捨五入，兩邊會差幾塊錢。
+                _lots = holding_lots(h)
                 is_tw = ".TW" in tk
-                if is_tw:
+                _fx = 1.0 if is_tw else USD_TWD
+                _multi = len(_lots) >= 2
+                _sub_pl = _sub_cost = 0.0
+                for _li, _lot in enumerate(_lots, 1):
+                    cost = float(_lot["cost"]); shares = int(_lot["shares"])
                     pl = (px - cost) * shares
-                    _tw_pl_twd += pl
-                    _cost_twd = cost * shares  # [V26.75] 台股本為台幣，不換算
+                    pl_pct = (px / cost - 1) * 100
+                    _cost_twd = cost * shares * _fx      # [V26.75] 台股不換算、美股換台幣
+                    _sub_pl += pl; _sub_cost += cost * shares
+                    if is_tw:
+                        _tw_pl_twd += pl
+                    else:
+                        _us_pl_usd += pl
                     _cost_twd_total += _cost_twd
-                    _pl_rows.append({"代碼": tk, "持有成本(台)": f"NT${_cost_twd:,.0f}",
+                    _lbl = tk
+                    if _multi or _lot.get("date") or _lot.get("note"):
+                        _lbl = (f"{tk}　第{_li}批"
+                                + (f"（{_lot['date']}）" if _lot.get("date") else "")
+                                + (f" {_lot['note']}" if _lot.get("note") else ""))
+                    _pl_rows.append({"代碼": _lbl, "持有成本(台)": f"NT${_cost_twd:,.0f}",
                                      "損益%": round(pl_pct, 1),
-                                     "損益(美)": "—", "損益(台)": f"NT${pl:,.0f}"})
-                else:
-                    pl = (px - cost) * shares
-                    _us_pl_usd += pl
-                    _cost_twd = cost * shares * USD_TWD  # [V26.75] 美股換台幣
-                    _cost_twd_total += _cost_twd
-                    _pl_rows.append({"代碼": tk, "持有成本(台)": f"NT${_cost_twd:,.0f}",
-                                     "損益%": round(pl_pct, 1),
-                                     "損益(美)": f"${pl:,.0f}", "損益(台)": f"NT${pl*USD_TWD:,.0f}"})
+                                     "損益(美)": "—" if is_tw else f"${pl:,.0f}",
+                                     "損益(台)": f"NT${pl * _fx:,.0f}"})
+                if _multi:                               # 分批小計（不重複加進總計）
+                    _pl_rows.append({"代碼": f"{tk}　小計（{len(_lots)} 批，均價 {_sub_cost / sum(int(l['shares']) for l in _lots):,.2f}）",
+                                     "持有成本(台)": f"NT${_sub_cost * _fx:,.0f}",
+                                     "損益%": round((px * sum(int(l['shares']) for l in _lots) / _sub_cost - 1) * 100, 1),
+                                     "損益(美)": "—" if is_tw else f"${_sub_pl:,.0f}",
+                                     "損益(台)": f"NT${_sub_pl * _fx:,.0f}"})
         _total_twd = _us_pl_usd * USD_TWD + _tw_pl_twd
 
         # ── 上方：總損益（台幣）大字 ──
@@ -6463,16 +6546,35 @@ if cur_t == "__DASHBOARD__":
 
         if st.button("💾 儲存持倉", width='stretch', type="primary"):
             _new_hold = {}
+            _lot_kept = []                                    # [V27.44]
             for _ed in (_edited_held, _edited_unheld):
                 for _, r in _ed.iterrows():
                     tk = r["代碼"]
                     cost = r["成本"]; shares = r["股數"]
+                    _old = _hold.get(tk) or {}
+                    _old_lots = _old.get("lots") or []
+                    if len(_old_lots) >= 2:
+                        # [V27.44] 分批 2 筆以上 → 分批明細是唯一來源，這裡的兩格不生效
+                        _new_hold[tk] = _old
+                        if not (cost and shares and abs(float(cost) - float(_old["cost"])) < 0.005
+                                and int(shares) == int(_old["shares"])):
+                            _lot_kept.append(tk)
+                        continue
                     if cost and shares and cost > 0 and shares > 0:
                         _new_hold[tk] = {"cost": round(float(cost), 2), "shares": int(shares)}
+                        if len(_old_lots) == 1:                # 單筆有日期／備註 → 保留
+                            _new_hold[tk]["lots"] = [dict(_old_lots[0], cost=round(float(cost), 2),
+                                                          shares=int(shares))]
             _ok, _msg = save_holdings(_new_hold)
             st.session_state["_holdings"] = _new_hold
             st.success(f"已儲存 {len(_new_hold)} 檔持倉（{_msg}）" if _ok else f"⚠️ {_msg}")
+            if _lot_kept:
+                st.session_state["_lot_kept_msg"] = (
+                    "📑 " + "、".join(_lot_kept) + " 有分批明細，成本與股數以「分批買入明細」為準，"
+                    "這次在上表改的數字沒有生效；請到下方分批明細修改。")
             st.rerun()          # [V27.05] 歸位：它屬於按鈕區塊，不是計算機的
+        if st.session_state.get("_lot_kept_msg"):            # [V27.44]
+            st.warning(st.session_state.pop("_lot_kept_msg"))
 
         # ── [V27.02] 模擬獲利計算機 ──────────────────────────────
         #   純試算：不讀持倉、不寫任何檔案，改數字不會動到上面的表。
@@ -6545,6 +6647,59 @@ if cur_t == "__DASHBOARD__":
             _c4.metric("美台合計損益 (TWD)", f"NT${_total_twd:,.0f}")        # [V27.34]
             _c3.metric("總持有成本 (TWD)", f"NT${_cost_twd_total:,.0f}")  # [V26.75]
             st.caption(f"※ 美股以固定匯率 {USD_TWD:.0f} 換算台幣；訊號/現價來自最近一次掃描。")
+
+        # ── [V27.44] 📑 分批買入明細 ──────────────────────────────
+        with st.expander("📑 分批買入明細（同一檔不同時間買入，可自己新增）", expanded=False):
+            st.caption(
+                "每一列是一批：選代碼、填買入日期、股數、成本（買進股價）、備註。按表格最下面的 ➕ 新增一列；"
+                "勾選列左邊再按 🗑 可刪除。存檔後上方「已持倉損益」會一批一批分開列，另有小計。"
+                "　⚠️ 同一檔有 2 批以上時，**成本與股數以這裡為準**（上方持倉表改那兩格不會生效）；"
+                "要整檔刪除持股，請到上方持倉表把成本／股數清空。台股 1 張＝1000 股。")
+            _lot_rows = []
+            for tk in _all_tk:
+                for _lot in holding_lots(_hold.get(tk)):
+                    _d = None
+                    try:
+                        _d = (datetime.strptime(_lot["date"], "%Y-%m-%d").date() if _lot.get("date") else None)
+                    except Exception:
+                        _d = None
+                    _lot_rows.append({"代碼": tk, "買入日期": _d, "股數": int(_lot["shares"]),
+                                      "成本": float(_lot["cost"]), "備註": _lot.get("note") or ""})
+            _lot_df = pd.DataFrame(_lot_rows, columns=["代碼", "買入日期", "股數", "成本", "備註"])
+            _lot_edit = st.data_editor(
+                _lot_df, num_rows="dynamic", width='stretch', hide_index=True, key="_lots_editor",
+                column_config={
+                    "代碼": st.column_config.SelectboxColumn("代碼", options=list(_all_tk), required=True, width="small"),
+                    "買入日期": st.column_config.DateColumn("買入日期", format="YYYY-MM-DD", width="small"),
+                    "股數": st.column_config.NumberColumn("股數", min_value=1, step=1, format="%d", required=True, width="small"),
+                    "成本": st.column_config.NumberColumn("成本", min_value=0.0, format="%.2f", required=True, width="small"),
+                    "備註": st.column_config.TextColumn("備註", width="medium"),
+                })
+            if st.button("💾 儲存分批明細", width='stretch', key="_lots_save"):
+                _rows_in = []
+                for _, _r in _lot_edit.iterrows():
+                    _dv = _r.get("買入日期")
+                    _ds = ""
+                    if _dv is not None and not (isinstance(_dv, float) and pd.isna(_dv)) and not pd.isna(_dv):
+                        try:
+                            _ds = pd.Timestamp(_dv).strftime("%Y-%m-%d")
+                        except Exception:
+                            _ds = ""
+                    _sh = _r.get("股數"); _co = _r.get("成本")
+                    _rows_in.append((_r.get("代碼"), _ds,
+                                     None if pd.isna(_sh) else _sh, None if pd.isna(_co) else _co,
+                                     "" if pd.isna(_r.get("備註")) else _r.get("備註")))
+                _new_h, _chg = apply_lot_editor(_hold, _rows_in, set(_all_tk))
+                if not _chg:
+                    st.info("沒有變更。")
+                else:
+                    _ok, _msg = save_holdings(_new_h)
+                    st.session_state["_holdings"] = _new_h
+                    st.session_state["_lot_saved_msg"] = (
+                        f"已更新 {len(_chg)} 檔：{'、'.join(_chg)}（{_msg}）" if _ok else f"⚠️ {_msg}")
+                    st.rerun()
+            if st.session_state.get("_lot_saved_msg"):
+                st.success(st.session_state.pop("_lot_saved_msg"))
 
         # ── [V26.67] 💵 已實現損益（了結紀錄，存 Gist）──
         st.markdown("---")
@@ -8145,7 +8300,7 @@ def _render_personal_scan():
 
                     # 純文字版：直接複製貼給 bot。與上表同一份 _SIG_DISC_RULES，
                     #   不手抄第二份（Rule 7）。
-                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.43）",  # （來源：AI 實戰戰情室 V27.42）
+                    _bot_lines = ["# 訊號類型 × 折價% 篩選規則（來源：AI 實戰戰情室 V27.44）",  # （來源：AI 實戰戰情室 V27.42）
                                   "#",
                                   "# [V27.24] 主表新增 `達標靜置` 欄：這次達標之前，有幾根 K 沒碰過",
                                   "#   同一個技術目標。越大＝盤整越久才突破。",
